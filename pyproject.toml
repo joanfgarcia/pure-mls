@@ -7,8 +7,18 @@ authors = [
     { name = "Joan F Garcia", email = "joanfgarcia@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "cryptography>=46.0.5",
+]
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "coverage>=7.13.5",
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.6",
+]
