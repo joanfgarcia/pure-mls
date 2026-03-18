@@ -30,5 +30,13 @@ Following strict software engineering guidelines, the library is decoupled into 
 We will build this package incrementally by proving the layers with Pytest against the official MLS Test Vectors.
 1. **Milestone 1**: HKDF and HPKE wrappers (Cryptography primitive foundation).
 2. **Milestone 2**: Array-Based Binary Tree algorithms.
-3. **Milestone 3**: KeySchedule and Epoch rotation.
 4. **Milestone 4**: Framing (Proposals and Commits processing).
+
+---
+
+## 3. The Zero-Knowledge Transport Layer (The Dumb Pipe)
+Unlike traditional chat architectures, `pure-mls` mathematically separates the cryptographic engine from the delivery network (e.g., Firebase Realtime Database, IPFS, WebSockets). 
+
+- **Agnostic Delivery**: The server is treated as a "dumb pipe" or a passive bulletin board. 
+- **Zero-Knowledge**: The central server NEVER performs handshakes, NEVER negotiates keys, and NEVER parses the content of the `Welcome`, `Commit`, or `Application` messages. It only routes Base64 ciphertexts.
+- **P2P State Consensus**: State management and logic reside entirely in the client endpoints. Real-time Pub/Sub networks like Firebase simply push identical bytes to all subscribed nodes effortlessly without understanding the cryptographic state.
