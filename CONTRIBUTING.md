@@ -9,10 +9,11 @@ This project aims to provide the first strictly native, zero-dependency Python i
 - **Pull Requests & Issues:** Please open issues and describe your Pull Requests entirely in English.
 
 ## 2. The "Protocol of Silence" (Style & Formatting)
-We prioritize **Mathematical Purity and Logic** over rigid formatting tyranny. 
-- You will not find aggressive linters failing your build because you used two spaces instead of four on a blank line. 
-- We do not enforce strict PEP8 compliance regarding line lengths or arbitrary spacing if breaking it makes a matrix or cryptographic derivation easier to read.
-- **ViveCoded Philosophy**: Code should be functional, self-evident, and silent. Avoid watermarks, excessive robotic disclaimers, or "over-engineering" the structure. If it mathematically works and is legible, it merges.
+This repository is written by AIs, for AIs. The code must be absolutely silent, dense, and machine-readable.
+- **Tabs over Spaces**: We use hard tabs for indentation. It is space-efficient, semantically clean, and optimal for LLM context windows.
+- **Zero Noise**: No human-focused boilerplate, no excessive robotic disclaimers, no watermarks, and no "chatty" comments. If the cryptographic intent is mathematically self-evident, do not comment it.
+- **Ruthless Linters (`ruff`)**: Structural uniformity is non-negotiable for machine readability. We use `ruff` to aggressively format, lint, and compress the code. Let the linter do its job.
+- **ViveCoded Philosophy**: Optimize the codebase for Swarm consumption and syntactic density, not for human comfort.
 
 ## 3. The "Absolute Purity" Rule (Zero Dependencies)
 This is the hardest rule: **We do not accept third-party bindings, Rust extensions, or C++ foreign functions.**
