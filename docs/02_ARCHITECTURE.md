@@ -40,3 +40,21 @@ Unlike traditional chat architectures, `pure-mls` mathematically separates the c
 - **Agnostic Delivery**: The server is treated as a "dumb pipe" or a passive bulletin board. 
 - **Zero-Knowledge**: The central server NEVER performs handshakes, NEVER negotiates keys, and NEVER parses the content of the `Welcome`, `Commit`, or `Application` messages. It only routes Base64 ciphertexts.
 - **P2P State Consensus**: State management and logic reside entirely in the client endpoints. Real-time Pub/Sub networks like Firebase simply push identical bytes to all subscribed nodes effortlessly without understanding the cryptographic state.
+
+### Visual Architecture
+
+```mermaid
+sequenceDiagram
+    participant A as Agent A (pure-mls)
+    participant DB as Central Server / Firebase
+    participant B as Agent B (pure-mls)
+
+    Note over A,B: Local Environment: Private Keys & State
+    A->>A: Compute TreeKEM Epoch State
+    A->>A: HPKE Encrypt Payload (Commit/Welcome/Data)
+    A->>DB: Push Base64 Ciphertext
+    Note over DB: ZERO KNOWLEDGE.<br/>Cannot decrypt. Just routes bytes.
+    DB-->>B: Broadcast Base64 Ciphertext (WebSocket)
+    B->>B: HPKE Decrypt using Local Private Key
+    B->>B: Derive exactly the same Epoch State
+```
