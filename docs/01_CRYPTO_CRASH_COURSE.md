@@ -1,44 +1,44 @@
-# CRIPTO 101: Entendiendo MLS (Sin Dolor de Cabeza)
+# CRYPTO 101: Understanding MLS (Without the Headache)
 
-¡Bienvenido al subsuelo de la criptografía asíncrona! 
+Welcome to the asynchronous cryptography rabbit hole!
 
-Puesto que vamos a construir **pure-mls** (una implementación estricta del [RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)) desde cero, primero necesitamos entender por qué el "ratchet lineal" (la cuerda de hashes) que teníamos en *Red Pill* fallaba para grupos grandes, y por qué MLS es la joya de la corona actual (usado por Cisco, WhatsApp y el IETF).
-
----
-
-## 1. El Problema: El cuello de botella de Signal
-Antes de MLS, el estándar de oro era el protocolo de Signal (el Double Ratchet). 
-Es perfecto para 2 personas (Tú y Aleth). Pero, ¿qué pasa si hacemos un chat de grupo de **50.000 agentes**? 
-Con Signal, si tú mandas un mensaje, tienes que encriptarlo **49.999 veces individuales** (una vez con la clave pública de cada miembro). Esto destruye la batería, el ancho de banda y el rendimiento (complejidad **O(N)**).
-
-## 2. La Solución: TreeKEM (Tree Key Encapsulation Mechanism)
-MLS resuelve esto usando un **Árbol Binario** matemático (complejidad **O(log N)**).
-
-Imagina un torneo de tenis clásico:
-- En la base (las **Hojas** / *LeafNodes*), están los agentes. Cada uno tiene su clave.
-- Cada nivel superior del árbol combina las claves de los que están debajo.
-- Arriba del todo está la **Raíz** (*Root Key* o *Group Secret*).
-- Esta raíz es la clave simétrica (AES-GCM) que **todos** usan para encriptar los mensajes reales de chat.
-
-### ¿Cuál es la magia del Árbol?
-Si Nova quiere unirse al grupo de 50.000 agentes, no tenemos que mandar 50.000 mensajes. Nova se engancha a una rama del árbol, y su clave pública sube matemáticamente alterando solo los nudos de *su rama particular* hasta llegar a la raíz. 
-La complejidad computacional pasa de ser 50.000 cálculos (O(N)) a apenas **16 cálculos** (O(log N)). Es magia negra matemática.
+Since we are building **pure-mls** (a strict implementation of [RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)) from scratch, we first need to understand why the "linear ratchet" (hash chain) fails for large groups, and why MLS is the current gold standard (adopted by Cisco, WhatsApp, and the IETF).
 
 ---
 
-## 3. Conceptos Clave del Diccionario MLS
-Para que nos entendamos cuando bajemos al código de Python, aquí están los términos sagrados del RFC 9420:
+## 1. The Problem: The Signal Bottleneck
+Before MLS, the gold standard was the Signal protocol (Double Ratchet). 
+It is perfect for 2 people. But what happens if we create a group chat with **50,000 agents**? 
+With Signal, if you send a message, you have to encrypt it **49,999 individual times** (once with the public key of each member). This destroys battery life, bandwidth, and performance (computational complexity **O(N)**).
 
-*   **KeyPackage**: El "DNI criptográfico". Tu tarjeta de visita pública que dice "Hola, me llamo David y estas son mis claves públicas X25519 pre-computadas".
-*   **Proposal (Propuesta)**: La intención de hacer algo. Ej: "Propongo meter a Nova en el grupo" o "Propongo cambiar mi propia llave porque se ha corrompido (Ratchet)".
-*   **Commit (Confirmación)**: El "Sello Notarial". Una vez que la comunidad ve una o varias Proposals, un operario las empaqueta en un Commit. Al aceptar el Commit, el grupo avanza matemáticamente a una nueva era.
-*   **Epoch (Época)**: Cada vez que hay un nuevo Commit ratificado, el grupo entra en una nueva Época con una *Root Secret* (llave base) completamente nueva e impredecible.
-*   **Welcome**: El mensaje encriptado especial que se le manda a los novatos (como Nova) para darles el estado actual del Árbol Binario para que puedan derivar la llave base.
+## 2. The Solution: TreeKEM (Tree Key Encapsulation Mechanism)
+MLS solves this by using a mathematical **Binary Tree** (computational complexity **O(log N)**).
 
-## 4. PCS y PFS (La verdadera invulnerabilidad)
-- **PFS (Perfect Forward Secrecy)**: Significa "Protección hacia el Pasado". Si mañana rompo tu llave privada de hoy, no puedo descifrar las Epochs que ocurrieron ayer, porque el hash destruye la información en sentido inverso.
-- **PCS (Post-Compromise Security)**: Significa "Curación hacia el Futuro". Si un ladrón te roba la llave privada y se cuela en el árbol de Swarm, en cuanto tú hagas un Commit para rotar tu llave (*Update Proposal*), echas al ladrón automáticamente del árbol sin tener que recrear la comunidad entera. El sistema "sana" solo.
+Imagine a classic tennis tournament bracket:
+- At the base (the **Leaves** / *LeafNodes*), you have the agents. Each has their own key.
+- Each upper level of the tree mathematically combines the keys of those below it.
+- At the very top is the **Root** (*Root Key* or *Group Secret*).
+- This root is the symmetric key (AES-GCM) that **everyone** uses to actually encrypt the real chat messages.
+
+### What is the magic of the Tree?
+If a new agent wants to join the group of 50,000, we do not have to send 50,000 messages. The new agent attaches to a branch of the tree, and their public key mathematically propagates UP altering only the nodes in *their specific branch* until reaching the root. 
+The computational complexity drops from 50,000 calculations (O(N)) to barely **16 calculations** (O(log N)). It's mathematical black magic.
 
 ---
 
-A partir de aquí, en `pure-mls` vamos a codificar cada uno de estos bloques paso a paso. Empezaremos por la base (`LeafNode` y la criptografía de curvas elípticas Ed25519) e iremos subiendo la rama hasta conquistar la `Root Key`.
+## 3. Key Concepts of the MLS Dictionary
+To ensure we are on the same page when we dive into the Python code, here are the sacred terms of RFC 9420:
+
+*   **KeyPackage**: The "Cryptographic ID card". Your public business card that says "Hello, my name is X and these are my pre-computed X25519 public keys".
+*   **Proposal**: The intent to do something. Ex: "I propose adding Agent_X to the group" or "I propose changing my own key because it's compromised (Ratchet)".
+*   **Commit**: The "Notary Seal". Once the community sees one or more Proposals, a designated operator packages them into a Commit. By accepting the Commit, the group mathematically advances to a new era.
+*   **Epoch**: Every time a new Commit is ratified, the group enters a new Epoch with a completely new and unpredictable *Root Secret* (base key).
+*   **Welcome**: The special encrypted message sent to newcomers to give them the current state of the Binary Tree so they can derive the base key.
+
+## 4. PCS and PFS (True Invulnerability)
+- **PFS (Perfect Forward Secrecy)**: "Protection towards the Past". If I break your private key today, I cannot decrypt the Epochs that occurred yesterday, because the hash destroys information in reverse.
+- **PCS (Post-Compromise Security)**: "Healing towards the Future". If a thief steals your private key and sneaks into the group, as soon as you make a Commit to rotate your key (*Update Proposal*), you automatically kick the thief out of the tree without having to recreate the entire community. The system "heals" itself.
+
+---
+
+From here, in `pure-mls` we will code each of these blocks step by step. We will start from the base (`LeafNode` and the Ed25519 elliptic curve cryptography) and climb the branch until we conquer the `Root Key`.
