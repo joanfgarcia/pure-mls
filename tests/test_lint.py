@@ -2,12 +2,12 @@ import subprocess
 
 
 def test_ruff_format():
-	"""Valida la política de indentación (Sound of Silence) exigiendo Tabs."""
+	"""Validates the indentation policy (Sound of Silence) enforcing Tabs."""
 	result = subprocess.run(["uv", "run", "ruff", "format", "--check", "src/", "tests/"], capture_output=True, text=True)
-	assert result.returncode == 0, f"Ruff Format falló:\n{result.stdout}\n{result.stderr}"
+	assert result.returncode == 0, f"Ruff Format failed:\n{result.stdout}\n{result.stderr}"
 
 
 def test_ruff_check():
-	"""Valida la calidad del código, unused imports y typos."""
+	"""Validates code quality, unused imports and typos."""
 	result = subprocess.run(["uv", "run", "ruff", "check", "src/", "tests/"], capture_output=True, text=True)
-	assert result.returncode == 0, f"Ruff Check falló:\n{result.stdout}\n{result.stderr}"
+	assert result.returncode == 0, f"Ruff Check failed:\n{result.stdout}\n{result.stderr}"

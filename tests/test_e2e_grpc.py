@@ -37,7 +37,7 @@ class MLSSwarmServicer(mls_pb2_grpc.MLSSwarmServicer):
 			self.welcomes_queues[request.identity] = asyncio.Queue()
 
 		queue = self.welcomes_queues[request.identity]
-		while True:
+		while not context.done():
 			try:
 				welcome_msg = await asyncio.wait_for(queue.get(), timeout=1.0)
 				yield welcome_msg

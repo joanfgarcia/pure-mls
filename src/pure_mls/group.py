@@ -53,7 +53,7 @@ class WelcomeInfo:
 		offset += 32
 		confirmed_transcript_hash = data[offset : offset + 32]
 
-		nodes = []
+		nodes: list[LeafNode | ParentNode | None] = []
 		t_offset = 0
 		while t_offset < len(tree_bytes):
 			node_type = tree_bytes[t_offset : t_offset + 1]
@@ -160,6 +160,8 @@ class MLSGroup:
 				encrypted_secrets[pk] = enc + ct
 
 		# 3. Advance the epoch
+		# TODO (STATE-02): Transcript Hash Covers only epoch_id and commit_secret.
+		# Should cover full commit framing (sender, proposals, group_id) in a production setup.
 		transcript_hash = hashlib.sha256((self.state.epoch_id + 1).to_bytes(8, "big") + commit_secret).digest()
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
@@ -198,19 +200,7 @@ class MLSGroup:
 		# Mix confirmed_transcript_hash into epoch_secret derivation to prevent Welcome Spoofing
 		joiner_context = welcome.confirmed_transcript_hash
 		epoch_secret = hkdf_expand(welcome.joiner_secret, joiner_context, 32, hashlib.sha256)
-		auth_secret = hkdf_expand(epoch_secret, b"MLS 1.0 authentication", 32, hashlib.sha256)
-
-		ks = KeySchedule(
-			joiner_secret=welcome.joiner_secret,
-			epoch_secret=epoch_secret,
-			sender_data_secret=hkdf_expand(epoch_secret, b"MLS 1.0 sender data", 32, hashlib.sha256),
-			encryption_secret=hkdf_expand(epoch_secret, b"MLS 1.0 encryption", 32, hashlib.sha256),
-			exporter_secret=hkdf_expand(epoch_secret, b"MLS 1.0 exporter", 32, hashlib.sha256),
-			authentication_secret=auth_secret,
-			external_secret=hkdf_expand(epoch_secret, b"MLS 1.0 external", 32, hashlib.sha256),
-			confirmation_key=hkdf_expand(auth_secret, b"MLS 1.0 confirm", 32, hashlib.sha256),
-			next_init_secret=hkdf_expand(epoch_secret, b"MLS 1.0 init", 32, hashlib.sha256),
-		)
+		ks = KeySchedule._from_epoch_secret(epoch_secret, welcome.joiner_secret)
 
 		state = EpochState(group_id=welcome.group_id, epoch_id=welcome.epoch_id, tree=welcome.tree, key_schedule=ks)
 

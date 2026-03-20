@@ -33,7 +33,14 @@ class KeySchedule:
 		# 2. Expand Epoch Secret
 		epoch_secret = hkdf_expand(joiner_secret, transcript_hash, 32, hashlib.sha256)
 
-		# 3. Expand application and internal branch secrets
+		return cls._from_epoch_secret(epoch_secret, joiner_secret)
+
+	@classmethod
+	def _from_epoch_secret(cls, epoch_secret: bytes, joiner_secret: bytes) -> "KeySchedule":
+		"""
+		Constructs the full schedule from an already derived epoch_secret.
+		Used by both the committer (derive) and joiner (MLSGroup.join).
+		"""
 		auth_secret = hkdf_expand(epoch_secret, b"MLS 1.0 authentication", 32, hashlib.sha256)
 
 		return cls(

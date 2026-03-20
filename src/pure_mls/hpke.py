@@ -30,6 +30,9 @@ class HPKE:
 	@staticmethod
 	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
 		"""
+		Single-use. Each call generates a fresh ephemeral keypair.
+		The returned enc MUST NOT be passed back to seal() or used
+		to derive session material outside this call.
 		Encapsulates a shared secret for the receiver and AEAD encrypts the plaintext.
 		Returns (encapsulated_key, ciphertext).
 		"""
@@ -37,7 +40,7 @@ class HPKE:
 		enc = ephemeral.public_bytes()
 		zz = ephemeral.dh_exchange(receiver_pub)
 		kem_context = enc + receiver_pub
-		prk_kem = HPKE._labeled_extract(b"shared_secret", b"", zz)
+		prk_kem = HPKE._labeled_extract(b"", b"shared_secret", zz)
 		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
 		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
 		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
@@ -54,7 +57,7 @@ class HPKE:
 		"""
 		zz = receiver_priv.dh_exchange(enc)
 		kem_context = enc + receiver_priv.public_bytes()
-		prk_kem = HPKE._labeled_extract(b"shared_secret", b"", zz)
+		prk_kem = HPKE._labeled_extract(b"", b"shared_secret", zz)
 		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
 		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
 		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)

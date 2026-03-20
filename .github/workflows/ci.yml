@@ -29,6 +29,9 @@ jobs:
         uv run ruff check .
         uv run ruff format --check .
 
+    - name: Mypy Strict Type Checking
+      run: uv run mypy --strict src/pure_mls/
+
     - name: Compile Protobufs for gRPC E2E
       run: uv run python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. tests/protos/mls.proto
 

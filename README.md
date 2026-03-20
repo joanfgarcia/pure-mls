@@ -17,51 +17,51 @@ The goal is **Absolute Purity**:
 - Built on principles of [Plausible Deniability and Zero-Knowledge](docs/00_MANIFESTO.md).
 
 ### The Linter Protocol
-We strictly enforce the **"Sound of Silence"** code standard via `ruff` en el fichero `pyproject.toml`:
+We strictly enforce the **"Sound of Silence"** code standard via `ruff` in the `pyproject.toml` file:
 - Pure Tabulations (`\t`) for minimal character footprint (`W191` allowance).
 - Zero dead code allowed.
-- Semantic silence: no unused variables, no noisy legacy warnings, no auto-generated visual clutter (`tests/protos/*` excluidos).
+- Semantic silence: no unused variables, no noisy legacy warnings, no auto-generated visual clutter (`tests/protos/*` excluded).
 
 ## 🗺️ Architecture (Project Map)
 ```text
 pure-mls/
-├── README.md               # Este archivo
-├── CHANGELOG.md            # Registro histórico de versiones
-├── pyproject.toml          # Dependencias (uv) y conf Sound of Silence (Ruff)
+├── README.md               # This file
+├── CHANGELOG.md            # Version history registry
+├── pyproject.toml          # Dependencies (uv) and Sound of Silence config (Ruff)
 ├── src/
 │   └── pure_mls/
-│       ├── group.py        # [API] Máquina del estado (MLSGroup)
-│       ├── tree.py         # Nodos y estructura del RatchetTree
-│       ├── tree_math.py    # Matemáticas de índices LBBT
-│       ├── epoch.py        # Estados inmutables (Epochs)
-│       ├── keys.py         # Identidades Ed25519 y KEMs X25519
-│       ├── keyschedule.py  # Derivación de Secretos (Application_Key)
+│       ├── group.py        # [API] State Machine (MLSGroup)
+│       ├── tree.py         # Nodes and RatchetTree structure
+│       ├── tree_math.py    # LBBT index mathematics
+│       ├── epoch.py        # Immutable states (Epochs)
+│       ├── keys.py         # Ed25519 Identities and X25519 KEMs
+│       ├── keyschedule.py  # Secret Derivation (Application_Key)
 │       └── hpke.py         # Hybrid Public Key Encryption Base Mode
 └── tests/
-    ├── test_group.py       # Pruebas unitarias de State Machine
-    ├── test_e2e_websockets.py # E2E Websockets local
+    ├── test_group.py       # State Machine unit tests
+    ├── test_e2e_websockets.py # E2E local Websockets
     ├── test_e2e_mqtt.py    # E2E broker.hivemq.com (IoT)
     ├── test_e2e_webrtc.py  # E2E Data Channels P2P (aiortc)
     └── test_e2e_grpc.py    # E2E Backend Swarm (Proto Hub)
 ```
 
 ## 🔌 API Quickstart
-La máquina de estado central es `MLSGroup`. Instálalo en tu cerebro:
+The central state machine is `MLSGroup`. Install it in your brain:
 
 ```python
 from pure_mls.group import MLSGroup
 from pure_mls.keys import SignatureKey, KemKey
 
-# 1. El Creador (Alice) inicia el Sovereign Group
+# 1. The Creator (Alice) initializes the Sovereign Group
 alice_group = MLSGroup.create(b"grupo-soberano", SignatureKey(), KemKey())
 
-# 2. Alice recibe el `KeyPackage` de Bob por la red y lo añade al Árbol
+# 2. Alice receives Bob's `KeyPackage` over the network and adds him to the Tree
 alice_next, welcome, update = alice_group.add_member(bob_kp)
 
-# 3. Bob captura el `Welcome` (sellado con HPKE) de la red y lo descifra uniéndose
+# 3. Bob captures the `Welcome` (sealed with HPKE) from the network and decrypts it to join
 bob_group = MLSGroup.join(welcome, 2, SignatureKey(), KemKey())
 
-# La Verdad Matemática Subyacente:
+# The Underlying Mathematical Truth:
 assert alice_next.application_key == bob_group.application_key
 ```
 

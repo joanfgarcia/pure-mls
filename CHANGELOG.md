@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Core API**: `MLSGroup` high-level class unifying `RatchetTree`, `EpochState`, and `KeySchedule`.
-- **Core Primitives**: Implementación completa de LBBT Math, Data Structures (KeyPackage, LeafNode, ParentNode), y Ed25519/X25519 primitives.
+- **Core Primitives**: Complete implementation of LBBT Math, Data Structures (KeyPackage, LeafNode, ParentNode), and Ed25519/X25519 primitives.
 - **Crypto Engine**: `HPKE` Base Mode implementation (rfc9180) for `Welcome` message sealing.
 - **E2E Transports**:
   - `test_e2e_websockets.py`: Bidirectional Local testing.
@@ -17,12 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `test_e2e_webrtc.py`: Zero-Trust P2P DataChannels (`aiortc`).
   - `test_e2e_grpc.py`: Swarm Backend scaling via `protobuf` and `grpcio`.
 - **CI / CD**: 
-  - GitHub Actions `.github/workflows/ci.yml` enlazado y configurado con comprobaciones de Python 3.12 usando `uv`.
-  - Inyectado `test_lint.py` para forzar localmente el compliance de Ruff (Sound of Silence) durante las ejecuciones de `pytest`.
-- **Linter**: Aplicada estricta política *Sound of Silence* mediante `ruff` (indents por tabulaciones, eliminación de ruido).
+  - GitHub Actions `.github/workflows/ci.yml` linked and configured with Python 3.12 checks using `uv` and `mypy --strict`.
+  - Injected `test_lint.py` to locally enforce Ruff (Sound of Silence) compliance during `pytest` runs.
 
 ### Changed
-- Refactorizado el sistema de Linter para ignorar binarios `_pb2` e impedir warnings bloqueantes en pipelines CI.
+- Refactored the Linter system to ignore `_pb2` binaries and prevent blocking warnings in CI pipelines.
+- Applied strict *Sound of Silence* policy via `ruff` (tab indentation, noise removal, unused code purging).
+- Translated all internal documentation, tracebacks, and readmes to English standard (`QUAL-04`).
 
 ### Fixed
 - **[CRITICAL] P0 Crypto Remediation**:
@@ -32,10 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Safe binary serialization (`to_bytes`/`from_bytes`) replaces vulnerable `pickle` payloads to prevent RCE deserialization across all transports.
   - [RFC 9180] Fixed **HPKE Nonce Reuse (AES-GCM)** implementing `SUITE_ID` derivation (`_labeled_extract`).
   - [RFC 9420] Sub-domain `"MLS 1.0 "` injected into all `KeySchedule` HKDF derivations, including `authentication` label.
-  - Enforced strong PFS bounds avoiding prematere `WelcomeInfo` symmetric key leaks.
+  - Enforced strong PFS bounds avoiding premature `WelcomeInfo` symmetric key leaks.
+- **[CRITICAL] P1/P2 Audit Remediation**:
+  - Unified `KeySchedule` derivation path for Committer and Joiner (`STATE-01`).
+  - Fixed transposed `salt/label` arguments in HPKE `_labeled_extract` (`CRYPTO-04`).
+  - Added explicit single-use semantics docstring to `HPKE.seal` (`CRYPTO-03`).
+  - Mitigated `EpochState` dataclass frozen mutation risk via `__post_init__` RatchetTree deepcopy (`STATE-03`).
 - **[E2E Stability & Certification]**: 
   - Achieved **100.00% Absolute Test Coverage** over cryptography bounds, Tree Math edge-cases, and malformed payload Exceptions.
-  - Removed `asyncio` Event race conditions in WebRTC channels and prevented `AioRpcError` deadlocks in gRPC Streams.
-  - Test files formatting strictly compliant with the `"Sound of Silence"` tab-indentation policy.
-- Corregida asignación de argumentos de AESGCM (`aad` keyword a posicional) detectada durante E2E websockets.
-- Eliminadas `dead variables` y type-hints erróneos detectados por las reglas estrictas Linter de Red Pill.
+  - Disabled `AioRpcError` teardown race condition in gRPC ListenWelcomes stream (`E2E-02`).
+  - Removed `asyncio` Event race conditions in WebRTC channels.
+  - Fixed AESGCM argument assignment (`aad` keyword to positional) detected during E2E websockets.

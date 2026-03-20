@@ -18,6 +18,12 @@ class EpochState:
 	tree: RatchetTree
 	key_schedule: KeySchedule
 
+	def __post_init__(self) -> None:
+		# Prevent mutation of the RatchetTree through the immutable EpochState
+		import copy
+
+		super().__setattr__("tree", copy.deepcopy(self.tree))
+
 	def advance_epoch(self, commit_secret: bytes, next_tree: RatchetTree, transcript_hash: bytes = b"epoch") -> "EpochState":
 		"""
 		Transitions the group to the next cryptographic Era.
