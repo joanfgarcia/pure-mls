@@ -2,14 +2,15 @@ import hashlib
 import os
 from dataclasses import dataclass
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric import ed25519
+
 from pure_mls.epoch import EpochState
 from pure_mls.hkdf import hkdf_expand
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ed25519
 
 
 @dataclass
@@ -24,57 +25,53 @@ class WelcomeInfo:
 
 	def to_bytes(self) -> bytes:
 		tree_bytes = b"".join(
-			(b"\x01" + node.key_package.to_bytes()) if isinstance(node, LeafNode)
-			else (b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32)) if isinstance(node, ParentNode)
+			(b"\x01" + node.key_package.to_bytes())
+			if isinstance(node, LeafNode)
+			else (b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32))
+			if isinstance(node, ParentNode)
 			else b"\x00"
 			for node in self.tree.nodes
 		)
 		tree_len = len(tree_bytes).to_bytes(4, "big")
 		epoch_bytes = self.epoch_id.to_bytes(8, "big")
 		group_id_len = len(self.group_id).to_bytes(2, "big")
-		return (
-			group_id_len + self.group_id
-			+ epoch_bytes
-			+ tree_len + tree_bytes
-			+ self.joiner_secret
-			+ self.confirmed_transcript_hash
-		)
+		return group_id_len + self.group_id + epoch_bytes + tree_len + tree_bytes + self.joiner_secret + self.confirmed_transcript_hash
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "WelcomeInfo":
 		group_id_len = int.from_bytes(data[:2], "big")
 		offset = 2
-		group_id = data[offset:offset+group_id_len]
+		group_id = data[offset : offset + group_id_len]
 		offset += group_id_len
-		epoch_id = int.from_bytes(data[offset:offset+8], "big")
+		epoch_id = int.from_bytes(data[offset : offset + 8], "big")
 		offset += 8
-		tree_len = int.from_bytes(data[offset:offset+4], "big")
+		tree_len = int.from_bytes(data[offset : offset + 4], "big")
 		offset += 4
-		tree_bytes = data[offset:offset+tree_len]
+		tree_bytes = data[offset : offset + tree_len]
 		offset += tree_len
-		joiner_secret = data[offset:offset+32]
+		joiner_secret = data[offset : offset + 32]
 		offset += 32
-		confirmed_transcript_hash = data[offset:offset+32]
-		
+		confirmed_transcript_hash = data[offset : offset + 32]
+
 		nodes = []
 		t_offset = 0
 		while t_offset < len(tree_bytes):
-			node_type = tree_bytes[t_offset:t_offset+1]
+			node_type = tree_bytes[t_offset : t_offset + 1]
 			t_offset += 1
 			if node_type == b"\x00":
 				nodes.append(None)
 			elif node_type == b"\x01":
-				kp = KeyPackage.from_bytes(tree_bytes[t_offset:t_offset+64])
+				kp = KeyPackage.from_bytes(tree_bytes[t_offset : t_offset + 64])
 				nodes.append(LeafNode(key_package=kp))
 				t_offset += 64
 			elif node_type == b"\x02":
-				pk = tree_bytes[t_offset:t_offset+32]
-				ph = tree_bytes[t_offset+32:t_offset+64]
+				pk = tree_bytes[t_offset : t_offset + 32]
+				ph = tree_bytes[t_offset + 32 : t_offset + 64]
 				nodes.append(ParentNode(public_key=pk, parent_hash=ph))
 				t_offset += 64
 			else:
 				raise ValueError("Invalid node type")
-				
+
 		tree = RatchetTree((len(nodes) + 1) // 2)
 		tree.nodes = nodes
 		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash)

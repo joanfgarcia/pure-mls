@@ -119,7 +119,8 @@ async def test_mls_webrtc_e2e():
 				print("Bob: Datachannel received from Alice")
 
 				def _send_join():
-					if getattr(channel, "_join_sent", False): return
+					if getattr(channel, "_join_sent", False):
+						return
 					channel._join_sent = True
 					print("Bob: Datachannel open, sending join request")
 					req = {"type": "join_request", "key_package": base64.b64encode(kp.to_bytes()).decode()}
