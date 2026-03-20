@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package puremls;
+
+service MLSSwarm {
+  // Bob publishes his KeyPackage to the Directory
+  rpc JoinSwarm (JoinRequest) returns (JoinResponse) {}
+
+  // Alice sends a Sealed Welcome to Bob
+  rpc DeliverWelcome (WelcomeMessage) returns (Ack) {}
+  
+  // Bob checks his inbox for Welcomes
+  rpc ListenWelcomes (ListenRequest) returns (stream WelcomeMessage) {}
+}
+
+message JoinRequest {
+  string identity = 1;
+  bytes key_package = 2;
+}
+
+message JoinResponse {
+  bool success = 1;
+}
+
+message WelcomeMessage {
+  string target_identity = 1;
+  bytes enc = 2;
+  bytes ciphertext = 3;
+}
+
+message ListenRequest {
+  string identity = 1;
+}
+
+message Ack {}

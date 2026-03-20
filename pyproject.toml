@@ -17,8 +17,30 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "aiomqtt>=2.5.1",
+    "aiortc>=1.14.0",
     "coverage>=7.13.5",
+    "grpcio>=1.78.0",
+    "grpcio-tools>=1.78.0",
     "mypy>=1.19.1",
     "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
     "ruff>=0.15.6",
+    "websockets>=16.0",
 ]
+
+[tool.ruff]
+line-length = 150
+exclude = ["tests/protos/*", ".venv/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "W191", # Allow tabs (Sound of Silence protocol)
+    "E501", # Allow long lines
+    "E265", # Allow some comment variants
+]
+
+[tool.ruff.format]
+indent-style = "tab"
+quote-style = "double"

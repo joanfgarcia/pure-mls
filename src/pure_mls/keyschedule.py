@@ -1,6 +1,8 @@
 import hashlib
 from dataclasses import dataclass
-from pure_mls.hkdf import hkdf_extract, hkdf_expand
+
+from pure_mls.hkdf import hkdf_expand, hkdf_extract
+
 
 @dataclass
 class KeySchedule:
@@ -8,6 +10,7 @@ class KeySchedule:
 	Immutable object holding the symmetric cryptographic state for a single Epoch.
 	Derived strictly from RFC 9420 Section 8 (Key Schedule).
 	"""
+
 	joiner_secret: bytes
 	epoch_secret: bytes
 	sender_data_secret: bytes
@@ -19,20 +22,20 @@ class KeySchedule:
 	next_init_secret: bytes
 
 	@classmethod
-	def derive(cls, init_secret: bytes, commit_secret: bytes) -> "KeySchedule":
+	def derive(cls, init_secret: bytes, commit_secret: bytes, transcript_hash: bytes = b"epoch") -> "KeySchedule":
 		"""
 		Derives all epoch cryptographic materials from a previous init_secret
 		mixed with the newly injected commit_secret (TreeKEM root hash).
 		"""
 		# 1. Extract Joiner Secret
 		joiner_secret = hkdf_extract(init_secret, commit_secret, hashlib.sha256)
-		
+
 		# 2. Expand Epoch Secret
-		epoch_secret = hkdf_expand(joiner_secret, b"epoch", 32, hashlib.sha256)
-		
+		epoch_secret = hkdf_expand(joiner_secret, transcript_hash, 32, hashlib.sha256)
+
 		# 3. Expand application and internal branch secrets
 		auth_secret = hkdf_expand(epoch_secret, b"authentication", 32, hashlib.sha256)
-		
+
 		return cls(
 			joiner_secret=joiner_secret,
 			epoch_secret=epoch_secret,
