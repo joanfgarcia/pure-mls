@@ -45,9 +45,18 @@ class HPKE:
 		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
 		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
+
+		import os
+
+		nonce_counter = os.urandom(8)
+		nonce = bytearray(base_nonce)
+		for i in range(8):
+			nonce[i] ^= nonce_counter[i]
+		nonce = bytes(nonce)
+
 		aesgcm = AESGCM(key)
-		ciphertext = aesgcm.encrypt(base_nonce, plaintext, aad)
-		return enc, ciphertext
+		ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
+		return enc, nonce_counter + ciphertext
 
 	@staticmethod
 	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"") -> bytes:
@@ -62,5 +71,14 @@ class HPKE:
 		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
 		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
+
+		nonce_counter = ciphertext[:8]
+		actual_ciphertext = ciphertext[8:]
+
+		nonce = bytearray(base_nonce)
+		for i in range(8):
+			nonce[i] ^= nonce_counter[i]
+		nonce = bytes(nonce)
+
 		aesgcm = AESGCM(key)
-		return aesgcm.decrypt(base_nonce, ciphertext, aad)
+		return aesgcm.decrypt(nonce, actual_ciphertext, aad)

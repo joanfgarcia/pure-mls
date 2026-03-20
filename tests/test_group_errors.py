@@ -26,10 +26,10 @@ def test_welcome_info_from_bytes_errors():
 	assert isinstance(parsed.tree.nodes[0], ParentNode)
 
 	# Trigger ValueError for invalid node type
-	# We know tree length is 4 bytes. b'\x00\x00\x00\x41' (65 length)
-	bad_bytes = w_parent_bytes.replace(b"\x02" + b"A" * 32 + b"B" * 32, b"\x03" + b"X" * 64)
+	# Directly feed invalid bytes to RatchetTree since WelcomeInfo from_bytes is now MAC-protected
+	bad_tree_bytes = b"\x00\x00\x00\x00\x03" + b"X" * 64
 	with pytest.raises(ValueError, match="Invalid node type"):
-		WelcomeInfo.from_bytes(bad_bytes)
+		RatchetTree.from_bytes(bad_tree_bytes)
 
 
 def test_add_member_parent_node():

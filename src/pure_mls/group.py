@@ -25,19 +25,18 @@ class WelcomeInfo:
 	joiner_index: int
 
 	def to_bytes(self) -> bytes:
-		tree_bytes = b"".join(
-			(b"\x01" + node.key_package.to_bytes())
-			if isinstance(node, LeafNode)
-			else (b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32))
-			if isinstance(node, ParentNode)
-			else b"\x00"
-			for node in self.tree.nodes
-		)
+		from cryptography.hazmat.primitives import hmac as crypto_hmac
+		from cryptography.hazmat.primitives.hashes import SHA256
+
+		VERSION = b"\x02"
+		tree_bytes = self.tree.to_bytes()
 		tree_len = len(tree_bytes).to_bytes(4, "big")
 		epoch_bytes = self.epoch_id.to_bytes(8, "big")
 		group_id_len = len(self.group_id).to_bytes(2, "big")
-		return (
-			group_id_len
+
+		payload = (
+			VERSION
+			+ group_id_len
 			+ self.group_id
 			+ epoch_bytes
 			+ tree_len
@@ -47,10 +46,24 @@ class WelcomeInfo:
 			+ self.joiner_index.to_bytes(4, "big")
 		)
 
+		h = crypto_hmac.HMAC(self.confirmed_transcript_hash[:32], SHA256())
+		h.update(payload)
+		return payload + h.finalize()
+
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "WelcomeInfo":
-		group_id_len = int.from_bytes(data[:2], "big")
-		offset = 2
+		from cryptography.hazmat.primitives import hmac as crypto_hmac
+		from cryptography.hazmat.primitives.hashes import SHA256
+
+		if data[0] != 0x02:
+			raise ValueError("Unsupported WelcomeInfo version")
+
+		payload_without_mac = data[:-32]
+		mac = data[-32:]
+
+		offset = 1
+		group_id_len = int.from_bytes(data[offset : offset + 2], "big")
+		offset += 2
 		group_id = data[offset : offset + group_id_len]
 		offset += group_id_len
 		epoch_id = int.from_bytes(data[offset : offset + 8], "big")
@@ -63,30 +76,14 @@ class WelcomeInfo:
 		offset += 32
 		confirmed_transcript_hash = data[offset : offset + 32]
 
+		h = crypto_hmac.HMAC(confirmed_transcript_hash, SHA256())
+		h.update(payload_without_mac)
+		h.verify(mac)
+
 		offset += 32
 		joiner_index = int.from_bytes(data[offset : offset + 4], "big")
 
-		nodes: list[LeafNode | ParentNode | None] = []
-		t_offset = 0
-		while t_offset < len(tree_bytes):
-			node_type = tree_bytes[t_offset : t_offset + 1]
-			t_offset += 1
-			if node_type == b"\x00":
-				nodes.append(None)
-			elif node_type == b"\x01":
-				kp = KeyPackage.from_bytes(tree_bytes[t_offset : t_offset + 64])
-				nodes.append(LeafNode(key_package=kp))
-				t_offset += 64
-			elif node_type == b"\x02":
-				pk = tree_bytes[t_offset : t_offset + 32]
-				ph = tree_bytes[t_offset + 32 : t_offset + 64]
-				nodes.append(ParentNode(public_key=pk, parent_hash=ph))
-				t_offset += 64
-			else:
-				raise ValueError("Invalid node type")
-
-		tree = RatchetTree((len(nodes) + 1) // 2)
-		tree.nodes = nodes
+		tree = RatchetTree.from_bytes(tree_bytes)
 		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash, joiner_index)
 
 
@@ -175,7 +172,9 @@ class MLSGroup:
 		# 3. Advance the epoch
 		# TODO (STATE-02): Transcript Hash Covers only epoch_id and commit_secret.
 		# Should cover full commit framing (sender, proposals, group_id) in a production setup.
-		transcript_hash = hashlib.sha256((self.state.epoch_id + 1).to_bytes(8, "big") + commit_secret).digest()
+		transcript_hash = hashlib.sha256(
+			(self.state.epoch_id + 1).to_bytes(8, "big") + commit_secret + new_tree.to_bytes() + self.state.key_schedule.confirmation_key
+		).digest()
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
 		# Sign the update payload to prevent Commit Forgery (High Remediation)
@@ -244,7 +243,9 @@ class MLSGroup:
 		# 2. Verify Signature (High Remediation)
 		try:
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
-			transcript_hash = hashlib.sha256(update.epoch_id.to_bytes(8, "big") + commit_secret).digest()
+			transcript_hash = hashlib.sha256(
+				update.epoch_id.to_bytes(8, "big") + commit_secret + update.tree.to_bytes() + self.state.key_schedule.confirmation_key
+			).digest()
 			public_key.verify(update.signature, transcript_hash)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")

@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed transposed `salt/label` arguments in HPKE `_labeled_extract` (`CRYPTO-04`).
   - Added explicit single-use semantics docstring to `HPKE.seal` (`CRYPTO-03`).
   - Mitigated `EpochState` dataclass frozen mutation risk via `__post_init__` RatchetTree deepcopy (`STATE-03`).
+- **[CRITICAL] P0 DeepSeek Audit Remediation**:
+  - `HPKE.seal` and `open` inject an 8-byte XOR counter into `base_nonce` to eliminate deterministic AES-GCM nonce collision (CVE-2025 Risk).
+  - `GroupUpdate` signatures now hash `tree.to_bytes()` and `confirmation_key` to prevent Commit Forgery.
+  - `WelcomeInfo` features a length-prefixed `to_bytes` with HMAC integrity verification covering the entire parameter footprint.
 - **[CRITICAL] P0/P1 Grok Audit Remediation (Engineering Grade)**:
   - `HPKE._labeled_extract` & `expand` strictly aligned with RFC-9180 Base Mode injecting `"HPKE-v1"` prefix and `SUITE_ID`.
   - `WelcomeInfo` serializes `joiner_index`, eliminating hardcoded positional state desynchronization in `MLSGroup.join()`.

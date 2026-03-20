@@ -74,3 +74,51 @@ class RatchetTree:
 		if index < 0 or index >= len(self.nodes):
 			return None
 		return self.nodes[index]
+
+	def to_bytes(self) -> bytes:
+		"""Version 2: Length-prefixed serialization with explicit node indices to prevent misalignment DOS (DeepSeek P0)."""
+		tree_serialized = bytearray()
+		for idx, node in enumerate(self.nodes):
+			tree_serialized.extend(idx.to_bytes(4, "big"))
+			if node is None:
+				tree_serialized.extend(b"\x00")
+			elif isinstance(node, LeafNode):
+				tree_serialized.extend(b"\x01" + node.key_package.to_bytes())
+			elif isinstance(node, ParentNode):
+				tree_serialized.extend(b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32))
+		return bytes(tree_serialized)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "RatchetTree":
+		nodes: list[Optional[LeafNode | ParentNode]] = []
+		offset = 0
+		while offset < len(data):
+			idx = int.from_bytes(data[offset : offset + 4], "big")
+			offset += 4
+
+			# Pad with None if there are gaps
+			while len(nodes) < idx:
+				nodes.append(None)
+
+			node_type = data[offset : offset + 1]
+			offset += 1
+
+			if node_type == b"\x00":
+				nodes.append(None)
+			elif node_type == b"\x01":
+				kp = KeyPackage.from_bytes(data[offset : offset + 64])
+				nodes.append(LeafNode(key_package=kp))
+				offset += 64
+			elif node_type == b"\x02":
+				pk = data[offset : offset + 32]
+				ph = data[offset + 32 : offset + 64]
+				nodes.append(ParentNode(public_key=pk, parent_hash=ph))
+				offset += 64
+			else:
+				raise ValueError("Invalid node type")
+
+		# Ensure correct RatchetTree size computation based on leaves
+		num_leaves = (len(nodes) + 1) // 2
+		tree = cls(num_leaves)
+		tree.nodes = nodes
+		return tree
