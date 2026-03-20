@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `test_e2e_mqtt.py`: Async IoT testing via public pub/sub (`aiomqtt`).
   - `test_e2e_webrtc.py`: Zero-Trust P2P DataChannels (`aiortc`).
   - `test_e2e_grpc.py`: Swarm Backend scaling via `protobuf` and `grpcio`.
-- **CI / CD**: GitHub Actions `.github/workflows/ci.yml` enlazado y configurado con comprobaciones de Python 3.12 usando `uv`.
+- **CI / CD**: 
+  - GitHub Actions `.github/workflows/ci.yml` enlazado y configurado con comprobaciones de Python 3.12 usando `uv`.
+  - Inyectado `test_lint.py` para forzar localmente el compliance de Ruff (Sound of Silence) durante las ejecuciones de `pytest`.
 - **Linter**: Aplicada estricta política *Sound of Silence* mediante `ruff` (indents por tabulaciones, eliminación de ruido).
 
 ### Changed
