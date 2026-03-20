@@ -1,6 +1,5 @@
 import asyncio
 import os
-import pickle
 import sys
 from typing import Dict
 
@@ -11,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "protos"))
 import mls_pb2
 import mls_pb2_grpc
 
-from pure_mls.group import MLSGroup
+from pure_mls.group import MLSGroup, WelcomeInfo
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -39,8 +38,13 @@ class MLSSwarmServicer(mls_pb2_grpc.MLSSwarmServicer):
 
 		queue = self.welcomes_queues[request.identity]
 		while True:
-			welcome_msg = await queue.get()
-			yield welcome_msg
+			try:
+				welcome_msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+				yield welcome_msg
+			except asyncio.TimeoutError:
+				continue
+			except asyncio.CancelledError:
+				break
 
 
 @pytest.mark.asyncio
@@ -81,7 +85,7 @@ async def test_mls_grpc_e2e():
 		alice_next, welcome, update = alice_group.add_member(bob_parsed_kp)
 
 		# Alice HPKE seals the Welcome for Bob using his public key
-		enc, sealed_welcome = HPKE.seal(bob_parsed_kp.init_key_pub, pickle.dumps(welcome), b"grpc_welcome")
+		enc, sealed_welcome = HPKE.seal(bob_parsed_kp.init_key_pub, welcome.to_bytes(), b"grpc_welcome")
 
 		# Alice pushes the sealed Welcome to the Swarm
 		await stub.DeliverWelcome(mls_pb2.WelcomeMessage(target_identity="bob", enc=enc, ciphertext=sealed_welcome))
@@ -94,7 +98,7 @@ async def test_mls_grpc_e2e():
 
 		# Bob unseals it over the gRPC wire
 		pt_welcome = HPKE.open(bob_kem, first_welcome.enc, first_welcome.ciphertext, b"grpc_welcome")
-		received_welcome = pickle.loads(pt_welcome)
+		received_welcome = WelcomeInfo.from_bytes(pt_welcome)
 
 		# Bob mathematically joins the Sovereign Group!
 		bob_group = MLSGroup.join(received_welcome, 2, bob_sig, bob_kem)

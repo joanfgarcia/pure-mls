@@ -1,13 +1,12 @@
 import base64
 import json
 import os
-import pickle
 
 import pytest
 import websockets
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.group import MLSGroup
+from pure_mls.group import MLSGroup, WelcomeInfo
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -66,7 +65,7 @@ async def test_mls_websockets_e2e():
 			alice_next, welcome, update = alice_group.add_member(bob_kp)
 
 			# E2E Network Send: Alice seals the Welcome using HPKE to Bob's init_key_pub
-			sealed_enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, pickle.dumps(welcome), aad=b"welcome_v1")
+			sealed_enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), aad=b"welcome_v1")
 
 			msg = {"type": "sealed_welcome", "enc": base64.b64encode(sealed_enc).decode(), "ciphertext": base64.b64encode(sealed_welcome).decode()}
 			await alice_ws.send(json.dumps(msg))
@@ -82,7 +81,7 @@ async def test_mls_websockets_e2e():
 			ciphertext = base64.b64decode(recv_msg["ciphertext"])
 
 			plaintext_welcome = HPKE.open(bob_kem, enc, ciphertext, aad=b"welcome_v1")
-			received_welcome = pickle.loads(plaintext_welcome)
+			received_welcome = WelcomeInfo.from_bytes(plaintext_welcome)
 
 			# Bob Joins!
 			bob_group = MLSGroup.join(received_welcome, 2, bob_sig, bob_kem)

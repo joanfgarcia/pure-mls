@@ -15,28 +15,35 @@ class HPKE:
 	or TreeKEM UpdatePaths across the network.
 	"""
 
+	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x02"  # KEM=X25519, KDF=SHA-256, AEAD=AES-256-GCM
+
+	@staticmethod
+	def _labeled_extract(salt: bytes, label: bytes, ikm: bytes) -> bytes:
+		labeled_ikm = b"HPKE-v1" + HPKE.SUITE_ID + label + ikm
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+
+	@staticmethod
+	def _labeled_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
+		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.SUITE_ID + label + info
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
+
 	@staticmethod
 	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
 		"""
 		Encapsulates a shared secret for the receiver and AEAD encrypts the plaintext.
 		Returns (encapsulated_key, ciphertext).
 		"""
-		# KEM: Generate ephemeral key pair on the fly
 		ephemeral = KemKey()
 		enc = ephemeral.public_bytes()
-
-		# DH Exchange: zz = DH(skE, pkR)
 		zz = ephemeral.dh_exchange(receiver_pub)
-
-		# KDF: Derive symmetric encryption key and nonce using standard HKDF
-		prk = hkdf_extract(enc + receiver_pub, zz, hashlib.sha256)
-		key = hkdf_expand(prk, b"pure_mls_hpke_key", 32, hashlib.sha256)
-		nonce = hkdf_expand(prk, b"pure_mls_hpke_nonce", 12, hashlib.sha256)
-
-		# AEAD: Seal it using AES-256-GCM
+		kem_context = enc + receiver_pub
+		prk_kem = HPKE._labeled_extract(b"shared_secret", b"", zz)
+		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
+		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
+		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
+		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
 		aesgcm = AESGCM(key)
-		ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
-
+		ciphertext = aesgcm.encrypt(base_nonce, plaintext, aad)
 		return enc, ciphertext
 
 	@staticmethod
@@ -45,14 +52,12 @@ class HPKE:
 		Decapsulates the ephemeral key and decrypts the ciphertext.
 		Only the exact receiver private key can logically open this envelope.
 		"""
-		# DH Exchange: zz = DH(skR, pkE)
 		zz = receiver_priv.dh_exchange(enc)
-
-		# KDF: Reproduce exact symmetric parameters
-		prk = hkdf_extract(enc + receiver_priv.public_bytes(), zz, hashlib.sha256)
-		key = hkdf_expand(prk, b"pure_mls_hpke_key", 32, hashlib.sha256)
-		nonce = hkdf_expand(prk, b"pure_mls_hpke_nonce", 12, hashlib.sha256)
-
-		# AEAD: Open with AES-256-GCM
+		kem_context = enc + receiver_priv.public_bytes()
+		prk_kem = HPKE._labeled_extract(b"shared_secret", b"", zz)
+		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
+		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
+		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
+		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
 		aesgcm = AESGCM(key)
-		return aesgcm.decrypt(nonce, ciphertext, aad)
+		return aesgcm.decrypt(base_nonce, ciphertext, aad)

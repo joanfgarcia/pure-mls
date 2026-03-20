@@ -2,13 +2,12 @@ import asyncio
 import base64
 import json
 import os
-import pickle
 
 import pytest
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.group import MLSGroup
+from pure_mls.group import MLSGroup, WelcomeInfo
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -59,10 +58,10 @@ async def test_mls_webrtc_e2e():
 					print(f"Alice: Received {message[:50]}...")
 					msg = json.loads(message)
 					if msg["type"] == "join_request":
-						bob_kp = pickle.loads(base64.b64decode(msg["key_package"]))
+						bob_kp = KeyPackage.from_bytes(base64.b64decode(msg["key_package"]))
 						alice_next, welcome, _ = alice_group.add_member(bob_kp)
 
-						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, pickle.dumps(welcome), b"webrtc_welcome")
+						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), b"webrtc_welcome")
 
 						pub_msg = {
 							"type": "sealed_welcome",
@@ -119,14 +118,19 @@ async def test_mls_webrtc_e2e():
 			def on_datachannel(channel):
 				print("Bob: Datachannel received from Alice")
 
-				@channel.on("open")
-				def on_open():
+				def _send_join():
+					if getattr(channel, "_join_sent", False): return
+					channel._join_sent = True
 					print("Bob: Datachannel open, sending join request")
-					req = {"type": "join_request", "key_package": base64.b64encode(pickle.dumps(kp)).decode()}
+					req = {"type": "join_request", "key_package": base64.b64encode(kp.to_bytes()).decode()}
 					channel.send(json.dumps(req))
 
+				@channel.on("open")
+				def on_open():
+					_send_join()
+
 				if channel.readyState == "open":
-					on_open()
+					_send_join()
 
 				@channel.on("message")
 				def on_message(message):
@@ -137,7 +141,7 @@ async def test_mls_webrtc_e2e():
 						ciphertext = base64.b64decode(msg["ciphertext"])
 
 						pt_welcome = HPKE.open(kem, enc, ciphertext, b"webrtc_welcome")
-						welcome_info = pickle.loads(pt_welcome)
+						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
 						bob_group = MLSGroup.join(welcome_info, 2, sig, kem)
 

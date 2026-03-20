@@ -2,14 +2,13 @@ import asyncio
 import base64
 import json
 import os
-import pickle
 import uuid
 
 import aiomqtt
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.group import MLSGroup
+from pure_mls.group import MLSGroup, WelcomeInfo
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -55,13 +54,13 @@ async def test_mls_mqtt_e2e():
 					if topic == topic_join and msg["type"] == "join_request":
 						# Bob wants in.
 						bob_kp_bytes = base64.b64decode(msg["key_package"])
-						bob_kp = pickle.loads(bob_kp_bytes)
+						bob_kp = KeyPackage.from_bytes(bob_kp_bytes)
 
 						# Apply TreeKEM to add Bob
 						alice_next, welcome, update = alice_group.add_member(bob_kp)
 
 						# HPKE Seal the Welcome specifically for Bob
-						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, pickle.dumps(welcome), b"mqtt_welcome")
+						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), b"mqtt_welcome")
 
 						# Broadcast the sealed welcome
 						pub_msg = {
@@ -103,7 +102,7 @@ async def test_mls_mqtt_e2e():
 				await client.subscribe(topic_welcome)
 
 				# Bob blasts his KeyPackage requesting to join the cluster
-				req = {"type": "join_request", "key_package": base64.b64encode(pickle.dumps(kp)).decode()}
+				req = {"type": "join_request", "key_package": base64.b64encode(kp.to_bytes()).decode()}
 				await client.publish(topic_join, json.dumps(req))
 
 				async for message in client.messages:
@@ -117,7 +116,7 @@ async def test_mls_mqtt_e2e():
 						ciphertext = base64.b64decode(msg["ciphertext"])
 
 						pt_welcome = HPKE.open(kem, enc, ciphertext, b"mqtt_welcome")
-						welcome_info = pickle.loads(pt_welcome)
+						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
 						# Reconstruct Sovereign Group in RAM
 						bob_group = MLSGroup.join(welcome_info, 2, sig, kem)
@@ -134,7 +133,8 @@ async def test_mls_mqtt_e2e():
 						await client.publish(topic_data, json.dumps(data_msg))
 						break
 		except Exception as e:
-			test_done.set_exception(e)
+			if not test_done.done():
+				test_done.set_exception(e)
 
 	# Run Alice and Bob concurrently
 	alice_task = asyncio.create_task(alice_node())

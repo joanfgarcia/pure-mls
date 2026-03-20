@@ -39,11 +39,11 @@ class KeySchedule:
 		return cls(
 			joiner_secret=joiner_secret,
 			epoch_secret=epoch_secret,
-			sender_data_secret=hkdf_expand(epoch_secret, b"sender data", 32, hashlib.sha256),
-			encryption_secret=hkdf_expand(epoch_secret, b"encryption", 32, hashlib.sha256),
-			exporter_secret=hkdf_expand(epoch_secret, b"exporter", 32, hashlib.sha256),
+			sender_data_secret=hkdf_expand(epoch_secret, b"MLS 1.0 sender data", 32, hashlib.sha256),
+			encryption_secret=hkdf_expand(epoch_secret, b"MLS 1.0 encryption", 32, hashlib.sha256),
+			exporter_secret=hkdf_expand(epoch_secret, b"MLS 1.0 exporter", 32, hashlib.sha256),
 			authentication_secret=auth_secret,
-			external_secret=hkdf_expand(epoch_secret, b"external", 32, hashlib.sha256),
-			confirmation_key=hkdf_expand(auth_secret, b"confirm", 32, hashlib.sha256),
-			next_init_secret=hkdf_expand(epoch_secret, b"init", 32, hashlib.sha256),
+			external_secret=hkdf_expand(epoch_secret, b"MLS 1.0 external", 32, hashlib.sha256),
+			confirmation_key=hkdf_expand(auth_secret, b"MLS 1.0 confirm", 32, hashlib.sha256),
+			next_init_secret=hkdf_expand(epoch_secret, b"MLS 1.0 init", 32, hashlib.sha256),
 		)

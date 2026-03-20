@@ -3,8 +3,13 @@ import os
 from dataclasses import dataclass
 
 from pure_mls.epoch import EpochState
+from pure_mls.hkdf import hkdf_expand
+from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
+from pure_mls.keyschedule import KeySchedule
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 
 @dataclass
@@ -16,6 +21,63 @@ class WelcomeInfo:
 	tree: RatchetTree
 	joiner_secret: bytes
 	confirmed_transcript_hash: bytes
+
+	def to_bytes(self) -> bytes:
+		tree_bytes = b"".join(
+			(b"\x01" + node.key_package.to_bytes()) if isinstance(node, LeafNode)
+			else (b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32)) if isinstance(node, ParentNode)
+			else b"\x00"
+			for node in self.tree.nodes
+		)
+		tree_len = len(tree_bytes).to_bytes(4, "big")
+		epoch_bytes = self.epoch_id.to_bytes(8, "big")
+		group_id_len = len(self.group_id).to_bytes(2, "big")
+		return (
+			group_id_len + self.group_id
+			+ epoch_bytes
+			+ tree_len + tree_bytes
+			+ self.joiner_secret
+			+ self.confirmed_transcript_hash
+		)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "WelcomeInfo":
+		group_id_len = int.from_bytes(data[:2], "big")
+		offset = 2
+		group_id = data[offset:offset+group_id_len]
+		offset += group_id_len
+		epoch_id = int.from_bytes(data[offset:offset+8], "big")
+		offset += 8
+		tree_len = int.from_bytes(data[offset:offset+4], "big")
+		offset += 4
+		tree_bytes = data[offset:offset+tree_len]
+		offset += tree_len
+		joiner_secret = data[offset:offset+32]
+		offset += 32
+		confirmed_transcript_hash = data[offset:offset+32]
+		
+		nodes = []
+		t_offset = 0
+		while t_offset < len(tree_bytes):
+			node_type = tree_bytes[t_offset:t_offset+1]
+			t_offset += 1
+			if node_type == b"\x00":
+				nodes.append(None)
+			elif node_type == b"\x01":
+				kp = KeyPackage.from_bytes(tree_bytes[t_offset:t_offset+64])
+				nodes.append(LeafNode(key_package=kp))
+				t_offset += 64
+			elif node_type == b"\x02":
+				pk = tree_bytes[t_offset:t_offset+32]
+				ph = tree_bytes[t_offset+32:t_offset+64]
+				nodes.append(ParentNode(public_key=pk, parent_hash=ph))
+				t_offset += 64
+			else:
+				raise ValueError("Invalid node type")
+				
+		tree = RatchetTree((len(nodes) + 1) // 2)
+		tree.nodes = nodes
+		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash)
 
 
 @dataclass
@@ -93,18 +155,15 @@ class MLSGroup:
 		# In full MLS, the committer generates a new path secret and encrypts it to the copath.
 		commit_secret = os.urandom(32)
 
-		# Encrypt commit_secret for every existing group member using HPKE (P0 Remediation)
-		from pure_mls.hpke import HPKE
-
 		encrypted_secrets = {}
-		for i, node in enumerate(self.state.tree.nodes):
+		for i, node in enumerate(new_tree.nodes):
 			if isinstance(node, LeafNode) and i != self.my_index:
 				pk = node.public_key
 				enc, ct = HPKE.seal(pk, commit_secret)
 				encrypted_secrets[pk] = enc + ct
 
 		# 3. Advance the epoch
-		transcript_hash = hashlib.sha256(str(self.state.epoch_id + 1).encode() + commit_secret).digest()
+		transcript_hash = hashlib.sha256((self.state.epoch_id + 1).to_bytes(8, "big") + commit_secret).digest()
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
 		# Sign the update payload to prevent Commit Forgery (High Remediation)
@@ -139,9 +198,6 @@ class MLSGroup:
 		# The joiner derives the schedule using the joiner_secret and a blank commit_secret (?)
 		# In RFC 9420, the Welcome contains the encrypted joiner_secret.
 		# For this implementation, we re-derive from joiner_secret directly.
-		from pure_mls.hkdf import hkdf_expand
-		from pure_mls.keyschedule import KeySchedule
-
 		# Mix confirmed_transcript_hash into epoch_secret derivation to prevent Welcome Spoofing
 		joiner_context = welcome.confirmed_transcript_hash
 		epoch_secret = hkdf_expand(welcome.joiner_secret, joiner_context, 32, hashlib.sha256)
@@ -150,13 +206,13 @@ class MLSGroup:
 		ks = KeySchedule(
 			joiner_secret=welcome.joiner_secret,
 			epoch_secret=epoch_secret,
-			sender_data_secret=hkdf_expand(epoch_secret, b"sender data", 32, hashlib.sha256),
-			encryption_secret=hkdf_expand(epoch_secret, b"encryption", 32, hashlib.sha256),
-			exporter_secret=hkdf_expand(epoch_secret, b"exporter", 32, hashlib.sha256),
+			sender_data_secret=hkdf_expand(epoch_secret, b"MLS 1.0 sender data", 32, hashlib.sha256),
+			encryption_secret=hkdf_expand(epoch_secret, b"MLS 1.0 encryption", 32, hashlib.sha256),
+			exporter_secret=hkdf_expand(epoch_secret, b"MLS 1.0 exporter", 32, hashlib.sha256),
 			authentication_secret=auth_secret,
-			external_secret=hkdf_expand(epoch_secret, b"external", 32, hashlib.sha256),
-			confirmation_key=hkdf_expand(auth_secret, b"confirm", 32, hashlib.sha256),
-			next_init_secret=hkdf_expand(epoch_secret, b"init", 32, hashlib.sha256),
+			external_secret=hkdf_expand(epoch_secret, b"MLS 1.0 external", 32, hashlib.sha256),
+			confirmation_key=hkdf_expand(auth_secret, b"MLS 1.0 confirm", 32, hashlib.sha256),
+			next_init_secret=hkdf_expand(epoch_secret, b"MLS 1.0 init", 32, hashlib.sha256),
 		)
 
 		state = EpochState(group_id=welcome.group_id, epoch_id=welcome.epoch_id, tree=welcome.tree, key_schedule=ks)
@@ -176,8 +232,6 @@ class MLSGroup:
 			raise ValueError("Invalid committer index")
 
 		# 1. Decrypt Commit Secret (P0 Remediation)
-		from pure_mls.hpke import HPKE
-
 		my_kem_pub = self.my_kem_key.public_bytes()
 		if my_kem_pub not in update.encrypted_commit_secrets:
 			raise ValueError("Not invited to this epoch (missing encrypted commit_secret)")
@@ -187,12 +241,9 @@ class MLSGroup:
 		commit_secret = HPKE.open(self.my_kem_key, enc, ct)
 
 		# 2. Verify Signature (High Remediation)
-		from cryptography.exceptions import InvalidSignature
-		from cryptography.hazmat.primitives.asymmetric import ed25519
-
 		try:
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
-			transcript_hash = hashlib.sha256(str(update.epoch_id).encode() + commit_secret).digest()
+			transcript_hash = hashlib.sha256(update.epoch_id.to_bytes(8, "big") + commit_secret).digest()
 			public_key.verify(update.signature, transcript_hash)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
