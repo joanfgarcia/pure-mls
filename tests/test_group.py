@@ -30,7 +30,7 @@ def test_mls_group_lifecycle():
 	assert alice_group_next.application_key != orig_app_key
 
 	# 4. Bob processes the Welcome message
-	bob_group = MLSGroup.join(welcome, my_index=2, my_sig_key=bob_sig, my_kem_key=bob_kem)
+	bob_group = MLSGroup.join(welcome, my_sig_key=bob_sig, my_kem_key=bob_kem)
 
 	# Bob should be on epoch 1, and his keys should match Alice's perfectly
 	assert bob_group.epoch_id == 1

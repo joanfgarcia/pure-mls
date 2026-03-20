@@ -144,7 +144,7 @@ async def test_mls_webrtc_e2e():
 						pt_welcome = HPKE.open(kem, enc, ciphertext, b"webrtc_welcome")
 						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
-						bob_group = MLSGroup.join(welcome_info, 2, sig, kem)
+						bob_group = MLSGroup.join(welcome_info, sig, kem)
 
 						aes = AESGCM(bob_group.application_key)
 						nonce = os.urandom(12)

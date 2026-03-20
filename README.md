@@ -59,7 +59,7 @@ alice_group = MLSGroup.create(b"grupo-soberano", SignatureKey(), KemKey())
 alice_next, welcome, update = alice_group.add_member(bob_kp)
 
 # 3. Bob captures the `Welcome` (sealed with HPKE) from the network and decrypts it to join
-bob_group = MLSGroup.join(welcome, 2, SignatureKey(), KemKey())
+bob_group = MLSGroup.join(welcome, SignatureKey(), KemKey())
 
 # The Underlying Mathematical Truth:
 assert alice_next.application_key == bob_group.application_key

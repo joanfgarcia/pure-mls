@@ -101,7 +101,7 @@ async def test_mls_grpc_e2e():
 		received_welcome = WelcomeInfo.from_bytes(pt_welcome)
 
 		# Bob mathematically joins the Sovereign Group!
-		bob_group = MLSGroup.join(received_welcome, 2, bob_sig, bob_kem)
+		bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)
 
 		# Verify consensus
 		assert alice_next.application_key == bob_group.application_key

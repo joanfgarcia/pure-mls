@@ -33,7 +33,7 @@ def test_group_process_update_coverage():
 	kem2 = KemKey()
 	kp2 = KeyPackage(sig2.public_bytes(), kem2.public_bytes())
 	group1_next, welcome, update1 = group1.add_member(kp2)
-	group2 = MLSGroup.join(welcome, 1, sig2, kem2)
+	group2 = MLSGroup.join(welcome, sig2, kem2)
 
 	# Charlie joins to generate an update2 at epoch 2
 	sig3 = SignatureKey()

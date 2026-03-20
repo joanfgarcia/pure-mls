@@ -84,7 +84,7 @@ async def test_mls_websockets_e2e():
 			received_welcome = WelcomeInfo.from_bytes(plaintext_welcome)
 
 			# Bob Joins!
-			bob_group = MLSGroup.join(received_welcome, 2, bob_sig, bob_kem)
+			bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)
 
 			# Both should derive the exact same Application Key
 			app_key_alice = alice_next.application_key

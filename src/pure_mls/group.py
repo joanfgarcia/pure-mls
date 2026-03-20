@@ -22,6 +22,7 @@ class WelcomeInfo:
 	tree: RatchetTree
 	joiner_secret: bytes
 	confirmed_transcript_hash: bytes
+	joiner_index: int
 
 	def to_bytes(self) -> bytes:
 		tree_bytes = b"".join(
@@ -35,7 +36,16 @@ class WelcomeInfo:
 		tree_len = len(tree_bytes).to_bytes(4, "big")
 		epoch_bytes = self.epoch_id.to_bytes(8, "big")
 		group_id_len = len(self.group_id).to_bytes(2, "big")
-		return group_id_len + self.group_id + epoch_bytes + tree_len + tree_bytes + self.joiner_secret + self.confirmed_transcript_hash
+		return (
+			group_id_len
+			+ self.group_id
+			+ epoch_bytes
+			+ tree_len
+			+ tree_bytes
+			+ self.joiner_secret
+			+ self.confirmed_transcript_hash
+			+ self.joiner_index.to_bytes(4, "big")
+		)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "WelcomeInfo":
@@ -52,6 +62,9 @@ class WelcomeInfo:
 		joiner_secret = data[offset : offset + 32]
 		offset += 32
 		confirmed_transcript_hash = data[offset : offset + 32]
+
+		offset += 32
+		joiner_index = int.from_bytes(data[offset : offset + 4], "big")
 
 		nodes: list[LeafNode | ParentNode | None] = []
 		t_offset = 0
@@ -74,7 +87,7 @@ class WelcomeInfo:
 
 		tree = RatchetTree((len(nodes) + 1) // 2)
 		tree.nodes = nodes
-		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash)
+		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash, joiner_index)
 
 
 @dataclass
@@ -175,6 +188,7 @@ class MLSGroup:
 			tree=new_tree,
 			joiner_secret=next_state.key_schedule.joiner_secret,
 			confirmed_transcript_hash=transcript_hash,
+			joiner_index=new_leaf_idx,
 		)
 		update = GroupUpdate(
 			epoch_id=next_state.epoch_id,
@@ -189,7 +203,7 @@ class MLSGroup:
 		return new_group, welcome, update
 
 	@classmethod
-	def join(cls, welcome: WelcomeInfo, my_index: int, my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
+	def join(cls, welcome: WelcomeInfo, my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
 		"""
 		Initializes a Group instance from a Welcome message.
 		Recalculates the EpochState and KeySchedule.
@@ -204,7 +218,7 @@ class MLSGroup:
 
 		state = EpochState(group_id=welcome.group_id, epoch_id=welcome.epoch_id, tree=welcome.tree, key_schedule=ks)
 
-		return cls(state, my_index=my_index, my_sig_key=my_sig_key, my_kem_key=my_kem_key)
+		return cls(state, my_index=welcome.joiner_index, my_sig_key=my_sig_key, my_kem_key=my_kem_key)
 
 	def process_update(self, update: GroupUpdate) -> "MLSGroup":
 		"""

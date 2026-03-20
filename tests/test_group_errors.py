@@ -20,7 +20,7 @@ def test_welcome_info_from_bytes_errors():
 	# For from_bytes to hit 0x02, we need a to_bytes that generated 0x02.
 	tree = RatchetTree(1)
 	tree.nodes = [ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32)]
-	w_parent = WelcomeInfo(b"g", 1, tree, b"J" * 32, b"H" * 32)
+	w_parent = WelcomeInfo(b"g", 1, tree, b"J" * 32, b"H" * 32, 2)
 	w_parent_bytes = w_parent.to_bytes()
 	parsed = WelcomeInfo.from_bytes(w_parent_bytes)
 	assert isinstance(parsed.tree.nodes[0], ParentNode)

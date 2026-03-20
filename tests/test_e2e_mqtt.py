@@ -119,7 +119,7 @@ async def test_mls_mqtt_e2e():
 						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
 						# Reconstruct Sovereign Group in RAM
-						bob_group = MLSGroup.join(welcome_info, 2, sig, kem)
+						bob_group = MLSGroup.join(welcome_info, sig, kem)
 						app_key = bob_group.application_key
 
 						# We are in! We share an opaque cryptographic layer.
