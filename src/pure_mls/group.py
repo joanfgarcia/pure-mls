@@ -201,7 +201,7 @@ class MLSGroup:
 		# Mix confirmed_transcript_hash into epoch_secret derivation to prevent Welcome Spoofing
 		joiner_context = welcome.confirmed_transcript_hash
 		epoch_secret = hkdf_expand(welcome.joiner_secret, joiner_context, 32, hashlib.sha256)
-		auth_secret = hkdf_expand(epoch_secret, b"authentication", 32, hashlib.sha256)
+		auth_secret = hkdf_expand(epoch_secret, b"MLS 1.0 authentication", 32, hashlib.sha256)
 
 		ks = KeySchedule(
 			joiner_secret=welcome.joiner_secret,

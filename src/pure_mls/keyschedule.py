@@ -34,7 +34,7 @@ class KeySchedule:
 		epoch_secret = hkdf_expand(joiner_secret, transcript_hash, 32, hashlib.sha256)
 
 		# 3. Expand application and internal branch secrets
-		auth_secret = hkdf_expand(epoch_secret, b"authentication", 32, hashlib.sha256)
+		auth_secret = hkdf_expand(epoch_secret, b"MLS 1.0 authentication", 32, hashlib.sha256)
 
 		return cls(
 			joiner_secret=joiner_secret,
