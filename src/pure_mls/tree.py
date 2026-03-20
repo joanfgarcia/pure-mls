@@ -58,16 +58,28 @@ class RatchetTree:
 		self.num_leaves = num_leaves
 		# The array size is always 2*num_leaves - 1
 		# Initialize all nodes as empty (None)
-		self.nodes: list[Optional[LeafNode | ParentNode]] = [None] * (2 * num_leaves - 1) if num_leaves > 0 else []
+		# After __post_init__ in EpochState, this list becomes a frozen tuple
+		self.nodes: list[LeafNode | ParentNode | None] | tuple[LeafNode | ParentNode | None, ...] = (
+			[None] * (2 * num_leaves - 1) if num_leaves > 0 else []
+		)
+
+	def freeze(self) -> None:
+		"""Locks the tree structure to prevent mutated references from bypassing EpochState freezing."""
+		if isinstance(self.nodes, list):
+			self.nodes = tuple(self.nodes)
 
 	def set_leaf(self, index: int, leaf: LeafNode) -> None:
 		if index % 2 != 0:
 			raise ValueError("Leaves must be inserted at even indices")
+		if isinstance(self.nodes, tuple):
+			raise TypeError("RatchetTree is frozen and immutable.")
 		self.nodes[index] = leaf
 
 	def set_parent(self, index: int, parent_node: ParentNode) -> None:
 		if index % 2 == 0:
 			raise ValueError("Parents must be inserted at odd indices")
+		if isinstance(self.nodes, tuple):
+			raise TypeError("RatchetTree is frozen and immutable.")
 		self.nodes[index] = parent_node
 
 	def get_node(self, index: int) -> Optional[LeafNode | ParentNode]:

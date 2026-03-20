@@ -16,6 +16,17 @@ class HPKE:
 	"""
 
 	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x02"  # KEM=X25519, KDF=SHA-256, AEAD=AES-256-GCM
+	KEM_SUITE_ID = b"KEM\x00\x20"  # DHKEM(X25519)
+
+	@staticmethod
+	def _kem_extract(salt: bytes, label: bytes, ikm: bytes) -> bytes:
+		labeled_ikm = b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + ikm
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+
+	@staticmethod
+	def _kem_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
+		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + info
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
 
 	@staticmethod
 	def _labeled_extract(salt: bytes, label: bytes, ikm: bytes) -> bytes:
@@ -30,55 +41,52 @@ class HPKE:
 	@staticmethod
 	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
 		"""
-		Single-use. Each call generates a fresh ephemeral keypair.
-		The returned enc MUST NOT be passed back to seal() or used
-		to derive session material outside this call.
-		Encapsulates a shared secret for the receiver and AEAD encrypts the plaintext.
-		Returns (encapsulated_key, ciphertext).
+		Single-use encapsulation & encryption per RFC 9180 Base Mode.
 		"""
 		ephemeral = KemKey()
 		enc = ephemeral.public_bytes()
-		zz = ephemeral.dh_exchange(receiver_pub)
+		dh = ephemeral.dh_exchange(receiver_pub)
 		kem_context = enc + receiver_pub
-		prk_kem = HPKE._labeled_extract(b"", b"shared_secret", zz)
-		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
-		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
-		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
-		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
 
-		import os
+		# Phase 1: KEM (ExtractAndExpand with KEM_SUITE_ID)
+		prk_kem = HPKE._kem_extract(b"", b"shared_secret", dh)
+		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
-		nonce_counter = os.urandom(8)
-		nonce = bytearray(base_nonce)
-		for i in range(8):
-			nonce[i] ^= nonce_counter[i]
-		nonce = bytes(nonce)
+		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
+		mode = b"\x00"
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", b"")
+		ks_context = mode + psk_id_hash + info_hash
+
+		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
+		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 
 		aesgcm = AESGCM(key)
-		ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
-		return enc, nonce_counter + ciphertext
+		ciphertext = aesgcm.encrypt(base_nonce, plaintext, aad)
+		return enc, ciphertext
 
 	@staticmethod
 	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"") -> bytes:
 		"""
-		Decapsulates the ephemeral key and decrypts the ciphertext.
-		Only the exact receiver private key can logically open this envelope.
+		Decapsulation & decryption per RFC 9180 Base Mode.
 		"""
-		zz = receiver_priv.dh_exchange(enc)
+		dh = receiver_priv.dh_exchange(enc)
 		kem_context = enc + receiver_priv.public_bytes()
-		prk_kem = HPKE._labeled_extract(b"", b"shared_secret", zz)
-		shared_secret = HPKE._labeled_expand(prk_kem, b"shared_secret", kem_context, 32)
-		prk_key = HPKE._labeled_extract(b"key", shared_secret, b"")
-		key = HPKE._labeled_expand(prk_key, b"key", b"", 32)
-		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", b"", 12)
 
-		nonce_counter = ciphertext[:8]
-		actual_ciphertext = ciphertext[8:]
+		# Phase 1: KEM
+		prk_kem = HPKE._kem_extract(b"", b"shared_secret", dh)
+		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
-		nonce = bytearray(base_nonce)
-		for i in range(8):
-			nonce[i] ^= nonce_counter[i]
-		nonce = bytes(nonce)
+		# Phase 2: KeySchedule
+		mode = b"\x00"
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", b"")
+		ks_context = mode + psk_id_hash + info_hash
+
+		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
+		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 
 		aesgcm = AESGCM(key)
-		return aesgcm.decrypt(nonce, actual_ciphertext, aad)
+		return aesgcm.decrypt(base_nonce, ciphertext, aad)

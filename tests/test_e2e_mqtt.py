@@ -81,7 +81,7 @@ async def test_mls_mqtt_e2e():
 						nonce = base64.b64decode(msg["nonce"])
 
 						aes = AESGCM(alice_group.application_key)
-						plaintext = aes.decrypt(nonce, ct, b"")
+						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
 
 						assert plaintext == b"Hello Alice, IoT Sensor Node Bob is online and secure."
 						test_done.set_result(True)
@@ -120,14 +120,13 @@ async def test_mls_mqtt_e2e():
 
 						# Reconstruct Sovereign Group in RAM
 						bob_group = MLSGroup.join(welcome_info, sig, kem)
-						app_key = bob_group.application_key
 
 						# We are in! We share an opaque cryptographic layer.
 						# Let's send an encrypted reading.
-						aes = AESGCM(app_key)
+						aes = AESGCM(bob_group.application_key)
 						nonce = os.urandom(12)
-						reading = b"Hello Alice, IoT Sensor Node Bob is online and secure."
-						ct = aes.encrypt(nonce, reading, b"")
+						reading = b'{"temp": 24.5, "sensor": "bob_01"}'
+						ct = aes.encrypt(nonce, reading, b"sender_bob")
 
 						data_msg = {"type": "app_data", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}
 						await client.publish(topic_data, json.dumps(data_msg))

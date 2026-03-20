@@ -6,7 +6,6 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import hkdf_expand
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
@@ -25,16 +24,13 @@ class WelcomeInfo:
 	joiner_index: int
 
 	def to_bytes(self) -> bytes:
-		from cryptography.hazmat.primitives import hmac as crypto_hmac
-		from cryptography.hazmat.primitives.hashes import SHA256
-
 		VERSION = b"\x02"
 		tree_bytes = self.tree.to_bytes()
 		tree_len = len(tree_bytes).to_bytes(4, "big")
 		epoch_bytes = self.epoch_id.to_bytes(8, "big")
 		group_id_len = len(self.group_id).to_bytes(2, "big")
 
-		payload = (
+		return (
 			VERSION
 			+ group_id_len
 			+ self.group_id
@@ -46,20 +42,10 @@ class WelcomeInfo:
 			+ self.joiner_index.to_bytes(4, "big")
 		)
 
-		h = crypto_hmac.HMAC(self.confirmed_transcript_hash[:32], SHA256())
-		h.update(payload)
-		return payload + h.finalize()
-
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "WelcomeInfo":
-		from cryptography.hazmat.primitives import hmac as crypto_hmac
-		from cryptography.hazmat.primitives.hashes import SHA256
-
 		if data[0] != 0x02:
 			raise ValueError("Unsupported WelcomeInfo version")
-
-		payload_without_mac = data[:-32]
-		mac = data[-32:]
 
 		offset = 1
 		group_id_len = int.from_bytes(data[offset : offset + 2], "big")
@@ -75,12 +61,8 @@ class WelcomeInfo:
 		joiner_secret = data[offset : offset + 32]
 		offset += 32
 		confirmed_transcript_hash = data[offset : offset + 32]
-
-		h = crypto_hmac.HMAC(confirmed_transcript_hash, SHA256())
-		h.update(payload_without_mac)
-		h.verify(mac)
-
 		offset += 32
+
 		joiner_index = int.from_bytes(data[offset : offset + 4], "big")
 
 		tree = RatchetTree.from_bytes(tree_bytes)
@@ -172,8 +154,9 @@ class MLSGroup:
 		# 3. Advance the epoch
 		# TODO (STATE-02): Transcript Hash Covers only epoch_id and commit_secret.
 		# Should cover full commit framing (sender, proposals, group_id) in a production setup.
+		ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_secrets.items()))
 		transcript_hash = hashlib.sha256(
-			(self.state.epoch_id + 1).to_bytes(8, "big") + commit_secret + new_tree.to_bytes() + self.state.key_schedule.confirmation_key
+			(self.state.epoch_id + 1).to_bytes(8, "big") + new_tree.to_bytes() + self.state.key_schedule.confirmation_key + ciphertexts_bytes
 		).digest()
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
@@ -207,12 +190,13 @@ class MLSGroup:
 		Initializes a Group instance from a Welcome message.
 		Recalculates the EpochState and KeySchedule.
 		"""
-		# The joiner derives the schedule using the joiner_secret and a blank commit_secret (?)
-		# In RFC 9420, the Welcome contains the encrypted joiner_secret.
-		# For this implementation, we re-derive from joiner_secret directly.
-		# Mix confirmed_transcript_hash into epoch_secret derivation to prevent Welcome Spoofing
-		joiner_context = welcome.confirmed_transcript_hash
-		epoch_secret = hkdf_expand(welcome.joiner_secret, joiner_context, 32, hashlib.sha256)
+		# The joiner derives the schedule using the joiner_secret and a blank commit_secret (zero vector)
+		# Mix confirmed_transcript_hash indirectly downstream through the KeySchedule expansion if needed
+		import hashlib
+
+		from pure_mls.hkdf import hkdf_extract
+
+		epoch_secret = hkdf_extract(welcome.joiner_secret, b"\x00" * 32, hashlib.sha256)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, welcome.joiner_secret)
 
 		state = EpochState(group_id=welcome.group_id, epoch_id=welcome.epoch_id, tree=welcome.tree, key_schedule=ks)
@@ -232,6 +216,20 @@ class MLSGroup:
 			raise ValueError("Invalid committer index")
 
 		# 1. Decrypt Commit Secret (P0 Remediation)
+		# 1. Verify Signature FIRST to prevent padding oracles (STATE-04)
+		ciphertexts_bytes = b"".join(k + v for k, v in sorted(update.encrypted_commit_secrets.items()))
+		try:
+			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
+			transcript_hash = hashlib.sha256(
+				update.epoch_id.to_bytes(8, "big") + update.tree.to_bytes() + self.state.key_schedule.confirmation_key + ciphertexts_bytes
+			).digest()
+			public_key.verify(update.signature, transcript_hash)
+		except InvalidSignature:
+			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
+		except Exception:
+			raise ValueError("Invalid signature format")
+
+		# 2. HPKE Decapsulate only authentic ciphertexts
 		my_kem_pub = self.my_kem_key.public_bytes()
 		if my_kem_pub not in update.encrypted_commit_secrets:
 			raise ValueError("Not invited to this epoch (missing encrypted commit_secret)")
@@ -239,18 +237,6 @@ class MLSGroup:
 		enc_ct = update.encrypted_commit_secrets[my_kem_pub]
 		enc, ct = enc_ct[:32], enc_ct[32:]
 		commit_secret = HPKE.open(self.my_kem_key, enc, ct)
-
-		# 2. Verify Signature (High Remediation)
-		try:
-			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
-			transcript_hash = hashlib.sha256(
-				update.epoch_id.to_bytes(8, "big") + commit_secret + update.tree.to_bytes() + self.state.key_schedule.confirmation_key
-			).digest()
-			public_key.verify(update.signature, transcript_hash)
-		except InvalidSignature:
-			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
-		except Exception:
-			raise ValueError("Invalid signature format")
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)

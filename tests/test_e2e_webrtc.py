@@ -32,6 +32,7 @@ async def test_mls_webrtc_e2e():
 	test_done = asyncio.Future()
 
 	async def alice_node():
+		pc = None
 		try:
 			print("Alice: Initializing WebRTC")
 			pc = RTCPeerConnection()
@@ -76,7 +77,7 @@ async def test_mls_webrtc_e2e():
 						nonce = base64.b64decode(msg["nonce"])
 
 						aes = AESGCM(alice_group.application_key)
-						plaintext = aes.decrypt(nonce, ct, b"")
+						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
 
 						assert plaintext == b"Hello Alice, P2P Edge Node Bob securely online."
 						print("Alice: Decrypted successfully!")
@@ -102,10 +103,11 @@ async def test_mls_webrtc_e2e():
 			print(f"Alice Error: {e}")
 			if not test_done.done():
 				test_done.set_exception(e)
-			if "pc" in locals():
+			if pc is not None:
 				await pc.close()
 
 	async def bob_node():
+		pc = None
 		try:
 			print("Bob: Initializing WebRTC")
 			pc = RTCPeerConnection()
@@ -149,7 +151,7 @@ async def test_mls_webrtc_e2e():
 						aes = AESGCM(bob_group.application_key)
 						nonce = os.urandom(12)
 						reading = b"Hello Alice, P2P Edge Node Bob securely online."
-						ct = aes.encrypt(nonce, reading, b"")
+						ct = aes.encrypt(nonce, reading, b"sender_bob")
 
 						data_msg = {"type": "app_data", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}
 						channel.send(json.dumps(data_msg))
@@ -172,7 +174,7 @@ async def test_mls_webrtc_e2e():
 			print(f"Bob Error: {e}")
 			if not test_done.done():
 				test_done.set_exception(e)
-			if "pc" in locals():
+			if pc is not None:
 				await pc.close()
 
 	alice_task = asyncio.create_task(alice_node())
