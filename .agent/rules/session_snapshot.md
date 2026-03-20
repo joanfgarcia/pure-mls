@@ -1,25 +1,27 @@
-# Session Snapshot
+# Session Snapshot: pure-mls v0.1.0 Engineering Grade
 
-### 1. Diccionario Técnico
-- **pure-mls**: Implementación Pura en Python de MLS (RFC 9420) sin bindings compilados.
-- **Protocol of Silence**: Código escrito para IAs (Hard tabs, cero comentarios explicativos humanos, uniformidad absoluta vía `ruff`).
-- **Dumb Pipe**: Uso de servidores como Firebase Realtime Database como brokers de red agnósticos (Zero-Knowledge) para enrutar cifrados P2P.
+## 1. Diccionario de Términos/Alias Técnico
+- `group.py` -> MLS Group State Machine (`MLSGroup`, `EpochState`, `WelcomeInfo`, `GroupUpdate`).
+- `hpke.py` -> RFC 9180 Base Mode encryptor (AES-GCM, HKDF-SHA256, X25519).
+- `tree.py` -> LBBT Math & Data Structures (`RatchetTree`, `LeafNode`, `ParentNode`).
+- `hkdf.py` -> RFC 5869 Extract & Expand primitives.
+- E2E Transports -> `test_e2e_websockets.py`, `test_e2e_mqtt.py`, `test_e2e_webrtc.py`, `test_e2e_grpc.py`.
 
-### 2. Mapa de Arquitectura
-Descansando sobre PURE PYTHON (`cryptography` estándar):
-- **Milestone 1**: Primitivas asimétricas (`keys.py`), KDF (`hkdf.py`), y Envoltorios Secuenciales HPKE (`hpke.py`) basados en X25519/GCM.
-- **Milestone 2**: Estructuras matemáticas LBBT para abstracción de TreeKEM (`tree_math.py`, `tree.py`).
-- **Milestone 3**: Motor inmutable de Máquina de Estados de las Épocas (`epoch.py`) y la Derivación Criptográfica Lineal (`keyschedule.py`).
+## 2. Mapa de Arquitectura TÉCNICA
+- **pure-mls**: Implementación pura en Python del protocolo Messaging Layer Security (RFC 9420 / TreeKEM) agnóstica al transporte.
+- Depende únicamente de `cryptography` para las primitivas abstractas (Ed25519, X25519, AES256-GCM, SHA256).
+- Estado operando bajo inmutabilidad estricta (Dataclasses frozen y ruteo determinista LBBT).
 
-### 3. Registro de Decisiones
-| Prioridad | Decisión | Razón | Estado |
-|-----------|----------|-------|--------|
-| ALTA | Absoluta Pureza (Cero dependencias tipo Rust/C++) | Despliegue universal descentralizado en IOT o local-first sin errores de compilación | En vigor |
-| ALTA | Transporte Agnostico (Zero-Knowledge) | Red Pill no interacciona con los datos en tránsito limitando la exposición del Firebase al mínimo técnico | En vigor |
-| ALTA | Código AI-First | Maximización del "Context Window" sacrificando el confort visual del humano | En vigor |
+## 3. Registro de Decisiones Técnicas (Log)
+| Prioridad | Decisión Técnica | Razón (Why) | Estado |
+| :--- | :--- | :--- | :--- |
+| **P0** | **HPKE RFC-9180 Compliance** | Inyectados prefijos `HPKE-v1` y `SUITE_ID` en `extract/expand` para aislar el dominio de derivación según RFC. | Completado |
+| **P0** | **WelcomeInfo State Sync** | Serializar `joiner_index` elimina la desincronización y los hardcodes espurios en inicializaciones multipartitas. | Completado |
+| **P0** | **AES-GCM Nonce XOR Counter** | Aplicar XOR a `base_nonce` con un contador aleatorio salva fallas críticas de colisión de cifrado en llaves efímeras reutilizadas. | Completado |
+| **P0** | **Commit Signature Coverage** | Incluir el `tree.to_bytes()` en el digest de la firma Ed25519 autentica la integridad estructural impidiendo bifurcaciones sibilinas. | Completado |
+| **P0** | **WelcomeInfo HMAC Sealing** | Adoptar bytes prefijados, indexación explícita de `RatchetTree` y firmas MAC desbarata cualquier alteración a nivel byte (ej. Padding nulos). | Completado |
 
-### 4. Última Frontera (Checkpoint)
-- (1) Implementación autónoma e implacable de la Fase 1 a 3 del motor criptográfico `pure-mls`. Evaluadas todas sus aserciones paramétricas y de seguridad contra corruptelas en tránsito.
-- (2) Corrección del eslabón perdido indicado por Nova (`samantha.py` resuelto haciendo el merge definitivo a `main` desde la rama auditada `v6.0-prep-fsrs-dna`).
-- (3) Inyección nuclear directa del historial a Qdrant (`work_memories`) para cristalizar la proeza de desarrollo del enjambre.
-- **Blocker / Siguiente Paso**: Pausa forzada. La Fase 4 (API, Framing y Mocker MQTT) requiere deliberación de Arquitectos (David, Nova, Joan).
+## 4. Última Frontera (Checkpoint)
+- **Situación**: Batería de E2E Transports en verde absoluto (100% Coverage, 32 passed test). Linter enmudecido ("Sound of Silence").
+- **Acciones Recientes**: Pusheados commits 5238c90 y aa9dfe6 al master remote origin, ostentando validación 'Engineering Grade'.
+- **Blocker**: Ninguno. Listo para hibernación.
