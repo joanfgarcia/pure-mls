@@ -30,6 +30,43 @@ class WelcomeInfo:
 	confirmed_transcript_hash: bytes
 	joiner_index: int
 
+
+	def encrypt_application_message(self, plaintext: bytes) -> bytes:
+		"""
+		Encrypts an application message for this epoch using AES-GCM.
+		RFC 9420: Uses the epoch's encryption_secret.
+		"""
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+		
+		aesgcm = AESGCM(self.application_key)
+		nonce = os.urandom(12)  # 96-bit nonce
+		# We use the group_id + epoch_id as Associated Data (AD) for integrity
+		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
+		ciphertext = aesgcm.encrypt(nonce, plaintext, ad)
+		
+		# Payload: [nonce (12)] + [ciphertext (tag+data)]
+		return nonce + ciphertext
+
+	def decrypt_application_message(self, payload: bytes) -> bytes:
+		"""
+		Decrypts an application message for this epoch.
+		"""
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+		
+		if len(payload) < 28:
+			raise ValueError("Application message payload too short")
+			
+		nonce = payload[:12]
+		ciphertext = payload[12:]
+		
+		aesgcm = AESGCM(self.application_key)
+		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
+		
+		try:
+			return aesgcm.decrypt(nonce, ciphertext, ad)
+		except Exception as e:
+			raise ValueError(f"Application message decryption failed: {e}")
+
 	def to_bytes(self) -> bytes:
 		VERSION = b"\x03"
 		tree_bytes = self.tree.to_bytes()
@@ -242,6 +279,43 @@ class MLSGroup:
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
+
+
+	def encrypt_application_message(self, plaintext: bytes) -> bytes:
+		"""
+		Encrypts an application message for this epoch using AES-GCM.
+		RFC 9420: Uses the epoch's encryption_secret.
+		"""
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+		
+		aesgcm = AESGCM(self.application_key)
+		nonce = os.urandom(12)  # 96-bit nonce
+		# We use the group_id + epoch_id as Associated Data (AD) for integrity
+		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
+		ciphertext = aesgcm.encrypt(nonce, plaintext, ad)
+		
+		# Payload: [nonce (12)] + [ciphertext (tag+data)]
+		return nonce + ciphertext
+
+	def decrypt_application_message(self, payload: bytes) -> bytes:
+		"""
+		Decrypts an application message for this epoch.
+		"""
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+		
+		if len(payload) < 28:
+			raise ValueError("Application message payload too short")
+			
+		nonce = payload[:12]
+		ciphertext = payload[12:]
+		
+		aesgcm = AESGCM(self.application_key)
+		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
+		
+		try:
+			return aesgcm.decrypt(nonce, ciphertext, ad)
+		except Exception as e:
+			raise ValueError(f"Application message decryption failed: {e}")
 
 	def to_bytes(self) -> bytes:
 		"""Serializes the full state + my private keys (Danger Zone)."""
