@@ -20,6 +20,16 @@ class SignatureKey:
 		"""Returns the raw 32-byte public key."""
 		return self._public_key.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 
+	def private_bytes(self) -> bytes:
+		"""Returns the raw 32-byte private key (DANGER)."""
+		return self._private_key.private_bytes(
+			encoding=serialization.Encoding.Raw, format=serialization.PrivateFormat.Raw, encryption_algorithm=serialization.NoEncryption()
+		)
+
+	@classmethod
+	def from_private_bytes(cls, data: bytes) -> "SignatureKey":
+		return cls(ed25519.Ed25519PrivateKey.from_private_bytes(data))
+
 	@classmethod
 	def verify(cls, public_bytes: bytes, signature: bytes, message: bytes) -> bool:
 		"""Verifies a signature given raw public bytes."""
@@ -44,6 +54,16 @@ class KemKey:
 	def public_bytes(self) -> bytes:
 		"""Returns the raw 32-byte public key."""
 		return self._public_key.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+
+	def private_bytes(self) -> bytes:
+		"""Returns the raw 32-byte private key (DANGER)."""
+		return self._private_key.private_bytes(
+			encoding=serialization.Encoding.Raw, format=serialization.PrivateFormat.Raw, encryption_algorithm=serialization.NoEncryption()
+		)
+
+	@classmethod
+	def from_private_bytes(cls, data: bytes) -> "KemKey":
+		return cls(x25519.X25519PrivateKey.from_private_bytes(data))
 
 	def dh_exchange(self, peer_public_bytes: bytes) -> bytes:
 		"""

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-21
+
+### Added
+- **Storage Layer**: `AsyncEncryptedStore` using AES-256-GCM for secure, asynchronous persistence of MLS group states.
+- **Serialization**: Added `to_bytes` and `from_bytes` methods to `KeySchedule`, `EpochState`, and `MLSGroup` for robust binary snapshots.
+- **Key Management**: Enhanced `SignatureKey` and `KemKey` with `private_bytes()` and `from_private_bytes()` to allow secure key-pair persistence within the encrypted store.
+
+### Fixed
+- **[CRITICAL] STATE-05 Audit Compliance**: Ensured all private cryptographic materials (sig/kem keys) are stored within a unified, encrypted envelope via AES-GCM to prevent side-channel leaks.
+
 ## [0.1.0] - 2026-03-20
 
 ### Added

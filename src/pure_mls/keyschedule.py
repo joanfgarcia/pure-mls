@@ -61,3 +61,32 @@ class KeySchedule:
 			confirmation_key=cls._expand_with_label(auth_secret, b"confirm", b"", 32),
 			next_init_secret=cls._expand_with_label(epoch_secret, b"init", b"", 32),
 		)
+	def to_bytes(self) -> bytes:
+		"""Serializes the full 9-secret schedule (288 bytes)."""
+		return (
+			self.joiner_secret
+			+ self.epoch_secret
+			+ self.sender_data_secret
+			+ self.encryption_secret
+			+ self.exporter_secret
+			+ self.authentication_secret
+			+ self.external_secret
+			+ self.confirmation_key
+			+ self.next_init_secret
+		)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "KeySchedule":
+		if len(data) != 288:
+			raise ValueError(f"Invalid KeySchedule size: {len(data)} (expected 288)")
+		return cls(
+			joiner_secret=data[0:32],
+			epoch_secret=data[32:64],
+			sender_data_secret=data[64:96],
+			encryption_secret=data[96:128],
+			exporter_secret=data[128:160],
+			authentication_secret=data[160:192],
+			external_secret=data[192:224],
+			confirmation_key=data[224:256],
+			next_init_secret=data[256:288],
+		)

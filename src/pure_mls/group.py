@@ -246,3 +246,27 @@ class MLSGroup:
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
+	def to_bytes(self) -> bytes:
+		"""Serializes the full state + my private keys (Danger Zone)."""
+		state_bytes = self.state.to_bytes()
+		return (
+			self.my_index.to_bytes(4, "big")
+			+ self.my_sig_key.private_bytes()
+			+ self.my_kem_key.private_bytes()
+			+ len(state_bytes).to_bytes(4, "big")
+			+ state_bytes
+		)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "MLSGroup":
+		offset = 0
+		idx = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		sig_key = SignatureKey.from_private_bytes(data[offset : offset + 32])
+		offset += 32
+		kem_key = KemKey.from_private_bytes(data[offset : offset + 32])
+		offset += 32
+		s_len = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		state = EpochState.from_bytes(data[offset : offset + s_len])
+		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key)
