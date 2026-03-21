@@ -19,7 +19,7 @@ class HPKE:
 	KEM_SUITE_ID = b"KEM\x00\x20"  # DHKEM(X25519)
 
 	@staticmethod
-	def _kem_extract(salt: bytes, label: bytes, ikm: bytes) -> bytes:
+	def _kem_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + ikm
 		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
 
@@ -29,7 +29,7 @@ class HPKE:
 		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
 
 	@staticmethod
-	def _labeled_extract(salt: bytes, label: bytes, ikm: bytes) -> bytes:
+	def _labeled_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.SUITE_ID + label + ikm
 		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
 
@@ -58,13 +58,13 @@ class HPKE:
 		kem_context = enc + receiver_pub
 
 		# Phase 1: KEM (ExtractAndExpand with KEM_SUITE_ID)
-		prk_kem = HPKE._kem_extract(b"", b"shared_secret", dh)
+		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
@@ -86,13 +86,13 @@ class HPKE:
 		kem_context = enc + receiver_priv.public_bytes()
 
 		# Phase 1: KEM
-		prk_kem = HPKE._kem_extract(b"", b"shared_secret", dh)
+		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
