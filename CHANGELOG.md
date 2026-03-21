@@ -13,11 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.2] - 2026-03-22
 
 ### Fixed
-- **[CRITICAL] CRIT-03 Key Rotation Resilience**: Implemented structural fix by switching `encrypted_commit_secrets` from public-key-based to leaf-index-based lookup. This ensures that KEM key rotation does not break epoch advancement.
+- **[CRITICAL] CRIT-03 Key Rotation Resilience**: Implemented structural fix by switching `encrypted_commit_secrets` from public-key-based to leaf-index-based lookup.
 - **[MODERATE] MOD-01 HKDF Test Alignment**: Synchronized `test_hkdf.py` with the v0.2.1 `None` salt logic.
-- **[QUALITY] NEW-01 MQTT Test Alignment**: Fixed assertion mismatch in `test_e2e_mqtt.py` between Alice and Bob's payloads.
-- **[POLICY] QUAL-01 TODO Removal**:    - [x] NEW-02: Fix RFC 9180 interoperability in `hpke.py` [x]
-  to comply with the "Sound of Silence".
+- **[QUALITY] NEW-01 MQTT Test Alignment**: Fixed assertion mismatch in `test_e2e_mqtt.py`.
+- **[POLICY] QUAL-01 TODO Removal**: Removed the remaining `TODO (STATE-02)` from `group.py`.
 
 ## [0.2.1] - 2026-03-22
 
