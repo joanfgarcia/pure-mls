@@ -48,7 +48,7 @@ class AsyncEncryptedStore:
 
 		path = self._get_path(group.group_id)
 
-		def _write():
+		def _write() -> None:
 			with open(path, "wb") as f:
 				f.write(payload)
 
@@ -63,7 +63,7 @@ class AsyncEncryptedStore:
 		if not os.path.exists(path):
 			return None
 
-		def _read():
+		def _read() -> bytes:
 			with open(path, "rb") as f:
 				return f.read()
 
