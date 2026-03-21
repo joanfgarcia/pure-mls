@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-03-22
+
+### Fixed
+- **[CRITICAL] CRIT-01 HPKE Context Isolation**: Implemented mandatory `info` parameter in `HPKE.seal` and `HPKE.open` (RFC 9180 §4.1) to prevent cross-context key reuse.
+- **[CRITICAL] CRIT-02 HKDF Parameter Alignment**: Corrected transposed `salt` and `ikm` arguments in `KeySchedule.derive` and `MLSGroup.join` to strictly align with RFC 9420 §8.1.
+- **[CRITICAL] CRIT-03 Key Rotation Resilience**: Fixed an issue in `MLSGroup.process_update` that could lead to silent desynchronization during KEM key rotation. Improved error reporting for missing recipient keys.
+- **[MODERATE] MOD-01 HKDF Salt Handling**: Clarified `hkdf_extract` behavior to correctly distinguish between `None` and an empty `b""` salt.
+- **[QUALITY] Sound of Silence Enforcement**: Removed policy-violating comments, fixed trailing whitespace, and used `KeySchedule.SIZE` constants for robust binary parsing in `EpochState`.
+- **[STABILITY] E2E Test Hardening**: Added `asyncio.wait_for` guards and updated all test vectors to support the new HPKE context isolation API.
+
 ## [0.2.0] - 2026-03-21
 
 ### Added

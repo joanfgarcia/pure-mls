@@ -5,12 +5,12 @@ from typing import Any, Callable
 HashFunction = Callable[[], Any]
 
 
-def hkdf_extract(salt: bytes, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:
+def hkdf_extract(salt: bytes | None, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:
 	"""
 	HKDF-Extract (RFC 5869).
 	Extracts a pseudorandom key (PRK) from input keying material (IKM) and a salt.
 	"""
-	if not salt:
+	if salt is None:
 		salt = b"\x00" * hash_func().digest_size
 	return hmac.new(salt, ikm, hash_func).digest()
 

@@ -150,14 +150,14 @@ class MLSGroup:
 		new_tree.set_leaf(new_leaf_idx, LeafNode(key_package=key_package))
 
 		# 2. Re-randomize the root secret (Simulated Commit)
-		# In full MLS, the committer generates a new path secret and encrypts it to the copath.
 		commit_secret = os.urandom(32)
 
 		encrypted_secrets = {}
 		for i, node in enumerate(new_tree.nodes):
 			if isinstance(node, LeafNode) and i != self.my_index:
 				pk = node.public_key
-				enc, ct = HPKE.seal(pk, commit_secret)
+				# HPKE context isolation (CRIT-01)
+				enc, ct = HPKE.seal(pk, commit_secret, info=b"mls10-commit-secret")
 				encrypted_secrets[pk] = enc + ct
 
 		# 3. Advance the epoch
@@ -201,7 +201,7 @@ class MLSGroup:
 		"""
 		# The joiner derives the schedule using the joiner_secret and a blank commit_secret (zero vector).
 		# Mix confirmed_transcript_hash indirectly downstream through the KeySchedule expansion if needed.
-		epoch_secret = hkdf_extract(welcome.joiner_secret, b"\x00" * 32, hashlib.sha256)
+		epoch_secret = hkdf_extract(b"\x00" * 32, welcome.joiner_secret, hashlib.sha256)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, welcome.joiner_secret)
 
 		state = EpochState(group_id=welcome.group_id, epoch_id=welcome.epoch_id, tree=welcome.tree, key_schedule=ks)
@@ -234,18 +234,19 @@ class MLSGroup:
 			raise ValueError("Invalid signature format")
 
 		# 2. HPKE Decapsulate only authentic ciphertexts
-		# NOTE (STATE-04): Dict keyed by raw public key bytes. If a member rotates their KEM key,
-		# they would no longer be found in this mapping. Full MLS (RFC 9420) uses KeyPackageRef hashes.
 		my_kem_pub = self.my_kem_key.public_bytes()
 		if my_kem_pub not in update.encrypted_commit_secrets:
-			raise ValueError("Not invited to this epoch (missing encrypted commit_secret)")
+			# CRIT-03: Detailed error to distinguish between rotation delay and invitation exclusion
+			raise ValueError(f"Not invited to this epoch (KEM Public Key {my_kem_pub.hex()[:8]}... not found in update)")
 
 		enc_ct = update.encrypted_commit_secrets[my_kem_pub]
 		enc, ct = enc_ct[:32], enc_ct[32:]
-		commit_secret = HPKE.open(self.my_kem_key, enc, ct)
+		# HPKE context isolation (CRIT-01)
+		commit_secret = HPKE.open(self.my_kem_key, enc, ct, info=b"mls10-commit-secret")
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
+
 	def to_bytes(self) -> bytes:
 		"""Serializes the full state + my private keys (Danger Zone)."""
 		state_bytes = self.state.to_bytes()

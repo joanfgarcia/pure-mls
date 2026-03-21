@@ -60,7 +60,7 @@ async def test_mls_mqtt_e2e():
 						alice_next, welcome, update = alice_group.add_member(bob_kp)
 
 						# HPKE Seal the Welcome specifically for Bob
-						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), b"mqtt_welcome")
+						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), aad=b"mqtt_welcome", info=b"mls10-welcome")
 
 						# Broadcast the sealed welcome
 						pub_msg = {
@@ -115,7 +115,7 @@ async def test_mls_mqtt_e2e():
 						enc = base64.b64decode(msg["enc"])
 						ciphertext = base64.b64decode(msg["ciphertext"])
 
-						pt_welcome = HPKE.open(kem, enc, ciphertext, b"mqtt_welcome")
+						pt_welcome = HPKE.open(kem, enc, ciphertext, aad=b"mqtt_welcome", info=b"mls10-welcome")
 						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
 						# Reconstruct Sovereign Group in RAM

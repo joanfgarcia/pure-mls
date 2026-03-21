@@ -1,8 +1,11 @@
-import os
 import asyncio
+import os
 from typing import Optional
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from pure_mls.group import MLSGroup
+
 
 class AsyncEncryptedStore:
 	"""
@@ -19,7 +22,7 @@ class AsyncEncryptedStore:
 		self.vault_key = vault_key
 		if len(vault_key) != 32:
 			raise ValueError("Vault key must be 32 bytes (AES-256)")
-		
+
 		# Ensure storage directory exists
 		os.makedirs(storage_dir, exist_ok=True)
 
@@ -36,19 +39,19 @@ class AsyncEncryptedStore:
 		data = group.to_bytes()
 		nonce = os.urandom(12)
 		aesgcm = AESGCM(self.vault_key)
-		
+
 		# Encrypt (ciphertext includes the 16-byte authentication tag)
 		ciphertext = aesgcm.encrypt(nonce, data, group.group_id)
-		
+
 		# Final payload: [nonce (12)] + [ciphertext (tag+data)]
 		payload = nonce + ciphertext
-		
+
 		path = self._get_path(group.group_id)
-		
+
 		def _write():
 			with open(path, "wb") as f:
 				f.write(payload)
-		
+
 		await asyncio.to_thread(_write)
 
 	async def load_group(self, group_id: bytes) -> Optional[MLSGroup]:
@@ -65,13 +68,13 @@ class AsyncEncryptedStore:
 				return f.read()
 
 		payload = await asyncio.to_thread(_read)
-		
-		if len(payload) < 28: # Min: 12 (nonce) + 16 (tag)
+
+		if len(payload) < 28:
 			raise ValueError("Stored payload is too short")
-		
+
 		nonce = payload[:12]
 		ciphertext = payload[12:]
-		
+
 		aesgcm = AESGCM(self.vault_key)
 		try:
 			# Decrypt (passing group_id as associated data for integrity check)

@@ -46,6 +46,7 @@ class EpochState:
 		blank_commit = b"\x00" * 32
 
 		return cls(group_id=group_id, epoch_id=0, tree=creator_tree, key_schedule=KeySchedule.derive(genesis_init, blank_commit))
+
 	def to_bytes(self) -> bytes:
 		"""Full EpochState binary dump for persistence."""
 		tree_bytes = self.tree.to_bytes()
@@ -71,5 +72,5 @@ class EpochState:
 		offset += 4
 		tree = RatchetTree.from_bytes(data[offset : offset + t_len])
 		offset += t_len
-		ks = KeySchedule.from_bytes(data[offset : offset + 288])
+		ks = KeySchedule.from_bytes(data[offset : offset + KeySchedule.SIZE])
 		return cls(group_id=gid, epoch_id=eid, tree=tree, key_schedule=ks)

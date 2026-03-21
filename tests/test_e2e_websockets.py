@@ -65,7 +65,7 @@ async def test_mls_websockets_e2e():
 			alice_next, welcome, update = alice_group.add_member(bob_kp)
 
 			# E2E Network Send: Alice seals the Welcome using HPKE to Bob's init_key_pub
-			sealed_enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), aad=b"welcome_v1")
+			sealed_enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), aad=b"welcome_v1", info=b"mls10-welcome")
 
 			msg = {"type": "sealed_welcome", "enc": base64.b64encode(sealed_enc).decode(), "ciphertext": base64.b64encode(sealed_welcome).decode()}
 			await alice_ws.send(json.dumps(msg))
@@ -80,7 +80,7 @@ async def test_mls_websockets_e2e():
 			enc = base64.b64decode(recv_msg["enc"])
 			ciphertext = base64.b64decode(recv_msg["ciphertext"])
 
-			plaintext_welcome = HPKE.open(bob_kem, enc, ciphertext, aad=b"welcome_v1")
+			plaintext_welcome = HPKE.open(bob_kem, enc, ciphertext, aad=b"welcome_v1", info=b"mls10-welcome")
 			received_welcome = WelcomeInfo.from_bytes(plaintext_welcome)
 
 			# Bob Joins!

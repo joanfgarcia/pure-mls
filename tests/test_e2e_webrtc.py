@@ -62,7 +62,7 @@ async def test_mls_webrtc_e2e():
 						bob_kp = KeyPackage.from_bytes(base64.b64decode(msg["key_package"]))
 						alice_next, welcome, _ = alice_group.add_member(bob_kp)
 
-						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), b"webrtc_welcome")
+						enc, sealed_welcome = HPKE.seal(bob_kp.init_key_pub, welcome.to_bytes(), aad=b"webrtc_welcome", info=b"mls10-welcome")
 
 						pub_msg = {
 							"type": "sealed_welcome",
@@ -143,7 +143,7 @@ async def test_mls_webrtc_e2e():
 						enc = base64.b64decode(msg["enc"])
 						ciphertext = base64.b64decode(msg["ciphertext"])
 
-						pt_welcome = HPKE.open(kem, enc, ciphertext, b"webrtc_welcome")
+						pt_welcome = HPKE.open(kem, enc, ciphertext, aad=b"webrtc_welcome", info=b"mls10-welcome")
 						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
 
 						bob_group = MLSGroup.join(welcome_info, sig, kem)

@@ -21,6 +21,8 @@ class KeySchedule:
 	confirmation_key: bytes
 	next_init_secret: bytes
 
+	SIZE = 288
+
 	@staticmethod
 	def _expand_with_label(secret: bytes, label: bytes, context: bytes, length: int) -> bytes:
 		full_label = b"MLS 1.0 " + label
@@ -34,11 +36,11 @@ class KeySchedule:
 		Derives all epoch cryptographic materials from a previous init_secret
 		mixed with the newly injected commit_secret (TreeKEM root hash).
 		"""
-		# 1. Extract Joiner Secret (KDF.Extract(init_secret, commit_secret))
-		joiner_secret = hkdf_extract(init_secret, commit_secret, hashlib.sha256)
+		# 1. Extract Joiner Secret (KDF.Extract(commit_secret, init_secret))
+		joiner_secret = hkdf_extract(commit_secret, init_secret, hashlib.sha256)
 
-		# 2. Extract Epoch Secret (epoch_secret = KDF.Extract(joiner_secret, 0*HashLen))
-		epoch_secret = hkdf_extract(joiner_secret, b"\x00" * 32, hashlib.sha256)
+		# 2. Extract Epoch Secret (epoch_secret = KDF.Extract(0*HashLen, joiner_secret))
+		epoch_secret = hkdf_extract(b"\x00" * 32, joiner_secret, hashlib.sha256)
 
 		return cls._from_epoch_secret(epoch_secret, joiner_secret)
 
@@ -61,6 +63,7 @@ class KeySchedule:
 			confirmation_key=cls._expand_with_label(auth_secret, b"confirm", b"", 32),
 			next_init_secret=cls._expand_with_label(epoch_secret, b"init", b"", 32),
 		)
+
 	def to_bytes(self) -> bytes:
 		"""Serializes the full 9-secret schedule (288 bytes)."""
 		return (

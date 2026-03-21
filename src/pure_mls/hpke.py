@@ -47,7 +47,7 @@ class HPKE:
 		return bytes(a ^ b for a, b in zip(base_nonce, seq_bytes))
 
 	@staticmethod
-	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"", seq: int = 0) -> tuple[bytes, bytes]:
+	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"", seq: int = 0, info: bytes = b"") -> tuple[bytes, bytes]:
 		"""
 		Single-use encapsulation & encryption per RFC 9180 Base Mode.
 		seq=0 is correct for single-shot use. Multi-shot callers must increment seq per message.
@@ -64,7 +64,7 @@ class HPKE:
 		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
 		mode = b"\x00"
 		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(b"", b"info_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
@@ -77,7 +77,7 @@ class HPKE:
 		return enc, ciphertext
 
 	@staticmethod
-	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"", seq: int = 0) -> bytes:
+	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"", seq: int = 0, info: bytes = b"") -> bytes:
 		"""
 		Decapsulation & decryption per RFC 9180 Base Mode.
 		seq must match the value used during seal.
@@ -92,7 +92,7 @@ class HPKE:
 		# Phase 2: KeySchedule
 		mode = b"\x00"
 		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(b"", b"info_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
