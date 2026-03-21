@@ -84,7 +84,7 @@ class GroupUpdate:
 
 	epoch_id: int
 	tree: RatchetTree
-	encrypted_commit_secrets: dict[bytes, bytes]
+	encrypted_commit_secrets: dict[int, bytes]
 	committer_index: int
 	signature: bytes
 
@@ -158,12 +158,10 @@ class MLSGroup:
 				pk = node.public_key
 				# HPKE context isolation (CRIT-01)
 				enc, ct = HPKE.seal(pk, commit_secret, info=b"mls10-commit-secret")
-				encrypted_secrets[pk] = enc + ct
+				encrypted_secrets[i] = enc + ct
 
 		# 3. Advance the epoch
-		# TODO (STATE-02): Transcript Hash covers only epoch_id and commit_secret.
-		# Should cover full commit framing (sender, proposals, group_id) in a production setup.
-		ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_secrets.items()))
+		ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(encrypted_secrets.items()))
 		transcript_hash = hashlib.sha256(
 			(self.state.epoch_id + 1).to_bytes(8, "big") + new_tree.to_bytes() + self.state.key_schedule.confirmation_key + ciphertexts_bytes
 		).digest()
@@ -221,7 +219,7 @@ class MLSGroup:
 			raise ValueError("Invalid committer index")
 
 		# 1. Verify Signature FIRST to prevent padding oracles (STATE-04)
-		ciphertexts_bytes = b"".join(k + v for k, v in sorted(update.encrypted_commit_secrets.items()))
+		ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(update.encrypted_commit_secrets.items()))
 		try:
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
 			transcript_hash = hashlib.sha256(
@@ -234,12 +232,10 @@ class MLSGroup:
 			raise ValueError("Invalid signature format")
 
 		# 2. HPKE Decapsulate only authentic ciphertexts
-		my_kem_pub = self.my_kem_key.public_bytes()
-		if my_kem_pub not in update.encrypted_commit_secrets:
-			# CRIT-03: Detailed error to distinguish between rotation delay and invitation exclusion
-			raise ValueError(f"Not invited to this epoch (KEM Public Key {my_kem_pub.hex()[:8]}... not found in update)")
+		if self.my_index not in update.encrypted_commit_secrets:
+			raise ValueError(f"Not invited to this epoch (Leaf Index {self.my_index} not found in update)")
 
-		enc_ct = update.encrypted_commit_secrets[my_kem_pub]
+		enc_ct = update.encrypted_commit_secrets[self.my_index]
 		enc, ct = enc_ct[:32], enc_ct[32:]
 		# HPKE context isolation (CRIT-01)
 		commit_secret = HPKE.open(self.my_kem_key, enc, ct, info=b"mls10-commit-secret")

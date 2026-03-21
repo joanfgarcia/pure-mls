@@ -40,7 +40,7 @@ def test_hkdf_no_salt():
 	length = 42
 
 	# RFC 5869 specifies empty salt defaults to a string of HashLen zeros
-	prk = hkdf_extract(b"", ikm, hashlib.sha384)
+	prk = hkdf_extract(None, ikm, hashlib.sha384)
 	okm_pure = hkdf_expand(prk, info, length, hashlib.sha384)
 
 	hkdf = HKDF(

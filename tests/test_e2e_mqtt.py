@@ -83,7 +83,7 @@ async def test_mls_mqtt_e2e():
 						aes = AESGCM(alice_group.application_key)
 						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
 
-						assert plaintext == b"Hello Alice, IoT Sensor Node Bob is online and secure."
+						assert plaintext == b'{"temp": 24.5, "sensor": "bob_01"}'
 						test_done.set_result(True)
 						break
 		except Exception as e:

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-03-22
+
+### Fixed
+- **[CRITICAL] CRIT-03 Key Rotation Resilience**: Implemented structural fix by switching `encrypted_commit_secrets` from public-key-based to leaf-index-based lookup. This ensures that KEM key rotation does not break epoch advancement.
+- **[MODERATE] MOD-01 HKDF Test Alignment**: Synchronized `test_hkdf.py` with the v0.2.1 `None` salt logic.
+- **[QUALITY] NEW-01 MQTT Test Alignment**: Fixed assertion mismatch in `test_e2e_mqtt.py` between Alice and Bob's payloads.
+- **[POLICY] QUAL-01 TODO Removal**: Removed the remaining `TODO (STATE-02)` from `group.py` to comply with the "Sound of Silence".
+
 ## [0.2.1] - 2026-03-22
 
 ### Fixed

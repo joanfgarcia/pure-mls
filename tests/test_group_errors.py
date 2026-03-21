@@ -63,7 +63,7 @@ def test_process_update_errors():
 	epoch_id = 1
 	tree = group.state.tree
 	encrypted_commit_secrets = {}
-	ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_commit_secrets.items()))
+	ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(encrypted_commit_secrets.items()))
 	transcript_hash = hashlib.sha256(
 		epoch_id.to_bytes(8, "big") + tree.to_bytes() + group.state.key_schedule.confirmation_key + ciphertexts_bytes
 	).digest()
@@ -83,16 +83,21 @@ def test_process_update_errors():
 	_, _, real_update = group.add_member(kp)
 
 	# Alter my_index to simulate being the receiver but without encrypted commit secret
-	group.my_index = 1
+	group.my_index = 1  # Index 1 is a ParentNode, not in secrets
 	with pytest.raises(ValueError, match="Not invited to this epoch"):
-		group.process_update(real_update)  # Empty encrypted_commit_secrets
+		group.process_update(real_update)
+	group.my_index = 0
 
 	# Alter ciphertext to fail decryption but sign it properly to bypass STATE-04 defenses
 	bad_update = GroupUpdate(
-		epoch_id=1, tree=real_update.tree, encrypted_commit_secrets={kem.public_bytes(): b"bad_ciphertext" * 5}, committer_index=0, signature=b""
+		epoch_id=1,
+		tree=real_update.tree,
+		encrypted_commit_secrets={0: b"bad_ciphertext" * 5},
+		committer_index=0,
+		signature=b"",
 	)
 
-	ciphertexts_bytes = b"".join(k + v for k, v in sorted(bad_update.encrypted_commit_secrets.items()))
+	ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(bad_update.encrypted_commit_secrets.items()))
 	transcript_hash = hashlib.sha256(
 		bad_update.epoch_id.to_bytes(8, "big") + bad_update.tree.to_bytes() + group.state.key_schedule.confirmation_key + ciphertexts_bytes
 	).digest()
@@ -109,7 +114,7 @@ def test_process_update_errors():
 	update_parent = GroupUpdate(
 		epoch_id=1,
 		tree=tree_with_parent,
-		encrypted_commit_secrets={kem.public_bytes(): real_update.encrypted_commit_secrets[kem2.public_bytes()]},
+		encrypted_commit_secrets={0: real_update.encrypted_commit_secrets[2]},
 		committer_index=0,
 		signature=b"",
 	)
