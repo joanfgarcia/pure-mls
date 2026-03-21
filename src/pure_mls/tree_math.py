@@ -17,8 +17,8 @@ def root(n: int) -> int:
 	Returns the index of the root node of an LBBT with `n` leaves.
 	The root is always the largest power of 2 that is less than n, minus 1.
 	"""
-	if n == 0:
-		return 0
+	if n <= 0:
+		raise ValueError(f"Tree must have at least 1 leaf, got {n}")
 	w = 1
 	while w < n:
 		w *= 2

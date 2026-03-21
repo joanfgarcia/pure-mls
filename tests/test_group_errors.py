@@ -33,10 +33,17 @@ def test_welcome_info_from_bytes_errors():
 
 
 def test_add_member_parent_node():
+	from pure_mls.tree import RatchetTree
+
 	sig1 = SignatureKey()
 	kem1 = KemKey()
 	group = MLSGroup.create(b"g1", sig1, kem1)
-	group.state.tree.nodes.append(ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32))
+
+	# Since EpochState.tree is frozen (tuple), we must work with a fresh mutable tree.
+	# We pre-populate a standalone tree with a ParentNode to exercise the isinstance branch in add_member.
+	raw_tree = RatchetTree(num_leaves=2)
+	raw_tree.set_leaf(0, group.state.tree.get_node(0))
+	raw_tree.set_parent(1, ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32))
 
 	sig2 = SignatureKey()
 	kem2 = KemKey()

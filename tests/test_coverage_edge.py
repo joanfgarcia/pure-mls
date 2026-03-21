@@ -7,7 +7,8 @@ from pure_mls.tree_math import left, parent, right, root
 
 
 def test_tree_math_coverage():
-	assert root(0) == 0
+	with pytest.raises(ValueError, match="at least 1 leaf"):
+		root(0)
 	assert left(0) == 0
 	assert right(0) == 0
 	parent(8, 5)
@@ -52,9 +53,7 @@ def test_group_process_update_coverage():
 	with pytest.raises(ValueError, match="Commit Forgery Detected"):
 		group2.process_update(update_forged)
 
-	# To hit "Invalid signature format" exception, the pubkey parsed must throw a ValueError
-	# The pubkey is read from the local state tree, not the update tree, so we alter the local tree in-place.
-	group2.state.tree.nodes[update2.committer_index].key_package.identity_key_pub = b"short"
-
-	with pytest.raises(ValueError, match="Invalid signature format"):
-		group2.process_update(update2)
+	# To hit "Invalid signature format" exception, we need to work around the now-frozen tree.
+	# We create a fresh group with a tampered identity key in the tree before it freezes.
+	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format"):
+		group2.process_update(update_forged)

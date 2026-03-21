@@ -39,9 +39,18 @@ class HPKE:
 		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
 
 	@staticmethod
-	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
+	def _xor_nonce(base_nonce: bytes, seq: int) -> bytes:
+		"""RFC 9180 §5.2: nonce = base_nonce XOR I2OSP(seq, Nn).
+		For single-shot use (seq=0), nonce == base_nonce. For multi-shot callers,
+		incrementing seq prevents catastrophic nonce reuse under the same key."""
+		seq_bytes = seq.to_bytes(12, "big")
+		return bytes(a ^ b for a, b in zip(base_nonce, seq_bytes))
+
+	@staticmethod
+	def seal(receiver_pub: bytes, plaintext: bytes, aad: bytes = b"", seq: int = 0) -> tuple[bytes, bytes]:
 		"""
 		Single-use encapsulation & encryption per RFC 9180 Base Mode.
+		seq=0 is correct for single-shot use. Multi-shot callers must increment seq per message.
 		"""
 		ephemeral = KemKey()
 		enc = ephemeral.public_bytes()
@@ -61,15 +70,17 @@ class HPKE:
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
 		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
+		nonce = HPKE._xor_nonce(base_nonce, seq)
 
 		aesgcm = AESGCM(key)
-		ciphertext = aesgcm.encrypt(base_nonce, plaintext, aad)
+		ciphertext = aesgcm.encrypt(nonce, plaintext, aad)
 		return enc, ciphertext
 
 	@staticmethod
-	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"") -> bytes:
+	def open(receiver_priv: KemKey, enc: bytes, ciphertext: bytes, aad: bytes = b"", seq: int = 0) -> bytes:
 		"""
 		Decapsulation & decryption per RFC 9180 Base Mode.
+		seq must match the value used during seal.
 		"""
 		dh = receiver_priv.dh_exchange(enc)
 		kem_context = enc + receiver_priv.public_bytes()
@@ -87,6 +98,7 @@ class HPKE:
 		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
 		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
+		nonce = HPKE._xor_nonce(base_nonce, seq)
 
 		aesgcm = AESGCM(key)
-		return aesgcm.decrypt(base_nonce, ciphertext, aad)
+		return aesgcm.decrypt(nonce, ciphertext, aad)
