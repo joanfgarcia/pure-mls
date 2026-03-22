@@ -193,6 +193,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_state_findings.py` and `tests/test_group_errors.py` updated to use 32-byte
   `KeyPackageRef` keys and the RFC-correct 5-byte `Sender` struct in mock `GroupUpdate` objects.
 
+## [1.5.0] - 2026-03-22 (Audit Remediation)
+
+**Auditor:** Claude Sonnet 4.6, Anthropic | **Previous verdict:** BETA-READY, conditioned on P0/P1.
+
+### Fixed
+- **[CRITICAL] SEC-CRIT-01** `UpdatePath.from_bytes` hardcoded 128-byte KeyPackage offset: replaced with dynamic `tls_opaque` uint16-prefixed deserialization. Peer KeyPackages of any size (64-byte legacy or 128-byte signed) now deserialize correctly.
+- **[SECURITY] SEC-HIGH-01** `SignatureKey.verify` swallowed all exceptions: catch narrowed to `cryptography.exceptions.InvalidSignature` — other errors now propagate naturally.
+- **[SECURITY] SEC-HIGH-02** `process_update` bare `except Exception` masked upstream errors: catch narrowed to `(InvalidSignature, ValueError, TypeError)`.
+- **[COMPAT] SEC-MED-01** `GroupContext.from_bytes` silently ignored `extensions` field: correctly reads and discards the uint32-prefixed extensions vector per RFC 9420 §8.1.
+- **[SECURITY] SEC-MED-02** `decrypt_application_message` bare catch masked AES-GCM origin: catch narrowed to `cryptography.exceptions.InvalidTag`.
+
+### Added
+- **[QA] RFC 9420 Test Vectors**: `tests/test_rfc9420_vectors.py` — 5 canonical tests validating HKDF-Extract zero-vector, ExpandWithLabel idempotency, domain separation, pure-mls HKDF parity, and KeyPackageRef 32-byte length. Satisfies CONTRIBUTING.md mandatory requirement.
+
+### Changed
+- **[API] SEC-LOW-01** `WelcomeInfo` alias replaced with `warnings.warn` deprecation factory — all E2E transport tests migrated to use `Welcome` directly. Eliminates the `# type: ignore` suppression.
+
 ## [1.4.0] - 2026-03-22 (The Red Pill Edition)
 
 ### Added
