@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-22
+
+### Added
+
+- **[RFC 9420 §8.1] `GroupContext` struct** (`src/pure_mls/group.py`): TLS-encoded `GroupContext`
+  with `version`, `cipher_suite`, `group_id`, `epoch`, `tree_hash`, `confirmed_transcript_hash`,
+  and `extensions`. Used as HPKE `info` parameter for all commit secret sealing/opening operations,
+  replacing the old `b"mls10-commit-secret"` string. Includes `to_bytes()/from_bytes()`.
+- **[RFC 9420 §12.1.2] `GroupSecrets` + `EncryptedGroupSecrets` + `Welcome`** RFC message types:
+  - `GroupSecrets`: HPKE-sealed joiner_secret + leaf_index per new member.
+  - `EncryptedGroupSecrets`: serialized HPKE-sealed `GroupSecrets` keyed by `KeyPackageRef`.
+  - `Welcome`: full RFC §12.1.2 Welcome with `cipher_suite`, `encrypted_group_secrets[]`,
+    `encrypted_group_info`. Replaces custom `WelcomeInfo` (now alias for backward compat).
+  - All three have `to_bytes()/from_bytes()` with TLS wire format.
+- **[RFC 9420 §12.1.1] `GroupUpdate.to_bytes()/from_bytes()`**: TLS-encoded Commit wire format
+  (`epoch_id`, `tree<V>`, `secrets_count`, `[kp_ref, enc_ct]*`, `committer_index`, `signature`).
+- **[RFC 9420 §6] `MLSMessage` + `WireFormat`**: top-level framing envelope
+  (`version=0x0001`, `wire_format`, `body<V>`). Factory methods `wrap_welcome()`, `wrap_commit()`,
+  and `unwrap_welcome()`, `unwrap_commit()`. Enables zero-knowledge transport over Firebase/MQTT.
+- **`src/pure_mls/tls.py`**: new module with TLS presentation language primitives
+  (`tls_u8/u16/u32/u64`, `tls_opaque`, `tls_opaque32`, `read_u8/u16/u32/u64`, `read_opaque`,
+  `read_opaque32`, `read_fixed`).
+- **`tests/test_wire_format.py`**: 12 new tests covering all RFC wire format types, including
+  a full end-to-end simulation of the Firebase zero-knowledge group join flow.
+
+### Changed
+
+- `add_member()` now produces an RFC 9420 `Welcome` (was `WelcomeInfo`). `WelcomeInfo` is kept
+  as an alias for backward compatibility.
+- `MLSGroup.join()` now decrypts `GroupSecrets` and `GroupInfo` via HPKE using
+  `GroupContext.to_bytes()` as the info parameter.
+- `_transcript_hash()` now builds `GroupContext.to_bytes()` as the primary prefix for the
+  SHA-256 hash, making it RFC-compliant.
+- HPKE info for commit secret sealing: was `b"mls10-commit-secret"`, now `GroupContext.to_bytes()`
+  (binds each HPKE operation to the specific group + epoch cryptographically).
+- `__init__.py` exports extended with: `Welcome`, `WireFormat`, `MLSMessage`, `GroupContext`,
+  `GroupSecrets`, `EncryptedGroupSecrets`.
+
+### Notes
+
+- Full interoperability with external MLS clients (e.g. OpenMLS) requires completing the
+  `AuthenticatedContent` / `FramedContent` wrapping (deferred to v1.1). The current `GroupUpdate`
+  TLS format is a compact subset sufficient for pure-mls ↔ pure-mls exchange.
+- `GroupInfo` HPKE sealing currently uses the joiner-facing `init_key_pub` directly. Full RFC
+  compliance uses a derived `welcome_key` from `joiner_secret` (deferred to v1.1).
+
 ## [0.4.0] - 2026-03-22
 
 ### Changed (Breaking)

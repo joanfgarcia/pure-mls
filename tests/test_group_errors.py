@@ -7,25 +7,26 @@ from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
 
 
 def test_welcome_info_from_bytes_errors():
-	# Test node type ParentNode and Invalid type
-	# Construct a valid WelcomeInfo first
+	"""Test Welcome RFC to_bytes()/from_bytes() round-trip and tree error handling."""
 	sig = SignatureKey()
 	kem = KemKey()
 	kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
 	group = MLSGroup.create(b"cov-group", sig, kem)
-	group2, welcome, update = group.add_member(kp)
+	_group2, welcome, _update = group.add_member(kp)
 
-	# Manually corrupt the tree_bytes node type to 0x02 to trigger ParentNode logic
-	tree = RatchetTree(1)
-	tree.nodes = [ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32)]
-	from pure_mls.group import WelcomeInfo
+	# Welcome RFC round-trip
+	from pure_mls.group import Welcome, WelcomeInfo
 
-	w_parent = WelcomeInfo(b"g", 1, tree, b"J" * 32, b"H" * 32, 2)
-	w_parent_bytes = w_parent.to_bytes()
-	parsed = WelcomeInfo.from_bytes(w_parent_bytes)
-	assert isinstance(parsed.tree.nodes[0], ParentNode)
+	welcome_bytes = welcome.to_bytes()
+	parsed = Welcome.from_bytes(welcome_bytes)
+	assert parsed.cipher_suite == welcome.cipher_suite
+	assert len(parsed.encrypted_group_secrets) == 1
+	assert len(parsed.encrypted_group_info) > 0
 
-	# Trigger ValueError for invalid node type
+	# WelcomeInfo is now an alias for Welcome
+	assert WelcomeInfo is Welcome
+
+	# Tree error: invalid node type in raw bytes triggers ValueError
 	bad_tree_bytes = b"\x00\x00\x00\x00\x03" + b"X" * 64
 	with pytest.raises(ValueError, match="Invalid node type"):
 		RatchetTree.from_bytes(bad_tree_bytes)
