@@ -6,7 +6,7 @@ import pytest
 import websockets
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.group import MLSGroup, WelcomeInfo
+from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -81,7 +81,7 @@ async def test_mls_websockets_e2e():
 			ciphertext = base64.b64decode(recv_msg["ciphertext"])
 
 			plaintext_welcome = HPKE.open(bob_kem, enc, ciphertext, aad=b"welcome_v1", info=b"mls10-welcome")
-			received_welcome = WelcomeInfo.from_bytes(plaintext_welcome)
+			received_welcome = Welcome.from_bytes(plaintext_welcome)
 
 			# Bob Joins!
 			bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)

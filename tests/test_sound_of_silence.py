@@ -11,6 +11,7 @@ TARGET_DIRS = ["src", "scripts", "docs"]
 EXTENSIONS = [".py", ".sh", ".md"]
 ROOT_FILES = ["README.md", "CHANGELOG.md", "CONVENTIONS.md"]
 
+
 def test_sound_of_silence_compliance():
 	"""Ensures the codebase adheres to the Sound of Silence protocol."""
 	violations = []

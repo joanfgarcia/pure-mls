@@ -10,7 +10,6 @@ from pure_mls.group import (
 	MLSMessage,
 	PublicMessage,
 	Welcome,
-	WelcomeInfo,
 	WireFormat,
 )
 from pure_mls.tree import KeyPackage, LeafNode, RatchetTree
@@ -24,7 +23,6 @@ __all__ = [
 	"LeafNode",
 	# RFC 9420 message types
 	"Welcome",
-	"WelcomeInfo",  # alias for Welcome (backward compat)
 	"GroupUpdate",
 	"MLSMessage",
 	"WireFormat",

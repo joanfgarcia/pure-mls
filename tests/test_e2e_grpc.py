@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "protos"))
 import mls_pb2
 import mls_pb2_grpc
 
-from pure_mls.group import MLSGroup, WelcomeInfo
+from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -98,7 +98,7 @@ async def test_mls_grpc_e2e():
 
 		# Bob unseals it over the gRPC wire
 		pt_welcome = HPKE.open(bob_kem, first_welcome.enc, first_welcome.ciphertext, aad=b"grpc_welcome", info=b"mls10-welcome")
-		received_welcome = WelcomeInfo.from_bytes(pt_welcome)
+		received_welcome = Welcome.from_bytes(pt_welcome)
 
 		# Bob mathematically joins the Sovereign Group!
 		bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)

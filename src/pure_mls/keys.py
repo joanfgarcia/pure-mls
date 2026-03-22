@@ -1,3 +1,4 @@
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
@@ -37,7 +38,8 @@ class SignatureKey:
 		try:
 			pub.verify(signature, message)
 			return True
-		except Exception:
+		except InvalidSignature:
+			# SEC-HIGH-01: only swallow genuine signature failures, let other errors propagate
 			return False
 
 

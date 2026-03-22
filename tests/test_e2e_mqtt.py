@@ -11,7 +11,7 @@ import pytest_asyncio
 from amqtt.broker import Broker
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.group import MLSGroup, WelcomeInfo
+from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
@@ -141,7 +141,7 @@ async def test_mls_mqtt_e2e(mqtt_broker):
 						ciphertext = base64.b64decode(msg["ciphertext"])
 
 						pt_welcome = HPKE.open(kem, enc, ciphertext, aad=b"mqtt_welcome", info=b"mls10-welcome")
-						welcome_info = WelcomeInfo.from_bytes(pt_welcome)
+						welcome_info = Welcome.from_bytes(pt_welcome)
 
 						# Reconstruct Sovereign Group in RAM
 						bob_group = MLSGroup.join(welcome_info, sig, kem)

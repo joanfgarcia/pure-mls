@@ -1,8 +1,9 @@
 import hashlib
 import os
+import warnings as _warnings
 from dataclasses import dataclass
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.epoch import EpochState
@@ -74,7 +75,9 @@ class GroupContext:
 		epoch, offset = read_u64(data, offset)
 		tree_hash, offset = read_opaque(data, offset)
 		confirmed_transcript_hash, offset = read_opaque(data, offset)
-		# extensions (uint32 length, ignored for now)
+		# SEC-MED-01: read and discard extensions vector per RFC 9420 §8.1 TLS encoding
+		ext_len, offset = read_u32(data, offset)
+		offset += ext_len
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
@@ -180,9 +183,10 @@ class Welcome:
 		)
 
 
-# WelcomeInfo is kept as a legacy alias for backward compatibility.
-# It will be removed in a future version.
-WelcomeInfo = Welcome  # type: ignore[assignment,misc]
+def WelcomeInfo(*args, **kwargs) -> "Welcome":
+	"""Deprecated factory. Use Welcome directly."""
+	_warnings.warn("WelcomeInfo is deprecated; use Welcome directly.", DeprecationWarning, stacklevel=2)
+	return Welcome(*args, **kwargs)
 
 
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
@@ -551,13 +555,16 @@ class UpdatePath:
 	nodes: list[UpdatePathNode]
 
 	def to_bytes(self) -> bytes:
+		kp_bytes = self.leaf_key_package.to_bytes()
 		nodes_bytes = b"".join(n.to_bytes() for n in self.nodes)
-		return self.leaf_key_package.to_bytes() + tls_u32(len(self.nodes)) + nodes_bytes
+		# SEC-CRIT-01: length-prefix the KeyPackage (uint16 via tls_opaque) so from_bytes can read it dynamically
+		return tls_opaque(kp_bytes) + tls_u32(len(self.nodes)) + nodes_bytes
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdatePath", int]:
-		kp = KeyPackage.from_bytes(data[offset : offset + 128])
-		offset += 128
+		# SEC-CRIT-01: read KeyPackage size dynamically using tls_opaque uint16 length prefix, not hardcoded 128 bytes
+		kp_bytes, offset = read_opaque(data, offset)
+		kp = KeyPackage.from_bytes(kp_bytes)
 		n, offset = read_u32(data, offset)
 		nodes = []
 		for _ in range(n):
@@ -1051,8 +1058,9 @@ class MLSGroup:
 			public_key.verify(update.signature, tbs)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
-		except Exception:
-			raise ValueError("Invalid signature format")
+		except (ValueError, TypeError) as exc:
+			# SEC-HIGH-02: only catch malformed data errors, not all exceptions
+			raise ValueError(f"Malformed update signature: {exc}") from exc
 
 		# 2. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
 		my_kp = self.state.tree.get_node(self.my_index)
@@ -1128,8 +1136,9 @@ class MLSGroup:
 
 		try:
 			return aesgcm.decrypt(nonce, ciphertext, ad)
-		except Exception as e:
-			raise ValueError(f"Application message decryption failed: {e}")
+		except InvalidTag:
+			# SEC-MED-02: narrow to AESGCM authentication failure only
+			raise ValueError("Application message decryption failed: authentication tag mismatch")
 
 	def to_bytes(self) -> bytes:
 		"""Serializes the full state + my private keys (Danger Zone)."""

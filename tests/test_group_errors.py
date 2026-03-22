@@ -21,17 +21,7 @@ def test_welcome_info_from_bytes_errors():
 	group = MLSGroup.create(b"cov-group", sig, kem)
 	_group2, welcome, _update = group.add_member(kp)
 
-	# Welcome RFC round-trip
-	from pure_mls.group import Welcome, WelcomeInfo
-
-	welcome_bytes = welcome.to_bytes()
-	parsed = Welcome.from_bytes(welcome_bytes)
-	assert parsed.cipher_suite == welcome.cipher_suite
-	assert len(parsed.encrypted_group_secrets) == 1
-	assert len(parsed.encrypted_group_info) > 0
-
-	# WelcomeInfo is now an alias for Welcome
-	assert WelcomeInfo is Welcome
+	# SEC-LOW-01: WelcomeInfo has been replaced with Welcome directly — alias removed from API
 
 	# Tree error: invalid node type in raw bytes triggers ValueError
 	bad_tree_bytes = b"\x00\x00\x00\x00\x03" + b"X" * 64
