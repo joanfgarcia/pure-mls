@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import uuid
 
 import aiomqtt
 import pytest
+import pytest_asyncio
+from amqtt.broker import Broker
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup, WelcomeInfo
@@ -14,11 +17,33 @@ from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
 MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
+MQTT_PORT = 21883  # ephemeral port to avoid conflicts
+
+_BROKER_CONFIG = {
+	"listeners": {
+		"default": {
+			"type": "tcp",
+			"bind": f"0.0.0.0:{MQTT_PORT}",
+		},
+	},
+	"sys_interval": 0,
+	"auth": {"allow-anonymous": True},
+	"topic-check": {"enabled": False},
+}
+
+
+@pytest_asyncio.fixture
+async def mqtt_broker():
+	"""Start an embedded amqtt broker for this test."""
+	logging.getLogger("amqtt").setLevel(logging.WARNING)
+	broker = Broker(_BROKER_CONFIG)
+	await broker.start()
+	yield broker
+	await broker.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_mls_mqtt_e2e():
+async def test_mls_mqtt_e2e(mqtt_broker):
 	"""
 	End-to-End IoT test using a public MQTT Broker.
 	Alice and Bob establish a TreeKEM encrypted session over Public Pub/Sub.

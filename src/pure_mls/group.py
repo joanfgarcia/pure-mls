@@ -7,7 +7,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import hkdf_extract
+from pure_mls.hkdf import hkdf_expand, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
@@ -122,8 +122,14 @@ _EXTENSIONS_EMPTY: bytes = b"\x00\x00\x00\x00"
 
 
 def _make_kp_ref(kp: KeyPackage) -> bytes:
-	"""STATE-04: KeyPackageRef = SHA-256(kp.to_bytes())[:16] per RFC 9420 §10.2."""
-	return hashlib.sha256(kp.to_bytes()).digest()[:16]
+	"""RFC 9420 §10.2: MakeKeyPackageRef(kp) = RefHash("MLS 1.0 KeyPackageRef", kp).
+
+	RefHash(label, value) = HKDF-Expand(HKDF-Extract(b"", value), ASCII(label), Nh=32).
+	"""
+	import hashlib
+
+	prk = hkdf_extract(b"", kp.to_bytes(), hashlib.sha256)
+	return hkdf_expand(prk, b"MLS 1.0 KeyPackageRef", 32, hashlib.sha256)
 
 
 def _transcript_hash(
@@ -149,6 +155,8 @@ def _transcript_hash(
 		+ confirmation_key
 		+ ciphertexts_bytes
 		+ _EXTENSIONS_EMPTY
+		# RFC 9420 §8.2 Sender struct: SenderType(uint8=0x01 member) + leaf_index(uint32)
+		+ b"\x01"
 		+ sender_index.to_bytes(4, "big")
 	).digest()
 

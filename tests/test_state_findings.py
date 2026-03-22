@@ -146,7 +146,7 @@ def test_kp_ref_is_deterministic():
 	ref1 = _make_kp_ref(kp)
 	ref2 = _make_kp_ref(kp)
 	assert ref1 == ref2
-	assert len(ref1) == 16
+	assert len(ref1) == 32  # Nh=32 for SHA-256 per RFC 9420 §10.2
 
 
 def test_kp_ref_differs_for_different_keys():
@@ -165,7 +165,7 @@ def test_commit_secrets_keyed_by_kp_ref():
 	# All keys must be bytes (KPRef), not int
 	for k in update.encrypted_commit_secrets:
 		assert isinstance(k, bytes), f"Expected bytes key (KPRef), got {type(k)}"
-		assert len(k) == 16, f"Expected 16-byte KPRef, got {len(k)}"
+		assert len(k) == 32, f"Expected 32-byte KPRef (RFC 9420 §10.2 Nh), got {len(k)}"
 
 
 def test_process_update_uses_kp_ref_not_index():
@@ -209,9 +209,9 @@ def test_process_update_uses_kp_ref_not_index():
 	kp_ref_c = _make_kp_ref(my_leaf_c.key_package)
 	assert kp_ref_c in update_bc.encrypted_commit_secrets, "C's KPRef not found in commit — STATE-04 lookup would fail"
 
-	# All keys are bytes (KPRef), not int
+	# All keys are bytes (KPRef), RFC 9420 §10.2 Nh=32
 	for k in update_bc.encrypted_commit_secrets:
-		assert isinstance(k, bytes) and len(k) == 16
+		assert isinstance(k, bytes) and len(k) == 32
 
 	# A (at epoch 1 after update_ab) processes update_bc to reach epoch 2
 	group_a3 = group_a2.process_update(update_bc)

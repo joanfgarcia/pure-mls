@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-22
+
+### Changed (Breaking)
+
+- **[RFC 9420 §10.2] STATE-04 — `KeyPackageRef` now RFC-compliant**: `_make_kp_ref()` uses
+  `RefHash("MLS 1.0 KeyPackageRef", kp)` = `HKDF-Expand(HKDF-Extract(b"", kp), label, Nh=32)`
+  per RFC 9420 §10.2. Output is now **32 bytes** (was 16-byte raw SHA-256 truncation).
+  `GroupUpdate.encrypted_commit_secrets` keys change from `bytes[16]` to `bytes[32]`.
+- **[RFC 9420 §8.2] STATE-02 — `Sender` struct in transcript hash**: `_transcript_hash()` now
+  includes `SenderType(uint8=0x01 member) + leaf_index(uint32)` = 5 bytes, instead of only the
+  4-byte leaf index. This matches RFC 9420 §8.2 `Sender` struct encoding exactly.
+
+### Added
+
+- **Embedded MQTT broker (`amqtt`)**: `tests/test_e2e_mqtt.py` now uses an embedded `amqtt`
+  broker via `pytest_asyncio.fixture`, eliminating the dependency on an external MQTT server.
+  **44/44 tests green** (full suite, no external services required).
+- `amqtt>=0.11.0` added to `[dependency-groups.dev]` in `pyproject.toml`.
+
+### Fixed
+
+- `tests/test_state_findings.py` and `tests/test_group_errors.py` updated to use 32-byte
+  `KeyPackageRef` keys and the RFC-correct 5-byte `Sender` struct in mock `GroupUpdate` objects.
+
 ## [0.3.0] - 2026-03-22
 
 ### Added
