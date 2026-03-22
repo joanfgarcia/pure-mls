@@ -140,7 +140,8 @@ class RatchetTree:
 			if node is None:
 				tree_serialized.extend(b"\x00")
 			elif isinstance(node, LeafNode):
-				tree_serialized.extend(b"\x01" + node.key_package.to_bytes())
+				kp_bytes = node.key_package.to_bytes()
+				tree_serialized.extend(b"\x01" + len(kp_bytes).to_bytes(2, "big") + kp_bytes)
 			elif isinstance(node, ParentNode):
 				tree_serialized.extend(b"\x02" + node.public_key + getattr(node, "parent_hash", b"\x00" * 32))
 		return bytes(tree_serialized)
@@ -163,9 +164,12 @@ class RatchetTree:
 			if node_type == b"\x00":
 				nodes.append(None)
 			elif node_type == b"\x01":
-				kp = KeyPackage.from_bytes(data[offset : offset + 64])
+				# Length-prefixed KeyPackage (2-byte big-endian length header)
+				kp_size = int.from_bytes(data[offset : offset + 2], "big")
+				offset += 2
+				kp = KeyPackage.from_bytes(data[offset : offset + kp_size])
 				nodes.append(LeafNode(key_package=kp))
-				offset += 64
+				offset += kp_size
 			elif node_type == b"\x02":
 				pk = data[offset : offset + 32]
 				ph = data[offset + 32 : offset + 64]
@@ -181,86 +185,109 @@ class RatchetTree:
 		return tree
 
 	def level(self, index: int) -> int:
-		"""Level l of node x: number of trailing 1-bits in x. Root = floor(log2(n-1))."""
-		if index == 0:
+		"""RFC 9420 Appendix C: level(x) = number of trailing 1-bits of x.
+
+		Leaves (even nodes) have level 0. Root has the highest level.
+		"""
+		if index & 0x01 == 0:
 			return 0
-		n = index
-		level = 0
-		while n & 1:
-			level += 1
-			n >>= 1
-		return level
-
-	def parent_index(self, index: int) -> int:
-		"""RFC 9420 §7.1: parent(x) = (x ^ (0x01 << level(x))) | (0x01 << level(x))."""
-		lvl = self.level(index)
-		return (index >> (lvl + 1) << (lvl + 1)) | (0x01 << lvl) | (0x01 << (lvl + 1)) - (0x01 << lvl)
-
-	def _parent(self, x: int) -> int:
-		"""Simple parent: (x | (x+1)) for the LBBT layout."""
-		# RFC 7.1 parent formula: p = (x ^ (e+1)) | e where e = lowest bit of x or its complement
-		lvl = self.level(x)
-		b = 1 << (lvl + 1)
-		return (x | b) & ~(b - 1) | (b >> 1) - 1
-
-	def _sibling(self, x: int) -> int:
-		"""RFC 9420 §7.1: sibling(x) — the other child of parent(x)."""
-		p = self._parent(x)
-		lvl = self.level(p)
-		# left child of p is p - 2^(lvl-1), right child is p + 2^(lvl-1)
-		left = p - (1 << (lvl - 1))
-		right = p + (1 << (lvl - 1))
-		return right if x <= p else left
+		k = 0
+		while (index >> k) & 0x01 == 1:
+			k += 1
+		return k
 
 	def _root(self) -> int:
-		"""RFC 9420 §7.1: root index for n leaves."""
-		# root is at width - 1 where width = 2*n - 1 rounded up to power of 2, minus 1
-		n = len(self.nodes)
-		# Simple: root is the last odd index (highest common ancestor)
-		w = 1
-		while w < n:
-			w <<= 1
-		return w - 1
+		"""RFC 9420 Appendix C.2: root index for a given tree."""
+		n = self.num_leaves
+		if n <= 1:
+			return 0
+		w = 2 * n - 1
+		k = w.bit_length()
+		return (1 << (k - 1)) - 1
+
+	def _parent(self, x: int) -> int:
+		"""RFC 9420 Appendix C.2: parent(x, W)."""
+		n = self.num_leaves
+		if n <= 1:
+			return 0
+		w = 2 * n - 1
+		r = self._root()
+		if x == r:
+			return x
+
+		k = self.level(x)
+		b = (x >> (k + 1)) & 0x01
+		p = x ^ ((0x01 << k) | (b << (k + 1)))
+
+		# RFC 9420 bounds check logic directly in loop
+		while p >= w:
+			pk = self.level(p)
+			pb = (p >> (pk + 1)) & 0x01
+			p = p ^ ((0x01 << pk) | (pb << (pk + 1)))
+
+		return p
+
+	def _sibling(self, x: int) -> int:
+		"""RFC 9420 Appendix C.2: sibling(x, W)."""
+		n = self.num_leaves
+		if n <= 1:
+			return x
+		p = self._parent(x)
+		k = self.level(p)
+		if x < p:
+			# x is left child, return right child
+			return p + (1 << (k - 1))
+		else:
+			# x is right child, return left child
+			return p - (1 << (k - 1))
 
 	def direct_path(self, leaf_index: int) -> list[int]:
 		"""RFC 9420 §7.1: direct path from leaf_index to root (exclusive of leaf).
 
 		Returns list of ancestor node indices from parent to root.
 		"""
-		x = leaf_index
 		root = self._root()
+		x = leaf_index
+		n = len(self.nodes)
 		path = []
-		while x != root:
-			x = self._parent(x)
-			if x < len(self.nodes):
-				path.append(x)
-			if x >= root:
+		if x == root:
+			return path
+		while True:
+			p = self._parent(x)
+			if p >= n:
 				break
+			path.append(p)
+			if p == root:
+				break
+			x = p
 		return path
 
 	def copath(self, leaf_index: int) -> list[int]:
-		"""RFC 9420 §7.1: copath = siblings of the direct_path nodes.
+		"""RFC 9420 §7.1.3: copath = siblings of the direct_path nodes.
 
 		Returns list of sibling indices for each node in the direct path.
+		If a sibling is out of bounds, it is represented as -1 to maintain the
+		same array length as direct_path (RFC 9420 requirement).
 		"""
+		dpath = self.direct_path(leaf_index)
+		n = len(self.nodes)
+		copath = []
 		x = leaf_index
-		root = self._root()
-		siblings = []
-		while x != root:
+		for p in dpath:
 			sib = self._sibling(x)
-			if sib < len(self.nodes):
-				siblings.append(sib)
-			x = self._parent(x)
-			if x >= root:
-				break
-		return siblings
+			if sib < n:
+				copath.append(sib)
+			else:
+				copath.append(-1)
+			x = p
+		return copath
 
 	def resolution(self, index: int) -> list[int]:
 		"""RFC 9420 §7.2: resolution(x) = non-blank subtree leaves.
 
 		Returns list of leaf indices that can receive path secrets at node x.
 		"""
-		if index >= len(self.nodes):
+		if index < 0 or index >= len(self.nodes):
 			return []
 		node = self.nodes[index]
 		if index % 2 == 0:  # leaf

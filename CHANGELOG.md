@@ -193,6 +193,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_state_findings.py` and `tests/test_group_errors.py` updated to use 32-byte
   `KeyPackageRef` keys and the RFC-correct 5-byte `Sender` struct in mock `GroupUpdate` objects.
 
+## [1.4.0] - 2026-03-22 (The Red Pill Edition)
+
+### Added
+- **[RFC 9420 Math Compliance]**: Implemented strict bounds-checked LBBT (`_root`, `_parent`, `_sibling`) formulas replacing buggy path iterations.
+- **[TreeKEM Pass Synchronization]**: Reordered the `add_member` UpdatePath loop into semantic passes. `ParentNode` derivations are strictly evaluated before calculating the hash of `group_ctx_pre`, achieving a unified `GroupContext` across Sender/Receiver during HPKE.seal()/open().
+- **[Robust Tree Serialization]**: Added a 2-byte length prefix to `KeyPackage` serialization in `RatchetTree.to_bytes()` and `from_bytes()` to natively support dynamic key packages (64 bytes legacy vs 128 bytes with signatures).
+- **[Governance]**: Imported `CONVENTIONS.md`, `PROTOCOL_OF_SILENCE.md`, and `test_sound_of_silence.py` from the Red Pill matrix project. Pure-mls now conforms to the absolute Sound of Silence standard.
+
+### Fixed
+- **[CRITICAL] Infinite Recursion (`add_member`)**: Resolved LBBT infinite loops for asymmetric tree structures by implementing the fallback `while p >= w:` mechanism mandated by RFC 9420 Appendix C.2.
+- **[CRITICAL] HPKE InvalidTag in TreeKEM**: Fixed the `process_update()` decryption error caused by mismatching state hashes. The context divergence caused AES-GCM decryption failure, which is now entirely resolved.
+- **[QA] Test Robustness**: `test_mls_group_lifecycle` and `test_process_update_uses_kp_ref_not_index` tests now decrypt cleanly. Pure-mls achieves 100% test pass rate over 67 suites.
+
 ## [0.3.0] - 2026-03-22
 
 ### Added

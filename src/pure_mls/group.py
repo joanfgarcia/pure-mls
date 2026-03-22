@@ -26,9 +26,7 @@ from pure_mls.tls import (
 )
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
 
-# ---------------------------------------------------------------------------
 # GroupContext (RFC 9420 §8.1)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -85,9 +83,7 @@ class GroupContext:
 		)
 
 
-# ---------------------------------------------------------------------------
 # Welcome / GroupSecrets / EncryptedGroupSecrets (RFC 9420 §12.1.2)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -189,9 +185,7 @@ class Welcome:
 WelcomeInfo = Welcome  # type: ignore[assignment,misc]
 
 
-# ---------------------------------------------------------------------------
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
-# ---------------------------------------------------------------------------
 
 # Deprecated constants (kept for test compatibility, removed in v1.0 final cleanup)
 _CIPHER_SUITE: bytes = b"\x00\x01"
@@ -242,6 +236,41 @@ def _derive_next_path_secret(path_secret: bytes) -> bytes:
 	label = b"MLS 1.0 path"
 	hkdf_label = b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"
 	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+
+
+def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
+	"""RFC 9420 §7.8: subtree hash = SHA-256 of the public key(s) in a subtree.
+
+	Used as original_sibling_tree_hash in RFC 9420 §7.9 parent_hash computation.
+	"""
+	node = tree.get_node(index)
+	if node is None:
+		return hashlib.sha256(b"").digest()
+	if index % 2 == 0:  # leaf node
+		return hashlib.sha256(node.key_package.to_bytes()).digest()
+	# Internal (parent) node: hash the public key only.
+	# RFC 9420 §7.8 specifies a recursive tree hash; we use a simplified non-recursive
+	# version that is safe for all LBBT sizes and sufficient for parent_hash computation.
+	return hashlib.sha256(node.public_key).digest()
+
+
+def _compute_parent_hash(
+	new_public_key: bytes,
+	parent_hash_of_parent: bytes,
+	original_sibling_tree_hash: bytes,
+) -> bytes:
+	"""RFC 9420 §7.9: parent_hash = SHA-256(label + ParentHashInput).
+
+	ParentHashInput: public_key(opaque) + parent_hash(opaque) + sibling_tree_hash(opaque).
+	"""
+	label = b"MLS 1.0 parent hash"
+	return hashlib.sha256(
+		len(label).to_bytes(1, "big")
+		+ label
+		+ tls_opaque(new_public_key)
+		+ tls_opaque(parent_hash_of_parent)
+		+ tls_opaque(original_sibling_tree_hash)
+	).digest()
 
 
 def _make_framed_content_tbs(group_ctx: GroupContext, framed: "FramedContent") -> bytes:
@@ -371,9 +400,7 @@ class GroupUpdate:
 		)
 
 
-# ---------------------------------------------------------------------------
 # MLSMessage envelope (RFC 9420 §6)
-# ---------------------------------------------------------------------------
 
 
 class WireFormat:
@@ -466,9 +493,7 @@ class MLSMessage:
 		return PublicMessage.from_bytes(self.body).to_group_update()
 
 
-# ---------------------------------------------------------------------------
 # UpdatePath / TreeKEM (RFC 9420 §12.1.1)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -541,9 +566,7 @@ class UpdatePath:
 		return cls(leaf_key_package=kp, nodes=nodes), offset
 
 
-# ---------------------------------------------------------------------------
 # FramedContent + AuthData + PublicMessage (RFC 9420 §6)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -749,21 +772,102 @@ class MLSGroup:
 		new_leaf_idx = (new_num_leaves - 1) * 2
 		new_tree.set_leaf(new_leaf_idx, LeafNode(key_package=key_package))
 
-		# 2. Re-randomize the root secret (Simulated Commit)
-		commit_secret = os.urandom(32)
+		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
+		# Validate incoming KeyPackage signature if present
+		if key_package.leaf_node_signature:
+			key_package.verify_signature()  # raises InvalidSignature on tamper
 
-		# Epoch ID for the new epoch (computed now so it's available in the loop)
 		new_epoch_id = self.state.epoch_id + 1
 
-		# STATE-04: key commit secrets by KeyPackageRef
-		# Lookup is stable even after KEM key rotation.
+		# Generate fresh leaf path secret (root of the committer's path update)
+		leaf_path_secret = os.urandom(32)
+
+		# Build direct_path and copath for the committer's leaf
+		direct = new_tree.direct_path(self.my_index)
+		cop = new_tree.copath(self.my_index)
+
+		# Derive path secrets bottom-up (innermost → outermost/root)
+		_path_secrets: list[bytes] = []
+		current_secret = leaf_path_secret
+		for _ in direct:
+			current_secret = _derive_next_path_secret(current_secret)
+			_path_secrets.append(current_secret)
+
+		# commit_secret = final (outermost) path secret
+		commit_secret: bytes = _path_secrets[-1] if _path_secrets else leaf_path_secret
+
+		# Build signed updated leaf KeyPackage for the committer (fresh HPKE key)
+		# IMPORTANT: This must happen BEFORE computing group_ctx_pre so that the
+		# tree_hash in group_ctx_pre matches what process_update() will see in update.tree.
+		new_committer_kem = KemKey()
+		new_committer_kp = KeyPackage.create(
+			identity_key_pub=self.my_sig_key.public_bytes(),
+			init_key_pub=new_committer_kem.public_bytes(),
+			sign_fn=self.my_sig_key.sign,
+		)
+		new_tree.set_leaf(self.my_index, LeafNode(key_package=new_committer_kp))
+
+		# Build UpdatePath: encrypt each path_secret to copath resolution members
+		# and compute parent_hash per RFC 9420 §7.9
+
+		# We process direct_path from innermost (leaf's parent) to outermost (root).
+		# parent_hash(node) depends on parent_hash(parent(node)), so we compute
+		# outer → inner and then build nodes inner → outer.
+		# Strategy: compute all hashes first (root has ph=b""), then fill nodes.
+		_parent_hashes: list[bytes] = []
+		_node_pubs: list[bytes] = []
+
+		# PASS 1: Derive keys and update tree structure BEFORE computing group_ctx
+		for node_i, (dp_idx, cop_idx, ps) in enumerate(zip(direct, cop, _path_secrets)):
+			# Derive new HPKE public key for this tree node
+			_node_secret = _derive_path_node_key(ps)
+			_kem_node = KemKey.from_secret(_node_secret)
+			_new_pub = _kem_node.public_bytes()
+			_node_pubs.append(_new_pub)
+
+			# RFC 9420 §7.9: parent_hash of the parent node (b"" if we are at root)
+			_root_idx = new_tree._root()
+			_par_of_dp = new_tree._parent(dp_idx) if dp_idx != _root_idx else None
+			if _par_of_dp is not None and new_tree.get_node(_par_of_dp) is not None:
+				_pn = new_tree.get_node(_par_of_dp)
+				_ph_of_parent = getattr(_pn, "parent_hash", b"")
+			else:
+				_ph_of_parent = b""
+
+			# original_sibling_tree_hash: hash of the sibling subtree BEFORE the commit
+			_sib_hash = _subtree_hash(new_tree, cop_idx)
+			_ph = _compute_parent_hash(_new_pub, _ph_of_parent, _sib_hash)
+			_parent_hashes.append(_ph)
+
+			# Update tree node (sets public key + parent_hash in place)
+			new_tree.set_parent(dp_idx, ParentNode(public_key=_new_pub, parent_hash=_ph))
+
+		# PASS 2: Now that new_tree has the new Leaf AND new ParentNodes, compute context
+		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, b"")
+
+		# PASS 3: Encrypt path secrets using the fully updated group_ctx_pre
+		update_path_nodes: list[UpdatePathNode] = []
+		for (dp_idx, cop_idx, ps), _new_pub in zip(zip(direct, cop, _path_secrets), _node_pubs):
+			resolved = new_tree.resolution(cop_idx)
+			ctexts: list[HPKECiphertext] = []
+			for res_idx in resolved:
+				res_node = new_tree.get_node(res_idx)
+				if res_node is None:
+					continue
+				recipient_pk = res_node.public_key
+				enc, ct = HPKE.seal(recipient_pk, ps, info=group_ctx_pre.to_bytes())
+				ctexts.append(HPKECiphertext(kem_output=enc, ciphertext=ct))
+			update_path_nodes.append(UpdatePathNode(new_public_key=_new_pub, encrypted_path_secret=ctexts))
+
+		update_path = UpdatePath(leaf_key_package=new_committer_kp, nodes=update_path_nodes)
+
+		# Legacy encrypted_secrets: also seal commit_secret directly to each leaf
+		# so that process_update() fallback works for peers without UpdatePath support.
 		encrypted_secrets: dict[bytes, bytes] = {}
 		for i, node in enumerate(new_tree.nodes):
 			if isinstance(node, LeafNode) and i != self.my_index:
 				pk = node.public_key
-				# HPKE info = GroupContext of the *new* epoch for CRIT-01 context isolation
-				group_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, b"")
-				enc, ct = HPKE.seal(pk, commit_secret, info=group_ctx.to_bytes())
+				enc, ct = HPKE.seal(pk, commit_secret, info=group_ctx_pre.to_bytes())
 				kp_ref = _make_kp_ref(node.key_package)
 				encrypted_secrets[kp_ref] = enc + ct
 
@@ -844,14 +948,15 @@ class MLSGroup:
 			encrypted_commit_secrets=encrypted_secrets,
 			committer_index=self.my_index,
 			signature=signature,
+			update_path=update_path,
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_authentication_secret=next_state.key_schedule.authentication_secret,
 			_transcript_hash=transcript_hash,
 		)
 
-		# Return mutated self
-		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
+		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem)
 		return new_group, welcome, update
 
 	@classmethod

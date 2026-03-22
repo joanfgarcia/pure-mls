@@ -4,17 +4,15 @@ RFC 9420 uses the TLS 1.3 presentation language (RFC 8446 §3) for all structure
 This module provides the minimal encoding / decoding primitives needed.
 
 Encoding conventions:
-    - all integers: big-endian
-    - opaque<V>: uint16 length prefix + bytes  (variable-length vector)
-    - opaque[N]: N bytes fixed               (used internally, no prefix)
-    - vec<T>: uint32 length prefix + concatenated serialized elements
+	- all integers: big-endian
+	- opaque<V>: uint16 length prefix + bytes  (variable-length vector)
+	- opaque[N]: N bytes fixed			   (used internally, no prefix)
+	- vec<T>: uint32 length prefix + concatenated serialized elements
 """
 
 import struct
 
-# ---------------------------------------------------------------------------
 # Fixed-width integers
-# ---------------------------------------------------------------------------
 
 
 def tls_u8(v: int) -> bytes:
@@ -33,10 +31,8 @@ def tls_u64(v: int) -> bytes:
 	return struct.pack(">Q", v)
 
 
-# ---------------------------------------------------------------------------
 # Variable-length octet strings  (opaque<V>)
 # RFC 9420 uses uint16-prefixed variable-length vectors for most fields.
-# ---------------------------------------------------------------------------
 
 
 def tls_opaque(data: bytes) -> bytes:
@@ -51,10 +47,8 @@ def tls_opaque32(data: bytes) -> bytes:
 	return struct.pack(">I", len(data)) + data
 
 
-# ---------------------------------------------------------------------------
 # Decoding: Reader helpers
 # All return (value, new_offset)
-# ---------------------------------------------------------------------------
 
 
 def read_u8(buf: bytes, offset: int) -> tuple[int, int]:
