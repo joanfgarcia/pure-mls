@@ -225,6 +225,25 @@ def _make_group_context(
 	)
 
 
+def _derive_path_node_key(path_secret: bytes) -> bytes:
+	"""RFC 9420 §12.1.1: node_secret = ExpandWithLabel(path_secret, 'node', b'', 32).
+
+	Returns the HPKE private key material (used with KemKey to build a key pair).
+	"""
+	label = b"MLS 1.0 node"
+	hkdf_label = (
+		b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"  # empty context
+	)
+	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+
+
+def _derive_next_path_secret(path_secret: bytes) -> bytes:
+	"""RFC 9420 §12.1.1: next_path_secret = ExpandWithLabel(path_secret, 'path', b'', 32)."""
+	label = b"MLS 1.0 path"
+	hkdf_label = b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"
+	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+
+
 def _make_framed_content_tbs(group_ctx: GroupContext, framed: "FramedContent") -> bytes:
 	"""RFC 9420 §6.2: FramedContentTBS = version + wire_format + GroupContext + FramedContent.
 
@@ -294,6 +313,8 @@ class GroupUpdate:
 	encrypted_commit_secrets: dict[bytes, bytes]
 	committer_index: int
 	signature: bytes
+	# RFC 9420 §12.1.1: UpdatePath (TreeKEM) — present when committer uses full TreeKEM
+	update_path: "UpdatePath | None" = None
 	# RFC 9420 §6.2 context fields — carried for PublicMessage construction
 	# Set by add_member(); None when GroupUpdate is deserialized from wire.
 	_group_ctx: "GroupContext | None" = None
@@ -443,6 +464,81 @@ class MLSMessage:
 		if self.wire_format != WireFormat.MLS_PUBLIC_MESSAGE:
 			raise ValueError(f"Expected MLS_PUBLIC_MESSAGE, got {self.wire_format:#06x}")
 		return PublicMessage.from_bytes(self.body).to_group_update()
+
+
+# ---------------------------------------------------------------------------
+# UpdatePath / TreeKEM (RFC 9420 §12.1.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HPKECiphertext:
+	"""RFC 9420 §5.2: HPKE ciphertext = kem_output + ciphertext."""
+
+	kem_output: bytes  # X25519 KEM enc (32 bytes for DHKEM-X25519)
+	ciphertext: bytes  # HPKE-sealed plaintext
+
+	def to_bytes(self) -> bytes:
+		return tls_opaque(self.kem_output) + tls_opaque(self.ciphertext)
+
+	@classmethod
+	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["HPKECiphertext", int]:
+		kem_output, offset = read_opaque(data, offset)
+		ciphertext, offset = read_opaque(data, offset)
+		return cls(kem_output=kem_output, ciphertext=ciphertext), offset
+
+
+@dataclass
+class UpdatePathNode:
+	"""RFC 9420 §12.1.1: one node in the UpdatePath.
+
+	new_public_key is the new HPKE public key for this tree node.
+	encrypted_path_secret is the path secret encrypted to each resolution member.
+	"""
+
+	new_public_key: bytes
+	encrypted_path_secret: list[HPKECiphertext]
+
+	def to_bytes(self) -> bytes:
+		enc = b"".join(ct.to_bytes() for ct in self.encrypted_path_secret)
+		return tls_opaque(self.new_public_key) + tls_u32(len(self.encrypted_path_secret)) + enc
+
+	@classmethod
+	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdatePathNode", int]:
+		new_public_key, offset = read_opaque(data, offset)
+		n, offset = read_u32(data, offset)
+		encrypted_path_secret = []
+		for _ in range(n):
+			ct, offset = HPKECiphertext.from_bytes(data, offset)
+			encrypted_path_secret.append(ct)
+		return cls(new_public_key=new_public_key, encrypted_path_secret=encrypted_path_secret), offset
+
+
+@dataclass
+class UpdatePath:
+	"""RFC 9420 §12.1.1: UpdatePath contains the new leaf public key and path nodes.
+
+	leaf_key_package: updated KeyPackage for the committer's leaf
+	nodes: one UpdatePathNode per node in direct_path(committer_leaf)
+	"""
+
+	leaf_key_package: "KeyPackage"
+	nodes: list[UpdatePathNode]
+
+	def to_bytes(self) -> bytes:
+		nodes_bytes = b"".join(n.to_bytes() for n in self.nodes)
+		return self.leaf_key_package.to_bytes() + tls_u32(len(self.nodes)) + nodes_bytes
+
+	@classmethod
+	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdatePath", int]:
+		kp = KeyPackage.from_bytes(data[offset : offset + 128])
+		offset += 128
+		n, offset = read_u32(data, offset)
+		nodes = []
+		for _ in range(n):
+			node, offset = UpdatePathNode.from_bytes(data, offset)
+			nodes.append(node)
+		return cls(leaf_key_package=kp, nodes=nodes), offset
 
 
 # ---------------------------------------------------------------------------
@@ -853,22 +949,43 @@ class MLSGroup:
 		except Exception:
 			raise ValueError("Invalid signature format")
 
-		# 2. STATE-04: lookup commit secret by my KeyPackageRef, not by tree index.
-		# This survives KEM key rotation: the ref is stable as long as the member
-		# does not generate a brand-new KeyPackage in the same epoch.
+		# 2. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
 		my_kp = self.state.tree.get_node(self.my_index)
 		if not isinstance(my_kp, LeafNode):
 			raise ValueError("My leaf node not found in tree")
 		# HPKE info = GroupContext of the verifying epoch for CRIT-01
 		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, b"")
 		my_kp_ref = _make_kp_ref(my_kp.key_package)
-		if my_kp_ref not in update.encrypted_commit_secrets:
-			raise ValueError("Not invited to this epoch (KeyPackageRef not found in commit)")
 
-		enc_ct = update.encrypted_commit_secrets[my_kp_ref]
-		enc, ct = enc_ct[:32], enc_ct[32:]
-		# HPKE info = GroupContext (Fase 4 migration of CRIT-01 context isolation)
-		commit_secret = HPKE.open(self.my_kem_key, enc, ct, info=group_ctx.to_bytes())
+		commit_secret: bytes | None = None
+
+		# TreeKEM path: find our position in the copath and decrypt the path secret
+		if update.update_path is not None and len(update.update_path.nodes) > 0:
+			direct = update.tree.direct_path(update.committer_index)
+			cop = update.tree.copath(update.committer_index)
+			for node_i, (dp_idx, cop_idx, up_node) in enumerate(zip(direct, cop, update.update_path.nodes)):
+				resolved = update.tree.resolution(cop_idx)
+				if self.my_index in resolved:
+					pos = resolved.index(self.my_index)
+					if pos < len(up_node.encrypted_path_secret):
+						ct = up_node.encrypted_path_secret[pos]
+						path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=group_ctx.to_bytes())
+						# Derive remaining path secrets to reach the root (commit_secret)
+						_ps = path_secret
+						for _ in range(len(direct) - node_i - 1):
+							_ps = _derive_next_path_secret(_ps)
+						commit_secret = _ps
+						break
+				if commit_secret is not None:
+					break
+
+		# Fallback: legacy encrypted_commit_secrets
+		if commit_secret is None:
+			if my_kp_ref not in update.encrypted_commit_secrets:
+				raise ValueError("Not invited to this epoch (KeyPackageRef not found in commit)")
+			enc_ct = update.encrypted_commit_secrets[my_kp_ref]
+			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
+			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)

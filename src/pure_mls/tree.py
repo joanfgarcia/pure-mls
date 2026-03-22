@@ -4,23 +4,68 @@ from typing import Optional
 
 @dataclass
 class KeyPackage:
-	"""
-	The public identity and routing payload for an Agent.
-	Equivalent to the MLS 'KeyPackage' struct.
+	"""RFC 9420 §10.1: KeyPackage carries a member's identity + HPKE init key.
+
+	The leaf_node_signature authenticates the init_key_pub with the identity key,
+	proving the owner controls both keys (RFC 9420 §10.1).
 	"""
 
-	identity_key_pub: bytes  # Ed25519 Signature Public Key
-	init_key_pub: bytes  # X25519 HPKE Public Key
+	identity_key_pub: bytes  # Ed25519 Signature Public Key (32 bytes)
+	init_key_pub: bytes  # X25519 HPKE Public Key (32 bytes)
+	leaf_node_signature: bytes = b""  # Ed25519(KeyPackageTBS), set by create()
+
+	_CIPHER_SUITE: int = 0x0001  # MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+
+	@classmethod
+	def create(cls, identity_key_pub: bytes, init_key_pub: bytes, sign_fn) -> "KeyPackage":
+		"""Factory: build and sign a KeyPackage (RFC 9420 §10.1).
+
+		sign_fn(tbs_bytes) -> signature_bytes  (e.g. SignatureKey.sign)
+		"""
+		kp = cls(identity_key_pub=identity_key_pub, init_key_pub=init_key_pub, leaf_node_signature=b"")
+		tbs = kp._tbs_bytes()
+		kp.leaf_node_signature = sign_fn(tbs)
+		return kp
+
+	def _tbs_bytes(self) -> bytes:
+		"""KeyPackageTBS = cipher_suite(u16) + init_key(opaque32) + identity_key(opaque32)."""
+		return (
+			self._CIPHER_SUITE.to_bytes(2, "big")
+			+ len(self.init_key_pub).to_bytes(4, "big")
+			+ self.init_key_pub
+			+ len(self.identity_key_pub).to_bytes(4, "big")
+			+ self.identity_key_pub
+		)
+
+	def verify_signature(self) -> None:
+		"""Verify leaf_node_signature against identity_key_pub.
+
+		Raises InvalidSignature if the signature is invalid or missing.
+		"""
+		from cryptography.exceptions import InvalidSignature  # noqa: F401
+		from cryptography.hazmat.primitives.asymmetric import ed25519
+
+		if not self.leaf_node_signature:
+			raise ValueError("KeyPackage has no leaf_node_signature")
+		pub = ed25519.Ed25519PublicKey.from_public_bytes(self.identity_key_pub)
+		pub.verify(self.leaf_node_signature, self._tbs_bytes())
 
 	def to_bytes(self) -> bytes:
-		"""Safe binary serialization (64 bytes total). Avoids Pickle RCE."""
-		return self.identity_key_pub + self.init_key_pub
+		"""TLS wire format: identity_key(32) + init_key(32) + signature(64)."""
+		return self.identity_key_pub + self.init_key_pub + self.leaf_node_signature
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "KeyPackage":
-		if len(data) != 64:
-			raise ValueError("Invalid KeyPackage size")
-		return cls(identity_key_pub=data[:32], init_key_pub=data[32:])
+		if len(data) == 64:
+			# Legacy format (no signature) — for backward compat
+			return cls(identity_key_pub=data[:32], init_key_pub=data[32:], leaf_node_signature=b"")
+		if len(data) == 128:
+			return cls(
+				identity_key_pub=data[:32],
+				init_key_pub=data[32:64],
+				leaf_node_signature=data[64:128],
+			)
+		raise ValueError(f"Invalid KeyPackage size: {len(data)}")
 
 
 @dataclass
@@ -134,3 +179,100 @@ class RatchetTree:
 		tree = cls(num_leaves)
 		tree.nodes = nodes
 		return tree
+
+	def level(self, index: int) -> int:
+		"""Level l of node x: number of trailing 1-bits in x. Root = floor(log2(n-1))."""
+		if index == 0:
+			return 0
+		n = index
+		level = 0
+		while n & 1:
+			level += 1
+			n >>= 1
+		return level
+
+	def parent_index(self, index: int) -> int:
+		"""RFC 9420 §7.1: parent(x) = (x ^ (0x01 << level(x))) | (0x01 << level(x))."""
+		lvl = self.level(index)
+		return (index >> (lvl + 1) << (lvl + 1)) | (0x01 << lvl) | (0x01 << (lvl + 1)) - (0x01 << lvl)
+
+	def _parent(self, x: int) -> int:
+		"""Simple parent: (x | (x+1)) for the LBBT layout."""
+		# RFC 7.1 parent formula: p = (x ^ (e+1)) | e where e = lowest bit of x or its complement
+		lvl = self.level(x)
+		b = 1 << (lvl + 1)
+		return (x | b) & ~(b - 1) | (b >> 1) - 1
+
+	def _sibling(self, x: int) -> int:
+		"""RFC 9420 §7.1: sibling(x) — the other child of parent(x)."""
+		p = self._parent(x)
+		lvl = self.level(p)
+		# left child of p is p - 2^(lvl-1), right child is p + 2^(lvl-1)
+		left = p - (1 << (lvl - 1))
+		right = p + (1 << (lvl - 1))
+		return right if x <= p else left
+
+	def _root(self) -> int:
+		"""RFC 9420 §7.1: root index for n leaves."""
+		# root is at width - 1 where width = 2*n - 1 rounded up to power of 2, minus 1
+		n = len(self.nodes)
+		# Simple: root is the last odd index (highest common ancestor)
+		w = 1
+		while w < n:
+			w <<= 1
+		return w - 1
+
+	def direct_path(self, leaf_index: int) -> list[int]:
+		"""RFC 9420 §7.1: direct path from leaf_index to root (exclusive of leaf).
+
+		Returns list of ancestor node indices from parent to root.
+		"""
+		x = leaf_index
+		root = self._root()
+		path = []
+		while x != root:
+			x = self._parent(x)
+			if x < len(self.nodes):
+				path.append(x)
+			if x >= root:
+				break
+		return path
+
+	def copath(self, leaf_index: int) -> list[int]:
+		"""RFC 9420 §7.1: copath = siblings of the direct_path nodes.
+
+		Returns list of sibling indices for each node in the direct path.
+		"""
+		x = leaf_index
+		root = self._root()
+		siblings = []
+		while x != root:
+			sib = self._sibling(x)
+			if sib < len(self.nodes):
+				siblings.append(sib)
+			x = self._parent(x)
+			if x >= root:
+				break
+		return siblings
+
+	def resolution(self, index: int) -> list[int]:
+		"""RFC 9420 §7.2: resolution(x) = non-blank subtree leaves.
+
+		Returns list of leaf indices that can receive path secrets at node x.
+		"""
+		if index >= len(self.nodes):
+			return []
+		node = self.nodes[index]
+		if index % 2 == 0:  # leaf
+			return [index] if node is not None else []
+		# Parent node: union of resolution of children
+		lvl = self.level(index)
+		left = index - (1 << (lvl - 1))
+		right = index + (1 << (lvl - 1))
+		result = []
+		if self.nodes[index] is None:
+			result.extend(self.resolution(left))
+			result.extend(self.resolution(right))
+		else:
+			result.append(index)
+		return result

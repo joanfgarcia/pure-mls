@@ -65,6 +65,14 @@ class KemKey:
 	def from_private_bytes(cls, data: bytes) -> "KemKey":
 		return cls(x25519.X25519PrivateKey.from_private_bytes(data))
 
+	@classmethod
+	def from_secret(cls, secret: bytes) -> "KemKey":
+		"""Derive a KemKey from a path_secret (RFC 9420 §12.1.1 node_secret).
+
+		secret must be exactly 32 bytes (X25519 private key length).
+		"""
+		return cls.from_private_bytes(secret)
+
 	def dh_exchange(self, peer_public_bytes: bytes) -> bytes:
 		"""
 		Diffie-Hellman Key Exchange.

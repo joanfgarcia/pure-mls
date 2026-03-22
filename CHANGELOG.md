@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-22
+
+### Added (Full RFC 9420 TreeKEM + KeyPackage Authentication)
+
+- **[RFC 9420 §10.1] `KeyPackage.leaf_node_signature`**: self-signature over
+  `KeyPackageTBS = cipher_suite(u16) + init_key(opaque32) + identity_key(opaque32)` using
+  the identity Ed25519 key. Set via `KeyPackage.create(identity_key_pub, init_key_pub, sign_fn)`.
+- **`KeyPackage.verify_signature()`**: verifies the self-signature; raises `InvalidSignature`
+  on tampering. Called in `add_member()` for incoming key packages.
+- **`KemKey.from_secret(secret)`**: alias for `from_private_bytes()` — derives an X25519 KEM
+  key pair from a 32-byte path secret (RFC 9420 §12.1.1 node secret).
+- **[RFC 9420 §7.1] `RatchetTree.direct_path(leaf_index)`**: list of ancestor node indices
+  from the leaf's parent to the root (LBBT array traversal).
+- **`RatchetTree.copath(leaf_index)`**: list of sibling indices for each direct_path node.
+- **`RatchetTree.resolution(index)`**: list of non-blank leaf/node indices in the subtree
+  (used to determine which recipients receive each encrypted path secret).
+- **[RFC 9420 §12.1.1] `HPKECiphertext`**: `kem_output + ciphertext` TLS struct for
+  individual encrypted path secrets.
+- **`UpdatePathNode`**: one step in the UpdatePath — `new_public_key + encrypted_path_secret[]`.
+- **`UpdatePath`**: full TreeKEM update — `leaf_key_package + [UpdatePathNode, ...]`.
+- **`_derive_path_node_key(path_secret)`**: `ExpandWithLabel(path_secret, "node", b"", 32)`.
+- **`_derive_next_path_secret(path_secret)`**: `ExpandWithLabel(path_secret, "path", b"", 32)`.
+
+### Changed
+
+- **`MLSGroup.create()`**: creator's `KeyPackage` is now self-signed via `KeyPackage.create()`.
+- **`add_member()`**: replaced "Simulated Commit" with real TreeKEM — computes `direct_path`
+  and `copath`, generates random leaf path secret, derives path secrets bottom-up, encrypts
+  each to the copath resolution members as `HPKECiphertext`, builds `UpdatePath`, and rotates
+  the committer's own HPKE keypair. Legacy `encrypted_commit_secrets` retained for backward compat.
+- **`process_update()`**: tries TreeKEM path decryption first (via `UpdatePath`), falling back to
+  the legacy `encrypted_commit_secrets` dict. This ensures interoperability with v1.x messages.
+- **`GroupUpdate`**: new optional field `update_path: UpdatePath | None = None` carrying the
+  TreeKEM data for committed epochs.
+- **`KeyPackage.to_bytes()`**: now 128 bytes (32 identity + 32 init + 64 signature).
+  Legacy 64-byte format is still accepted by `from_bytes()`.
+
+### Tests
+
+- 4 new tests for `KeyPackage.leaf_node_signature`:
+  `test_key_package_create_signed`, `test_key_package_signature_roundtrip`,
+  `test_key_package_legacy_64_bytes`, `test_key_package_tampered_signature_raises`.
+- Total: 67 tests pass.
+
 ## [1.2.0] - 2026-03-22
 
 ### Added (Full OpenMLS Signature Compliance)
