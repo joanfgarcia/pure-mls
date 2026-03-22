@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-22
+
+### Added (Full OpenMLS Signature Compliance)
+
+- **[RFC 9420 §6.2] `_make_framed_content_tbs(group_ctx, framed)`**: builds the
+  `FramedContentTBS = version(u16) + wire_format(u16) + GroupContext + FramedContent`
+  signing surface. Ed25519 signatures now cover this TBS instead of raw `transcript_hash`.
+- **[RFC 9420 §6.2] `KeySchedule.derive_membership_key(authentication_secret)`**:
+  `ExpandWithLabel(authentication_secret, "membership", b"", 32)` → 32-byte key for
+  generating and verifying `membership_tag`.
+- **[RFC 9420 §8.1] `confirmation_tag`** in `PublicMessage`: now correctly computed as
+  `HMAC-SHA256(confirmation_key, confirmed_transcript_hash)` using the new epoch's
+  `confirmation_key` from `KeySchedule`.
+- **[RFC 9420 §6.2] `membership_tag`** in `PublicMessage`: now correctly computed as
+  `HMAC-SHA256(membership_key, PublicMessageTBS)` where `membership_key` is derived via
+  `ExpandWithLabel(authentication_secret, "membership", b"", 32)`.
+- `GroupUpdate` carries 4 optional RFC context fields (`_group_ctx`, `_confirmation_key`,
+  `_authentication_secret`, `_transcript_hash`) set by `add_member()` to enable full
+  RFC `PublicMessage` construction in `MLSMessage.wrap_commit()`.
+- `GroupUpdate._body_bytes()` returns the serialized Commit body without the signature
+  field (used to construct `FramedContent.content` for TBS computation).
+
+### Changed
+
+- **`add_member()`**: committer's Ed25519 signature is now over `FramedContentTBS`
+  (not raw `transcript_hash`). The `FramedContent` is built from the unsigned commit body.
+- **`process_update()`**: signature verification now reconstructs `FramedContentTBS`
+  identically to how `add_member()` built it, ensuring full round-trip correctness.
+- **`PublicMessage.from_group_update()`**: now requires 4 explicit kwargs:
+  `group_ctx`, `confirmation_key`, `authentication_secret`, `transcript_hash`.
+  `MLSMessage.wrap_commit()` passes these from the `GroupUpdate` context fields when
+  available; falls back to placeholder values for deserialized commits.
+- **`FramedContent.group_id`**: now populated with the actual `group_id` from
+  `GroupContext` (was `b""` in v1.1).
+
 ## [1.1.0] - 2026-03-22
 
 ### Added (Full OpenMLS Interoperability)

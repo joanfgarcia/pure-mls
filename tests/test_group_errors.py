@@ -1,6 +1,13 @@
 import pytest
 
-from pure_mls.group import GroupUpdate, MLSGroup, _make_kp_ref
+from pure_mls.group import (
+	FramedContent,
+	GroupUpdate,
+	MLSGroup,
+	_make_framed_content_tbs,
+	_make_group_context,
+	_make_kp_ref,
+)
 from pure_mls.group import _transcript_hash as _th
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
@@ -68,12 +75,26 @@ def test_process_update_errors():
 		ciphertexts_bytes,
 		sender_index=0,
 	)
+	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
+	from pure_mls.tls import tls_opaque, tls_opaque32, tls_u32, tls_u64
+
+	_n1 = len(encrypted_commit_secrets)
+	_body1 = (
+		tls_u64(epoch_id)
+		+ tls_opaque32(tree.to_bytes())
+		+ tls_u32(_n1)
+		+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_commit_secrets.items()))
+		+ tls_u32(0)  # committer_index=0
+	)
+	_ctx1 = _make_group_context(group.group_id, epoch_id, tree, transcript_hash)
+	_fc1 = FramedContent(group_id=group.group_id, epoch=epoch_id, sender_leaf_index=0, authenticated_data=b"", content=_body1)
+	_tbs1 = _make_framed_content_tbs(_ctx1, _fc1)
 	update = GroupUpdate(
 		epoch_id=epoch_id,
 		tree=tree,
 		encrypted_commit_secrets=encrypted_commit_secrets,
 		committer_index=0,
-		signature=sig.sign(transcript_hash),
+		signature=sig.sign(_tbs1),
 	)
 
 	# No KPRef for my leaf -> raises ValueError
@@ -109,12 +130,24 @@ def test_process_update_errors():
 		bad_ciphertexts_bytes,
 		sender_index=0,
 	)
+	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
+	_n2 = len(bad_secrets)
+	_body2 = (
+		tls_u64(1)
+		+ tls_opaque32(real_update.tree.to_bytes())
+		+ tls_u32(_n2)
+		+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(bad_secrets.items()))
+		+ tls_u32(0)  # committer_index=0
+	)
+	_ctx2 = _make_group_context(group.group_id, 1, real_update.tree, bad_transcript_hash)
+	_fc2 = FramedContent(group_id=group.group_id, epoch=1, sender_leaf_index=0, authenticated_data=b"", content=_body2)
+	_tbs2 = _make_framed_content_tbs(_ctx2, _fc2)
 	bad_update = GroupUpdate(
 		epoch_id=1,
 		tree=real_update.tree,
 		encrypted_commit_secrets=bad_secrets,
 		committer_index=0,
-		signature=sig.sign(bad_transcript_hash),
+		signature=sig.sign(_tbs2),
 	)
 
 	from cryptography.exceptions import InvalidTag

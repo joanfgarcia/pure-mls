@@ -85,6 +85,18 @@ class KeySchedule:
 		hkdf_label = b"\x00\x0c" + len(full_label).to_bytes(1, "big") + full_label + len(context).to_bytes(4, "big") + context
 		return hkdf_expand(joiner_secret, hkdf_label, 12, hashlib.sha256)
 
+	@staticmethod
+	def derive_membership_key(authentication_secret: bytes) -> bytes:
+		"""RFC 9420 §6.2: membership_key = ExpandWithLabel(authentication_secret, "membership", b"", 32)."""
+		full_label = b"MLS 1.0 membership"
+		hkdf_label = (
+			b"\x00\x20"  # 32 as uint16
+			+ len(full_label).to_bytes(1, "big")
+			+ full_label
+			+ b"\x00\x00\x00\x00"  # empty context, uint32 length = 0
+		)
+		return hkdf_expand(authentication_secret, hkdf_label, 32, hashlib.sha256)
+
 	def to_bytes(self) -> bytes:
 		"""Serializes the full 9-secret schedule (288 bytes)."""
 		return (

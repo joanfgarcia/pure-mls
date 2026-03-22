@@ -225,6 +225,19 @@ def _make_group_context(
 	)
 
 
+def _make_framed_content_tbs(group_ctx: GroupContext, framed: "FramedContent") -> bytes:
+	"""RFC 9420 §6.2: FramedContentTBS = version + wire_format + GroupContext + FramedContent.
+
+	This is what the committer signs with their Ed25519 key.
+	"""
+	return (
+		tls_u16(0x0001)  # version = mls10
+		+ tls_u16(0x0002)  # wire_format = mls_public_message
+		+ group_ctx.to_bytes()  # GroupContext (binds to epoch)
+		+ framed.to_bytes()  # FramedContent body
+	)
+
+
 def _transcript_hash(
 	group_id: bytes,
 	epoch_id: int,
@@ -281,6 +294,21 @@ class GroupUpdate:
 	encrypted_commit_secrets: dict[bytes, bytes]
 	committer_index: int
 	signature: bytes
+	# RFC 9420 §6.2 context fields — carried for PublicMessage construction
+	# Set by add_member(); None when GroupUpdate is deserialized from wire.
+	_group_ctx: "GroupContext | None" = None
+	_confirmation_key: bytes | None = None
+	_authentication_secret: bytes | None = None
+	_transcript_hash: bytes | None = None
+
+	def _body_bytes(self) -> bytes:
+		"""The unsigned Commit body (epoch + tree + secrets + committer_index)."""
+		tree_raw = self.tree.to_bytes()
+		secrets_parts = b""
+		for kp_ref, enc_ct in sorted(self.encrypted_commit_secrets.items()):
+			secrets_parts += tls_opaque(kp_ref) + tls_opaque(enc_ct)
+		n = len(self.encrypted_commit_secrets)
+		return tls_u64(self.epoch_id) + tls_opaque32(tree_raw) + tls_u32(n) + secrets_parts + tls_u32(self.committer_index)
 
 	def to_bytes(self) -> bytes:
 		"""Serialize GroupUpdate to TLS-style wire format."""
@@ -374,7 +402,36 @@ class MLSMessage:
 	@classmethod
 	def wrap_commit(cls, commit: "GroupUpdate") -> "MLSMessage":
 		"""Wrap a GroupUpdate (Commit) in an MLSMessage envelope as RFC PublicMessage."""
-		pm = PublicMessage.from_group_update(commit)
+		if (
+			commit._group_ctx is not None
+			and commit._confirmation_key is not None
+			and commit._authentication_secret is not None
+			and commit._transcript_hash is not None
+		):
+			# Full RFC mode: proper confirmation_tag + membership_tag
+			pm = PublicMessage.from_group_update(
+				commit,
+				group_ctx=commit._group_ctx,
+				confirmation_key=commit._confirmation_key,
+				authentication_secret=commit._authentication_secret,
+				transcript_hash=commit._transcript_hash,
+			)
+		else:
+			# Deserialized GroupUpdate (no context): use placeholder values
+			# (interop with peers that don't use pure-mls wrap_commit)
+			_dummy_ctx = GroupContext(
+				group_id=b"",
+				epoch=commit.epoch_id,
+				tree_hash=b"\x00" * 32,
+				confirmed_transcript_hash=b"\x00" * 32,
+			)
+			pm = PublicMessage.from_group_update(
+				commit,
+				group_ctx=_dummy_ctx,
+				confirmation_key=b"\x00" * 32,
+				authentication_secret=b"\x00" * 32,
+				transcript_hash=b"\x00" * 32,
+			)
 		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
 
 	def unwrap_welcome(self) -> "Welcome":
@@ -485,24 +542,51 @@ class PublicMessage:
 		return cls(content=content, auth=auth, membership_tag=membership_tag)
 
 	@classmethod
-	def from_group_update(cls, update: "GroupUpdate") -> "PublicMessage":
-		"""Wrap a GroupUpdate as a PublicMessage for RFC-compliant transport."""
+	def from_group_update(
+		cls,
+		update: "GroupUpdate",
+		group_ctx: "GroupContext",
+		confirmation_key: bytes,
+		authentication_secret: bytes,
+		transcript_hash: bytes,
+	) -> "PublicMessage":
+		"""Wrap a GroupUpdate as a RFC 9420 PublicMessage.
+
+		RFC 9420 §6.2:
+		- signature: Ed25519(FramedContentTBS)
+		- confirmation_tag: HMAC-SHA256(confirmation_key, confirmed_transcript_hash)
+		- membership_tag: HMAC-SHA256(membership_key, PublicMessageTBS)
+		"""
 		import hmac as _hmac
 
 		commit_body = update.to_bytes()
 		framed = FramedContent(
-			group_id=b"",
+			group_id=group_ctx.group_id,
 			epoch=update.epoch_id,
 			sender_leaf_index=update.committer_index,
 			authenticated_data=b"",
 			content=commit_body,
 		)
-		# confirmation_tag: HMAC(signature, epoch bytes) — binds tag to epoch
-		conf_tag = _hmac.new(update.signature, update.epoch_id.to_bytes(8, "big"), "sha256").digest()
-		auth = FramedContentAuthData(signature=update.signature, confirmation_tag=conf_tag)
-		# membership_tag: HMAC(epoch+index, signature) — proves membership
-		mem_key = update.epoch_id.to_bytes(8, "big") + update.committer_index.to_bytes(4, "big")
-		mem_tag = _hmac.new(mem_key, update.signature, "sha256").digest()
+
+		# RFC 9420 §8.1: confirmation_tag = HMAC(confirmation_key, confirmed_transcript_hash)
+		conf_tag = _hmac.new(confirmation_key, transcript_hash, "sha256").digest()
+
+		auth = FramedContentAuthData(
+			signature=update.signature,
+			confirmation_tag=conf_tag,
+		)
+
+		# RFC 9420 §6.2: membership_key = ExpandWithLabel(authentication_secret, 'membership', b'', 32)
+		membership_key = KeySchedule.derive_membership_key(authentication_secret)
+		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + FramedContent
+		public_msg_tbs = (
+			tls_u16(0x0001)  # version
+			+ tls_u16(0x0002)  # wire_format = mls_public_message
+			+ group_ctx.to_bytes()
+			+ framed.to_bytes()
+		)
+		mem_tag = _hmac.new(membership_key, public_msg_tbs, "sha256").digest()
+
 		return cls(content=framed, auth=auth, membership_tag=mem_tag)
 
 	def to_group_update(self) -> "GroupUpdate":
@@ -600,8 +684,26 @@ class MLSGroup:
 		)
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
-		# Sign the update payload to prevent Commit Forgery
-		signature = self.my_sig_key.sign(transcript_hash)
+		# RFC 9420 §6.2: sign FramedContentTBS (not raw transcript_hash)
+		# GroupContext uses the new epoch with the confirmed transcript_hash
+		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		# Build an unsigned GroupUpdate body to construct the FramedContent for TBS
+		_unsigned_body = (
+			tls_u64(new_epoch_id)
+			+ tls_opaque32(new_tree.to_bytes())
+			+ tls_u32(len(encrypted_secrets))
+			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_secrets.items()))
+			+ tls_u32(self.my_index)
+		)
+		_framed_for_tbs = FramedContent(
+			group_id=new_ctx_signed.group_id,
+			epoch=new_epoch_id,
+			sender_leaf_index=self.my_index,
+			authenticated_data=b"",
+			content=_unsigned_body,
+		)
+		tbs = _make_framed_content_tbs(new_ctx_signed, _framed_for_tbs)
+		signature = self.my_sig_key.sign(tbs)
 
 		# 4. Build RFC-compliant Welcome
 		new_epoch_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, b"")
@@ -646,6 +748,10 @@ class MLSGroup:
 			encrypted_commit_secrets=encrypted_secrets,
 			committer_index=self.my_index,
 			signature=signature,
+			_group_ctx=new_ctx_signed,
+			_confirmation_key=next_state.key_schedule.confirmation_key,
+			_authentication_secret=next_state.key_schedule.authentication_secret,
+			_transcript_hash=transcript_hash,
 		)
 
 		# Return mutated self
@@ -723,7 +829,25 @@ class MLSGroup:
 				ciphertexts_bytes,
 				sender_index=update.committer_index,
 			)
-			public_key.verify(update.signature, transcript_hash)
+			# RFC 9420 §6.2: signature covers FramedContentTBS, not raw transcript_hash
+			group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
+			# Reconstruct unsigned body for FramedContent
+			_unsigned_body_v = (
+				tls_u64(update.epoch_id)
+				+ tls_opaque32(update.tree.to_bytes())
+				+ tls_u32(len(update.encrypted_commit_secrets))
+				+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(update.encrypted_commit_secrets.items()))
+				+ tls_u32(update.committer_index)
+			)
+			_framed_v = FramedContent(
+				group_id=group_ctx_verify.group_id,
+				epoch=update.epoch_id,
+				sender_leaf_index=update.committer_index,
+				authenticated_data=b"",
+				content=_unsigned_body_v,
+			)
+			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v)
+			public_key.verify(update.signature, tbs)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
 		except Exception:

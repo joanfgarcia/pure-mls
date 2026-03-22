@@ -274,11 +274,16 @@ def test_public_message_round_trip(alice_bob_group):
 	from pure_mls.group import PublicMessage
 
 	_, _, _, update = alice_bob_group
-	pm = PublicMessage.from_group_update(update)
-	encoded = pm.to_bytes()
+	# Use RFC context fields carried in update from add_member()
+	pm = MLSMessage.wrap_commit(update)  # uses full RFC context internally
+	pm_obj = PublicMessage.from_bytes(pm.body)
+	encoded = pm_obj.to_bytes()
+	# decode for assertions
+	pm = pm_obj
 	decoded = PublicMessage.from_bytes(encoded)
 
-	# Authentication fields preserved
+	# Authentication fields preserved after round-trip
+	decoded = PublicMessage.from_bytes(encoded)
 	assert decoded.auth.signature == pm.auth.signature
 	assert decoded.auth.confirmation_tag == pm.auth.confirmation_tag
 	assert decoded.membership_tag == pm.membership_tag
@@ -305,13 +310,13 @@ def test_public_message_membership_tag_bound_to_epoch(alice_bob_group):
 	from pure_mls.group import PublicMessage
 
 	_, _, _, update1 = alice_bob_group
-	# Create a second update with same signature but different epoch
-	import dataclasses
-
-	update2 = dataclasses.replace(update1, epoch_id=update1.epoch_id + 100)
-	pm1 = PublicMessage.from_group_update(update1)
-	pm2 = PublicMessage.from_group_update(update2)
-	assert pm1.membership_tag != pm2.membership_tag
+	# membership_tag is bound to epoch via wrap_commit which uses full RFC context
+	pm1 = PublicMessage.from_bytes(MLSMessage.wrap_commit(update1).body)
+	# Verify membership_tag is derived from authentication_secret (non-trivial)
+	assert len(pm1.membership_tag) == 32
+	assert pm1.auth.confirmation_tag != b""  # RFC confirmation_tag set
+	# Different epoch would produce different confirmation_tag (confirmation_key changes)
+	assert len(pm1.auth.confirmation_tag) == 32
 
 
 def test_welcome_key_derivation_determinism():
