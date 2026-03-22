@@ -1,8 +1,9 @@
 import pytest
 
-from pure_mls.group import GroupUpdate, MLSGroup, WelcomeInfo
+from pure_mls.group import GroupUpdate, MLSGroup, _make_kp_ref
+from pure_mls.group import _transcript_hash as _th
 from pure_mls.keys import KemKey, SignatureKey
-from pure_mls.tree import KeyPackage, ParentNode, RatchetTree
+from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
 
 
 def test_welcome_info_from_bytes_errors():
@@ -15,18 +16,16 @@ def test_welcome_info_from_bytes_errors():
 	group2, welcome, update = group.add_member(kp)
 
 	# Manually corrupt the tree_bytes node type to 0x02 to trigger ParentNode logic
-	# Actually, the RatchetTree in WelcomeInfo only has LeafNode and None right now.
-	# Let's just create a custom WelcomeInfo with a ParentNode to hit the serialization path
-	# For from_bytes to hit 0x02, we need a to_bytes that generated 0x02.
 	tree = RatchetTree(1)
 	tree.nodes = [ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32)]
+	from pure_mls.group import WelcomeInfo
+
 	w_parent = WelcomeInfo(b"g", 1, tree, b"J" * 32, b"H" * 32, 2)
 	w_parent_bytes = w_parent.to_bytes()
 	parsed = WelcomeInfo.from_bytes(w_parent_bytes)
 	assert isinstance(parsed.tree.nodes[0], ParentNode)
 
 	# Trigger ValueError for invalid node type
-	# Directly feed invalid bytes to RatchetTree since WelcomeInfo from_bytes is now MAC-protected
 	bad_tree_bytes = b"\x00\x00\x00\x00\x03" + b"X" * 64
 	with pytest.raises(ValueError, match="Invalid node type"):
 		RatchetTree.from_bytes(bad_tree_bytes)
@@ -39,8 +38,7 @@ def test_add_member_parent_node():
 	kem1 = KemKey()
 	group = MLSGroup.create(b"g1", sig1, kem1)
 
-	# Since EpochState.tree is frozen (tuple), we must work with a fresh mutable tree.
-	# We pre-populate a standalone tree with a ParentNode to exercise the isinstance branch in add_member.
+	# Pre-populate a standalone tree with a ParentNode to exercise the isinstance branch.
 	raw_tree = RatchetTree(num_leaves=2)
 	raw_tree.set_leaf(0, group.state.tree.get_node(0))
 	raw_tree.set_parent(1, ParentNode(public_key=b"A" * 32, parent_hash=b"B" * 32))
@@ -56,24 +54,32 @@ def test_process_update_errors():
 	kem = KemKey()
 	group = MLSGroup.create(b"g1", sig, kem)
 
-	update = GroupUpdate(epoch_id=1, tree=group.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"")
-
-	import hashlib
-
+	# Empty secrets — sign with the STATE-02 full GroupInfo hash
 	epoch_id = 1
 	tree = group.state.tree
-	encrypted_commit_secrets = {}
-	ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(encrypted_commit_secrets.items()))
-	transcript_hash = hashlib.sha256(
-		epoch_id.to_bytes(8, "big") + tree.to_bytes() + group.state.key_schedule.confirmation_key + ciphertexts_bytes
-	).digest()
-	update.signature = sig.sign(transcript_hash)
+	encrypted_commit_secrets: dict[bytes, bytes] = {}
+	ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_commit_secrets.items()))
+	transcript_hash = _th(
+		group.group_id,
+		epoch_id,
+		tree,
+		group.state.key_schedule.confirmation_key,
+		ciphertexts_bytes,
+		sender_index=0,
+	)
+	update = GroupUpdate(
+		epoch_id=epoch_id,
+		tree=tree,
+		encrypted_commit_secrets=encrypted_commit_secrets,
+		committer_index=0,
+		signature=sig.sign(transcript_hash),
+	)
 
-	# Sender is self but lacking secret -> raises ValueError
+	# No KPRef for my leaf -> raises ValueError
 	with pytest.raises(ValueError, match="Not invited to this epoch"):
 		group.process_update(update)
 
-	update.signature = b"badsig\x00" * 9  # roughly 63 bytes or whatever
+	update.signature = b"badsig\x00" * 9
 	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format"):
 		group.process_update(update)
 
@@ -82,44 +88,48 @@ def test_process_update_errors():
 	kp = KeyPackage(identity_key_pub=sig2.public_bytes(), init_key_pub=kem2.public_bytes())
 	_, _, real_update = group.add_member(kp)
 
-	# Alter my_index to simulate being the receiver but without encrypted commit secret
-	group.my_index = 1  # Index 1 is a ParentNode, not in secrets
-	with pytest.raises(ValueError, match="Not invited to this epoch"):
+	# Alter my_index to point to a ParentNode (leaf_node lookup fails)
+	group.my_index = 1  # ParentNode
+	with pytest.raises(ValueError, match="My leaf node not found"):
 		group.process_update(real_update)
 	group.my_index = 0
 
-	# Alter ciphertext to fail decryption but sign it properly to bypass STATE-04 defenses
+	# Build a bad update: valid KPRef but corrupted ciphertext, properly signed
+	my_leaf = group.state.tree.get_node(0)
+	assert isinstance(my_leaf, LeafNode)
+	my_kp_ref = _make_kp_ref(my_leaf.key_package)
+	bad_secrets: dict[bytes, bytes] = {my_kp_ref: b"bad_ciphertext" * 5}
+	bad_ciphertexts_bytes = b"".join(k + v for k, v in sorted(bad_secrets.items()))
+	bad_transcript_hash = _th(
+		group.group_id,
+		1,
+		real_update.tree,
+		group.state.key_schedule.confirmation_key,
+		bad_ciphertexts_bytes,
+		sender_index=0,
+	)
 	bad_update = GroupUpdate(
 		epoch_id=1,
 		tree=real_update.tree,
-		encrypted_commit_secrets={0: b"bad_ciphertext" * 5},
+		encrypted_commit_secrets=bad_secrets,
 		committer_index=0,
-		signature=b"",
+		signature=sig.sign(bad_transcript_hash),
 	)
-
-	ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(bad_update.encrypted_commit_secrets.items()))
-	transcript_hash = hashlib.sha256(
-		bad_update.epoch_id.to_bytes(8, "big") + bad_update.tree.to_bytes() + group.state.key_schedule.confirmation_key + ciphertexts_bytes
-	).digest()
-	bad_update.signature = sig.sign(transcript_hash)
 
 	from cryptography.exceptions import InvalidTag
 
 	with pytest.raises(InvalidTag):
 		group.process_update(bad_update)
 
-	# Test ParentNode inside tree for process_update
+	# Test ParentNode inside tree for process_update -> invalid committer index
 	tree_with_parent = RatchetTree(2)
 	tree_with_parent.nodes = [None, ParentNode(b"A" * 32, b"B" * 32)]
 	update_parent = GroupUpdate(
 		epoch_id=1,
 		tree=tree_with_parent,
-		encrypted_commit_secrets={0: real_update.encrypted_commit_secrets[2]},
-		committer_index=0,
+		encrypted_commit_secrets={},
+		committer_index=1,
 		signature=b"",
 	)
-
-	# Sender is self check (should be None)
-	update_parent.committer_index = 1
 	with pytest.raises(ValueError, match="Invalid committer index"):
 		group.process_update(update_parent)

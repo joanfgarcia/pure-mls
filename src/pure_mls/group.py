@@ -30,20 +30,19 @@ class WelcomeInfo:
 	confirmed_transcript_hash: bytes
 	joiner_index: int
 
-
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
 		"""
 		Encrypts an application message for this epoch using AES-GCM.
 		RFC 9420: Uses the epoch's encryption_secret.
 		"""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-		
+
 		aesgcm = AESGCM(self.application_key)
 		nonce = os.urandom(12)  # 96-bit nonce
 		# We use the group_id + epoch_id as Associated Data (AD) for integrity
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
 		ciphertext = aesgcm.encrypt(nonce, plaintext, ad)
-		
+
 		# Payload: [nonce (12)] + [ciphertext (tag+data)]
 		return nonce + ciphertext
 
@@ -52,16 +51,16 @@ class WelcomeInfo:
 		Decrypts an application message for this epoch.
 		"""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-		
+
 		if len(payload) < 28:
 			raise ValueError("Application message payload too short")
-			
+
 		nonce = payload[:12]
 		ciphertext = payload[12:]
-		
+
 		aesgcm = AESGCM(self.application_key)
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
-		
+
 		try:
 			return aesgcm.decrypt(nonce, ciphertext, ad)
 		except Exception as e:
@@ -115,13 +114,57 @@ class WelcomeInfo:
 		return cls(group_id, epoch_id, tree, joiner_secret, confirmed_transcript_hash, joiner_index)
 
 
+# RFC 9420 §8.2: GroupInfo framing fields included in transcript_hash
+# cipher_suite 0x0001 = MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (our only supported suite)
+_CIPHER_SUITE: bytes = b"\x00\x01"
+# extensions: empty extension list (4-byte length prefix = 0)
+_EXTENSIONS_EMPTY: bytes = b"\x00\x00\x00\x00"
+
+
+def _make_kp_ref(kp: KeyPackage) -> bytes:
+	"""STATE-04: KeyPackageRef = SHA-256(kp.to_bytes())[:16] per RFC 9420 §10.2."""
+	return hashlib.sha256(kp.to_bytes()).digest()[:16]
+
+
+def _transcript_hash(
+	group_id: bytes,
+	epoch_id: int,
+	tree: RatchetTree,
+	confirmation_key: bytes,
+	ciphertexts_bytes: bytes,
+	sender_index: int,
+) -> bytes:
+	"""STATE-02: Full GroupInfo transcript hash per RFC 9420 §8.2.
+
+	Covers: group_id, cipher_suite, epoch_id, tree, confirmation_key,
+	ciphertexts, extensions, sender. Prevents group-ID substitution attacks
+	between groups managed by the same committer.
+	"""
+	return hashlib.sha256(
+		len(group_id).to_bytes(2, "big")
+		+ group_id
+		+ _CIPHER_SUITE
+		+ epoch_id.to_bytes(8, "big")
+		+ tree.to_bytes()
+		+ confirmation_key
+		+ ciphertexts_bytes
+		+ _EXTENSIONS_EMPTY
+		+ sender_index.to_bytes(4, "big")
+	).digest()
+
+
 @dataclass
 class GroupUpdate:
-	"""A conceptual Commit message containing the new tree and HPKE-encrypted commit_secrets for peers."""
+	"""A Commit message with HPKE-encrypted commit_secrets keyed by KeyPackageRef.
+
+	STATE-04: encrypted_commit_secrets is keyed by KeyPackageRef
+	(SHA-256(kp.to_bytes())[:16]) rather than tree index, making
+	commit secret lookup resilient to KEM key rotation.
+	"""
 
 	epoch_id: int
 	tree: RatchetTree
-	encrypted_commit_secrets: dict[int, bytes]
+	encrypted_commit_secrets: dict[bytes, bytes]
 	committer_index: int
 	signature: bytes
 
@@ -189,19 +232,29 @@ class MLSGroup:
 		# 2. Re-randomize the root secret (Simulated Commit)
 		commit_secret = os.urandom(32)
 
-		encrypted_secrets = {}
+		# STATE-04: key commit secrets by KeyPackageRef (SHA-256(kp)[:16])
+		# so lookup remains stable even if a member rotates their KEM key.
+		encrypted_secrets: dict[bytes, bytes] = {}
 		for i, node in enumerate(new_tree.nodes):
 			if isinstance(node, LeafNode) and i != self.my_index:
 				pk = node.public_key
 				# HPKE context isolation (CRIT-01)
 				enc, ct = HPKE.seal(pk, commit_secret, info=b"mls10-commit-secret")
-				encrypted_secrets[i] = enc + ct
+				kp_ref = _make_kp_ref(node.key_package)
+				encrypted_secrets[kp_ref] = enc + ct
 
 		# 3. Advance the epoch
-		ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(encrypted_secrets.items()))
-		transcript_hash = hashlib.sha256(
-			(self.state.epoch_id + 1).to_bytes(8, "big") + new_tree.to_bytes() + self.state.key_schedule.confirmation_key + ciphertexts_bytes
-		).digest()
+		# STATE-02: deterministic canonical ordering by KP ref for transcript stability
+		ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_secrets.items()))
+		new_epoch_id = self.state.epoch_id + 1
+		transcript_hash = _transcript_hash(
+			self.group_id,
+			new_epoch_id,
+			new_tree,
+			self.state.key_schedule.confirmation_key,
+			ciphertexts_bytes,
+			sender_index=self.my_index,
+		)
 		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
 
 		# Sign the update payload to prevent Commit Forgery
@@ -255,24 +308,36 @@ class MLSGroup:
 		if not isinstance(committer_node, LeafNode):
 			raise ValueError("Invalid committer index")
 
-		# 1. Verify Signature FIRST to prevent padding oracles (STATE-04)
-		ciphertexts_bytes = b"".join(k.to_bytes(4, "big") + v for k, v in sorted(update.encrypted_commit_secrets.items()))
+		# 1. Verify Signature FIRST to prevent padding oracles
+		# STATE-02: recompute full GroupInfo transcript hash
+		ciphertexts_bytes = b"".join(k + v for k, v in sorted(update.encrypted_commit_secrets.items()))
 		try:
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
-			transcript_hash = hashlib.sha256(
-				update.epoch_id.to_bytes(8, "big") + update.tree.to_bytes() + self.state.key_schedule.confirmation_key + ciphertexts_bytes
-			).digest()
+			transcript_hash = _transcript_hash(
+				self.group_id,
+				update.epoch_id,
+				update.tree,
+				self.state.key_schedule.confirmation_key,
+				ciphertexts_bytes,
+				sender_index=update.committer_index,
+			)
 			public_key.verify(update.signature, transcript_hash)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
 		except Exception:
 			raise ValueError("Invalid signature format")
 
-		# 2. HPKE Decapsulate only authentic ciphertexts
-		if self.my_index not in update.encrypted_commit_secrets:
-			raise ValueError(f"Not invited to this epoch (Leaf Index {self.my_index} not found in update)")
+		# 2. STATE-04: lookup commit secret by my KeyPackageRef, not by tree index.
+		# This survives KEM key rotation: the ref is stable as long as the member
+		# does not generate a brand-new KeyPackage in the same epoch.
+		my_kp = self.state.tree.get_node(self.my_index)
+		if not isinstance(my_kp, LeafNode):
+			raise ValueError("My leaf node not found in tree")
+		my_kp_ref = _make_kp_ref(my_kp.key_package)
+		if my_kp_ref not in update.encrypted_commit_secrets:
+			raise ValueError("Not invited to this epoch (KeyPackageRef not found in commit)")
 
-		enc_ct = update.encrypted_commit_secrets[self.my_index]
+		enc_ct = update.encrypted_commit_secrets[my_kp_ref]
 		enc, ct = enc_ct[:32], enc_ct[32:]
 		# HPKE context isolation (CRIT-01)
 		commit_secret = HPKE.open(self.my_kem_key, enc, ct, info=b"mls10-commit-secret")
@@ -280,20 +345,19 @@ class MLSGroup:
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
 
-
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
 		"""
 		Encrypts an application message for this epoch using AES-GCM.
 		RFC 9420: Uses the epoch's encryption_secret.
 		"""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-		
+
 		aesgcm = AESGCM(self.application_key)
 		nonce = os.urandom(12)  # 96-bit nonce
 		# We use the group_id + epoch_id as Associated Data (AD) for integrity
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
 		ciphertext = aesgcm.encrypt(nonce, plaintext, ad)
-		
+
 		# Payload: [nonce (12)] + [ciphertext (tag+data)]
 		return nonce + ciphertext
 
@@ -302,16 +366,16 @@ class MLSGroup:
 		Decrypts an application message for this epoch.
 		"""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-		
+
 		if len(payload) < 28:
 			raise ValueError("Application message payload too short")
-			
+
 		nonce = payload[:12]
 		ciphertext = payload[12:]
-		
+
 		aesgcm = AESGCM(self.application_key)
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
-		
+
 		try:
 			return aesgcm.decrypt(nonce, ciphertext, ad)
 		except Exception as e:

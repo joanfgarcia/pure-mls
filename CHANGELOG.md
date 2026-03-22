@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-22
+
+### Added
+
+- **[SECURITY] STATE-02 — Full GroupInfo Transcript Hash (RFC 9420 §8.2)**: `transcript_hash` now
+  covers `group_id`, `cipher_suite` (fixed `0x0001`), `epoch_id`, `tree`, `confirmation_key`,
+  `ciphertexts`, `extensions`, and `sender`. Previously missing fields allowed a theoretical
+  group-ID substitution attack; now any commit forged for a different group ID fails Ed25519
+  signature verification. Implemented in new `_transcript_hash()` helper; both `add_member` and
+  `process_update` use it consistently.
+- **[SECURITY] STATE-04 — KeyPackageRef Hashing (RFC 9420 §10.2)**: `GroupUpdate.encrypted_commit_secrets`
+  is now keyed by `KeyPackageRef = SHA-256(kp.to_bytes())[:16]` (bytes) instead of tree leaf index
+  (int). This makes commit-secret lookup resilient to KEM key rotation: the ref is stable as long as
+  the member does not generate a brand-new `KeyPackage` within the same epoch. New `_make_kp_ref()`
+  helper exported from `pure_mls.group`.
+- **[QA] `tests/test_state_findings.py`** (8 new tests): `test_transcript_hash_includes_group_id`,
+  `test_transcript_hash_includes_sender`, `test_group_id_substitution_attack_rejected`,
+  `test_legitimate_process_update_still_works`, `test_kp_ref_is_deterministic`,
+  `test_kp_ref_differs_for_different_keys`, `test_commit_secrets_keyed_by_kp_ref`,
+  `test_process_update_uses_kp_ref_not_index`. **43/44 tests green** (MQTT excluded: no broker).
+
+### Fixed
+
+- **[QUALITY] W293 Lint** — 12 blank-line-with-whitespace errors in `group.py` cleared by
+  `ruff --fix`. All lint checks now pass (Sound of Silence policy maintained).
+- **`tests/test_group_errors.py`** — Updated to use `KeyPackageRef` (bytes) keys and
+  `_transcript_hash()` for constructing mock `GroupUpdate` objects, replacing the old
+  int-indexed schema.
+
 ## [0.2.3] - 2026-03-22
 
 ### Fixed
