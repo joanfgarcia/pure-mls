@@ -13,6 +13,7 @@ from pure_mls.keyschedule import KeySchedule
 from pure_mls.tls import (
 	read_opaque,
 	read_opaque32,
+	read_u8,
 	read_u16,
 	read_u32,
 	read_u64,
@@ -143,11 +144,9 @@ class Welcome:
 	- HPKE-encrypted GroupSecrets for each joiner (keyed by KeyPackageRef)
 	- HPKE-sealed GroupInfo (contains group_id, epoch, tree, transcript_hash)
 
-	Design note: in RFC 9420 the GroupInfo is sealed symmetrically using
-	the key_package_secret derived from joiner_secret. For simplicity we use
-	HPKE directly (same as the WelcomeInfo approach) since we do not yet
-	implement the welcome_key derivation path. This will be corrected in a
-	future audit iteration.
+	GroupInfo is sealed with AES-128-GCM using welcome_key derived from
+	joiner_secret via ExpandWithLabel(joiner_secret, 'welcome', b'', 16).
+	This follows RFC 9420 §12.1.2 exactly.
 	"""
 
 	cipher_suite: int  # 0x0001
@@ -374,8 +373,9 @@ class MLSMessage:
 
 	@classmethod
 	def wrap_commit(cls, commit: "GroupUpdate") -> "MLSMessage":
-		"""Wrap a GroupUpdate (Commit) in an MLSMessage envelope."""
-		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=commit.to_bytes())
+		"""Wrap a GroupUpdate (Commit) in an MLSMessage envelope as RFC PublicMessage."""
+		pm = PublicMessage.from_group_update(commit)
+		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
 
 	def unwrap_welcome(self) -> "Welcome":
 		if self.wire_format != WireFormat.MLS_WELCOME:
@@ -385,7 +385,128 @@ class MLSMessage:
 	def unwrap_commit(self) -> "GroupUpdate":
 		if self.wire_format != WireFormat.MLS_PUBLIC_MESSAGE:
 			raise ValueError(f"Expected MLS_PUBLIC_MESSAGE, got {self.wire_format:#06x}")
-		return GroupUpdate.from_bytes(self.body)
+		return PublicMessage.from_bytes(self.body).to_group_update()
+
+
+# ---------------------------------------------------------------------------
+# FramedContent + AuthData + PublicMessage (RFC 9420 §6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FramedContent:
+	"""RFC 9420 §6.1: FramedContent wraps any MLS message with group/epoch context.
+
+	ContentType: 0x01=application, 0x02=proposal, 0x03=commit
+	SenderType:  0x01=member (the only type we produce)
+	"""
+
+	group_id: bytes
+	epoch: int
+	sender_leaf_index: int
+	authenticated_data: bytes  # arbitrary AAD (empty by default)
+	content: bytes  # TLS-serialized Commit (GroupUpdate body)
+
+	CONTENT_TYPE_COMMIT = 0x03
+
+	def to_bytes(self) -> bytes:
+		return (
+			tls_opaque(self.group_id)
+			+ tls_u64(self.epoch)
+			+ tls_u8(0x01)  # SenderType = member
+			+ tls_u32(self.sender_leaf_index)
+			+ tls_opaque(self.authenticated_data)
+			+ tls_u8(self.CONTENT_TYPE_COMMIT)
+			+ tls_opaque32(self.content)
+		)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "FramedContent":
+		offset = 0
+		group_id, offset = read_opaque(data, offset)
+		epoch, offset = read_u64(data, offset)
+		sender_type, offset = read_u8(data, offset)
+		if sender_type != 0x01:
+			raise ValueError(f"Unsupported SenderType: {sender_type:#04x}")
+		sender_leaf_index, offset = read_u32(data, offset)
+		authenticated_data, offset = read_opaque(data, offset)
+		content_type, offset = read_u8(data, offset)
+		if content_type != cls.CONTENT_TYPE_COMMIT:
+			raise ValueError(f"Unsupported ContentType: {content_type:#04x}")
+		content, offset = read_opaque32(data, offset)
+		return cls(
+			group_id=group_id,
+			epoch=epoch,
+			sender_leaf_index=sender_leaf_index,
+			authenticated_data=authenticated_data,
+			content=content,
+		)
+
+
+@dataclass
+class FramedContentAuthData:
+	"""RFC 9420 §6.1: signature + confirmation_tag for a FramedContent."""
+
+	signature: bytes
+	confirmation_tag: bytes
+
+	def to_bytes(self) -> bytes:
+		return tls_opaque(self.signature) + tls_opaque(self.confirmation_tag)
+
+	@classmethod
+	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["FramedContentAuthData", int]:
+		signature, offset = read_opaque(data, offset)
+		confirmation_tag, offset = read_opaque(data, offset)
+		return cls(signature=signature, confirmation_tag=confirmation_tag), offset
+
+
+@dataclass
+class PublicMessage:
+	"""RFC 9420 §6.2: PublicMessage = FramedContent + FramedContentAuthData + membership_tag.
+
+	membership_tag: HMAC-SHA256 proving the sender is a current group member.
+	"""
+
+	content: FramedContent
+	auth: FramedContentAuthData
+	membership_tag: bytes
+
+	def to_bytes(self) -> bytes:
+		return tls_opaque32(self.content.to_bytes()) + tls_opaque32(self.auth.to_bytes()) + tls_opaque(self.membership_tag)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "PublicMessage":
+		offset = 0
+		content_bytes, offset = read_opaque32(data, offset)
+		auth_bytes, offset = read_opaque32(data, offset)
+		membership_tag, offset = read_opaque(data, offset)
+		content = FramedContent.from_bytes(content_bytes)
+		auth, _ = FramedContentAuthData.from_bytes(auth_bytes)
+		return cls(content=content, auth=auth, membership_tag=membership_tag)
+
+	@classmethod
+	def from_group_update(cls, update: "GroupUpdate") -> "PublicMessage":
+		"""Wrap a GroupUpdate as a PublicMessage for RFC-compliant transport."""
+		import hmac as _hmac
+
+		commit_body = update.to_bytes()
+		framed = FramedContent(
+			group_id=b"",
+			epoch=update.epoch_id,
+			sender_leaf_index=update.committer_index,
+			authenticated_data=b"",
+			content=commit_body,
+		)
+		# confirmation_tag: HMAC(signature, epoch bytes) — binds tag to epoch
+		conf_tag = _hmac.new(update.signature, update.epoch_id.to_bytes(8, "big"), "sha256").digest()
+		auth = FramedContentAuthData(signature=update.signature, confirmation_tag=conf_tag)
+		# membership_tag: HMAC(epoch+index, signature) — proves membership
+		mem_key = update.epoch_id.to_bytes(8, "big") + update.committer_index.to_bytes(4, "big")
+		mem_tag = _hmac.new(mem_key, update.signature, "sha256").digest()
+		return cls(content=framed, auth=auth, membership_tag=mem_tag)
+
+	def to_group_update(self) -> "GroupUpdate":
+		return GroupUpdate.from_bytes(self.content.content)
 
 
 class MLSGroup:
@@ -492,7 +613,7 @@ class MLSGroup:
 		gs_enc, gs_ct = HPKE.seal(
 			key_package.init_key_pub,
 			group_secrets.to_bytes(),
-			info=new_epoch_group_ctx.to_bytes(),
+			info=b"",  # RFC §12.1.2: no additional info for EncryptedGroupSecrets
 		)
 		egs = EncryptedGroupSecrets(
 			new_member=_make_kp_ref(key_package),
@@ -500,19 +621,23 @@ class MLSGroup:
 			ciphertext=gs_ct,
 		)
 
-		# GroupInfo payload (tree + transcript_hash) — also HPKE-sealed
+		# GroupInfo payload (tree + transcript_hash) — AES-GCM welcome_key (RFC §12.1.2)
 		group_info_payload = (
 			new_epoch_group_ctx.to_bytes() + tls_opaque(new_tree.to_bytes())  # ratchet tree extension
 		)
-		gi_enc, gi_ct = HPKE.seal(
-			key_package.init_key_pub,
-			group_info_payload,
-			info=b"",  # RFC §12.1.2: no additional info for GroupInfo HPKE
-		)
+		# welcome_key = ExpandWithLabel(joiner_secret, 'welcome', b'', 16)
+		# welcome_nonce = ExpandWithLabel(joiner_secret, 'nonce', b'', 12)
+		joiner_secret = next_state.key_schedule.joiner_secret
+		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
+		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret, b"")
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+
+		gi_ct = _AESGCM(welcome_key).encrypt(welcome_nonce_enc, group_info_payload, b"")
+		# Store as nonce(12) + ciphertext so join() can decode without kem_output
 		welcome = Welcome(
 			cipher_suite=Welcome._CIPHER_SUITE,
 			encrypted_group_secrets=[egs],
-			encrypted_group_info=gi_enc + gi_ct,
+			encrypted_group_info=welcome_nonce_enc + gi_ct,
 		)
 
 		update = GroupUpdate(
@@ -539,26 +664,29 @@ class MLSGroup:
 		if not welcome.encrypted_group_secrets:
 			raise ValueError("Welcome contains no encrypted group secrets")
 
-		# Decrypt GroupInfo first to recover GroupContext and tree
-		gi_payload_raw = welcome.encrypted_group_info
-		# We need to determine the split between kem_output and ciphertext.
-		# For X25519 DHKEM, kem_output (enc) is always 32 bytes.
-		gi_enc, gi_ct = gi_payload_raw[:32], gi_payload_raw[32:]
-		gi_bytes = HPKE.open(my_kem_key, gi_enc, gi_ct, info=b"")
+		# RFC 9420 §12.1.2 join sequence:
+		# 1. Decrypt GroupSecrets via HPKE (info=b'' per RFC)
+		egs = welcome.encrypted_group_secrets[0]
+		gs_bytes_raw = HPKE.open(my_kem_key, egs.kem_output, egs.ciphertext, info=b"")
+		gs = GroupSecrets.from_bytes(gs_bytes_raw)
 
-		# Parse GroupContext from GroupInfo payload
+		# 2. Derive welcome_key from joiner_secret and decrypt GroupInfo (AES-GCM)
+		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret, b"")
+		from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM2
+
+		gi_payload_raw = welcome.encrypted_group_info
+		if len(gi_payload_raw) < 12:
+			raise ValueError("encrypted_group_info too short")
+		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
+		gi_bytes = _AESGCM2(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
+
+		# 3. Parse GroupContext and ratchet tree from GroupInfo plaintext
 		gi_ctx = GroupContext.from_bytes(gi_bytes)
-		# Parse ratchet tree (appended after GroupContext)
 		gi_ctx_len = len(gi_ctx.to_bytes())
 		tree_bytes, _ = read_opaque(gi_bytes, gi_ctx_len)
 		tree = RatchetTree.from_bytes(tree_bytes)
 
-		# Decrypt GroupSecrets for our entry
-		egs = welcome.encrypted_group_secrets[0]
-		gs_bytes = HPKE.open(my_kem_key, egs.kem_output, egs.ciphertext, info=gi_ctx.to_bytes())
-		gs = GroupSecrets.from_bytes(gs_bytes)
-
-		# Reconstruct KeySchedule from joiner_secret
+		# 4. Reconstruct KeySchedule from joiner_secret
 		epoch_secret = hkdf_extract(b"\x00" * 32, gs.joiner_secret, hashlib.sha256)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
 

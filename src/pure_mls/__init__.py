@@ -1,11 +1,14 @@
 from pure_mls.epoch import EpochState
 from pure_mls.group import (
 	EncryptedGroupSecrets,
+	FramedContent,
+	FramedContentAuthData,
 	GroupContext,
 	GroupSecrets,
 	GroupUpdate,
 	MLSGroup,
 	MLSMessage,
+	PublicMessage,
 	Welcome,
 	WelcomeInfo,
 	WireFormat,
@@ -25,6 +28,10 @@ __all__ = [
 	"GroupUpdate",
 	"MLSMessage",
 	"WireFormat",
+	# RFC 9420 §6 framing (v1.1)
+	"FramedContent",
+	"FramedContentAuthData",
+	"PublicMessage",
 	# RFC 9420 internal structures
 	"GroupContext",
 	"GroupSecrets",

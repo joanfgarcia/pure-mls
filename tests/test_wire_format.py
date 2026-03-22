@@ -227,3 +227,114 @@ def test_mls_message_full_firebase_flow():
 	commit_msg = MLSMessage.from_bytes(mls_commit)
 	decoded_update = commit_msg.unwrap_commit()
 	assert decoded_update.epoch_id == update.epoch_id
+
+
+# ---------------------------------------------------------------------------
+# v1.1: FramedContent + FramedContentAuthData + PublicMessage (RFC 9420 §6)
+# ---------------------------------------------------------------------------
+
+
+def test_framed_content_round_trip(alice_bob_group):
+	"""FramedContent TLS to_bytes()/from_bytes() preserves all fields."""
+	from pure_mls.group import FramedContent
+
+	_, _, _, update = alice_bob_group
+	framed = FramedContent(
+		group_id=b"test-group",
+		epoch=42,
+		sender_leaf_index=0,
+		authenticated_data=b"aad",
+		content=update.to_bytes(),
+	)
+	encoded = framed.to_bytes()
+	decoded = FramedContent.from_bytes(encoded)
+	assert decoded.group_id == framed.group_id
+	assert decoded.epoch == framed.epoch
+	assert decoded.sender_leaf_index == framed.sender_leaf_index
+	assert decoded.authenticated_data == framed.authenticated_data
+	assert decoded.content == framed.content
+
+
+def test_framed_content_invalid_sender_type():
+	"""FramedContent.from_bytes raises ValueError for non-member SenderType."""
+	from pure_mls.group import FramedContent
+	from pure_mls.tls import tls_opaque, tls_u8, tls_u64
+
+	bad = (
+		tls_opaque(b"g")  # group_id
+		+ tls_u64(1)  # epoch
+		+ tls_u8(0xFF)  # SenderType = invalid
+	)
+	with pytest.raises(ValueError, match="SenderType"):
+		FramedContent.from_bytes(bad)
+
+
+def test_public_message_round_trip(alice_bob_group):
+	"""PublicMessage to_bytes()/from_bytes() extracts the same GroupUpdate."""
+	from pure_mls.group import PublicMessage
+
+	_, _, _, update = alice_bob_group
+	pm = PublicMessage.from_group_update(update)
+	encoded = pm.to_bytes()
+	decoded = PublicMessage.from_bytes(encoded)
+
+	# Authentication fields preserved
+	assert decoded.auth.signature == pm.auth.signature
+	assert decoded.auth.confirmation_tag == pm.auth.confirmation_tag
+	assert decoded.membership_tag == pm.membership_tag
+
+	# GroupUpdate fully recoverable
+	recovered = decoded.to_group_update()
+	assert recovered.epoch_id == update.epoch_id
+	assert recovered.signature == update.signature
+
+
+def test_wrap_commit_produces_public_message(alice_bob_group):
+	"""MLSMessage.wrap_commit() body parses as PublicMessage (not raw GroupUpdate)."""
+	from pure_mls.group import PublicMessage
+
+	_, _, _, update = alice_bob_group
+	msg = MLSMessage.wrap_commit(update)
+	pm = PublicMessage.from_bytes(msg.body)
+	assert pm.content.epoch == update.epoch_id
+	assert pm.auth.signature == update.signature
+
+
+def test_public_message_membership_tag_bound_to_epoch(alice_bob_group):
+	"""membership_tag differs between epochs — proves it's epoch-bound."""
+	from pure_mls.group import PublicMessage
+
+	_, _, _, update1 = alice_bob_group
+	# Create a second update with same signature but different epoch
+	import dataclasses
+
+	update2 = dataclasses.replace(update1, epoch_id=update1.epoch_id + 100)
+	pm1 = PublicMessage.from_group_update(update1)
+	pm2 = PublicMessage.from_group_update(update2)
+	assert pm1.membership_tag != pm2.membership_tag
+
+
+def test_welcome_key_derivation_determinism():
+	"""derive_welcome_key and derive_welcome_nonce are deterministic."""
+	from pure_mls.keyschedule import KeySchedule
+
+	secret = b"\\x42" * 32
+	k1 = KeySchedule.derive_welcome_key(secret, b"")
+	k2 = KeySchedule.derive_welcome_key(secret, b"")
+	n1 = KeySchedule.derive_welcome_nonce(secret, b"")
+	n2 = KeySchedule.derive_welcome_nonce(secret, b"")
+
+	assert k1 == k2
+	assert n1 == n2
+	assert len(k1) == 16  # AES-128 key
+	assert len(n1) == 12  # GCM nonce
+	assert k1 != n1  # Key and nonce are different
+
+
+def test_welcome_key_changes_with_secret():
+	"""Different joiner_secrets produce different welcome keys."""
+	from pure_mls.keyschedule import KeySchedule
+
+	k1 = KeySchedule.derive_welcome_key(b"\\xAA" * 32, b"")
+	k2 = KeySchedule.derive_welcome_key(b"\\xBB" * 32, b"")
+	assert k1 != k2

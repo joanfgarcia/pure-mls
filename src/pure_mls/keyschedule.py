@@ -64,6 +64,27 @@ class KeySchedule:
 			next_init_secret=cls._expand_with_label(epoch_secret, b"init", b"", 32),
 		)
 
+	@staticmethod
+	def derive_welcome_key(joiner_secret: bytes, context: bytes) -> bytes:
+		"""RFC 9420 §12.1.2: welcome_key = ExpandWithLabel(joiner_secret, "welcome", context, 16).
+
+		Nk = 16 bytes (AES-128-GCM key length).
+		context = SHA-256(GroupInfo plaintext) or b"" for simple derivation.
+		"""
+		full_label = b"MLS 1.0 welcome"
+		hkdf_label = b"\x00\x10" + len(full_label).to_bytes(1, "big") + full_label + len(context).to_bytes(4, "big") + context
+		return hkdf_expand(joiner_secret, hkdf_label, 16, hashlib.sha256)
+
+	@staticmethod
+	def derive_welcome_nonce(joiner_secret: bytes, context: bytes) -> bytes:
+		"""RFC 9420 §12.1.2: welcome_nonce = ExpandWithLabel(joiner_secret, "nonce", context, 12).
+
+		Nn = 12 bytes (AES-128-GCM nonce length).
+		"""
+		full_label = b"MLS 1.0 nonce"
+		hkdf_label = b"\x00\x0c" + len(full_label).to_bytes(1, "big") + full_label + len(context).to_bytes(4, "big") + context
+		return hkdf_expand(joiner_secret, hkdf_label, 12, hashlib.sha256)
+
 	def to_bytes(self) -> bytes:
 		"""Serializes the full 9-secret schedule (288 bytes)."""
 		return (

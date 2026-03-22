@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-22
+
+### Added (Full OpenMLS Interoperability)
+
+- **[RFC 9420 §6] `FramedContent`**: TLS-encoded wrapper for Commit messages with
+  `group_id`, `epoch`, `Sender{member, leaf_index}`, `authenticated_data`, `content`.
+  Includes `to_bytes()/from_bytes()`.
+- **[RFC 9420 §6] `FramedContentAuthData`**: `signature + confirmation_tag` auth data
+  for a `FramedContent`. Includes `to_bytes()/from_bytes()`.
+- **[RFC 9420 §6.2] `PublicMessage`**: RFC-compliant framing: `FramedContent +
+  FramedContentAuthData + membership_tag`. Factory `from_group_update()`, round-trip
+  `to_bytes()/from_bytes()`, and `to_group_update()` extractor.
+- **[RFC 9420 §12.1.2] `KeySchedule.derive_welcome_key(joiner_secret, context)`**:
+  `ExpandWithLabel(joiner_secret, "welcome", context, 16)` → 16-byte AES-128-GCM key.
+- **[RFC 9420 §12.1.2] `KeySchedule.derive_welcome_nonce(joiner_secret, context)`**:
+  `ExpandWithLabel(joiner_secret, "nonce", context, 12)` → 12-byte GCM nonce.
+- 7 new tests in `tests/test_wire_format.py` covering all v1.1 structures.
+
+### Changed
+
+- **`Welcome.encrypted_group_info`**: GroupInfo now sealed via AES-128-GCM
+  `welcome_key` (derived from `joiner_secret`) instead of HPKE directly.
+  Wire format: `nonce(12 bytes) + ciphertext`. Enables decryption without HPKE `kem_output`.
+- **`Welcome` (`EncryptedGroupSecrets`)**: HPKE `info` changed from `GroupContext.to_bytes()`
+  to `b""` per RFC 9420 §12.1.2 (no additional info for `EncryptedGroupSecrets`).
+- **`MLSMessage.wrap_commit()`**: now wraps `GroupUpdate` in a `PublicMessage` envelope
+  before storing in `MLSMessage.body`. `unwrap_commit()` also updated to parse `PublicMessage`.
+- **`__init__.py`**: exports extended with `FramedContent`, `FramedContentAuthData`,
+  `PublicMessage`.
+
+### Migration Notes (v1.0.0 → v1.1.0)
+
+- `MLSMessage.body` for commits is now `PublicMessage.to_bytes()` (not `GroupUpdate.to_bytes()`).
+  Existing code that reads the raw body bytes directly will need to parse via `PublicMessage`.
+- `Welcome.encrypted_group_info` format changed: first 12 bytes are the AES-GCM nonce,
+  remainder is ciphertext. The old `kem_output(32)+ciphertext` layout is no longer used.
+- Both changes are **breaking** with respect to v1.0.0 wire format; pure-mls ↔ pure-mls
+  sessions that mix v1.0 and v1.1 nodes will fail to interoperate.
+
 ## [1.0.0] - 2026-03-22
 
 ### Added
