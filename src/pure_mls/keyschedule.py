@@ -83,12 +83,20 @@ class KeySchedule:
 			group_context:  TLS-encoded GroupContext (used in PSKSecret derivation, often b"" here).
 			psk_list:       Optional list of PSK contributions [(psk_id, psk_value)].
 		"""
-		# Step 1: joiner_secret = HKDF-Extract(salt=commit_secret, ikm=init_secret)
-		joiner_secret = hkdf_extract(commit_secret, init_secret, hashlib.sha256)
+		# RFC 9420 §8 Figure 22:
+		#   joiner_secret = HKDF-Extract(
+		#       salt = ExpandWithLabel(init_secret, "joiner", commit_secret, NH),
+		#       ikm  = commit_secret
+		#   )
+		joiner_salt = expand_with_label(init_secret, "joiner", commit_secret, _NH)
+		joiner_secret = hkdf_extract(joiner_salt, commit_secret, hashlib.sha256)
 
-		# Step 2: epoch_secret = HKDF-Extract(salt=PSKSecret, ikm=joiner_secret)
+		# RFC 9420 §8:
+		#   intermediate = HKDF-Extract(salt=psk_secret, ikm=joiner_secret)
+		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", group_context, NH)
 		psk_secret = _psk_secret(psk_list)
-		epoch_secret = hkdf_extract(psk_secret, joiner_secret, hashlib.sha256)
+		intermediate = hkdf_extract(psk_secret, joiner_secret, hashlib.sha256)
+		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
 
 		return cls._from_epoch_secret(epoch_secret, joiner_secret)
 
@@ -107,7 +115,7 @@ class KeySchedule:
 			epoch_authenticator=auth_secret,
 			external_secret=derive_secret(epoch_secret, "external"),
 			resumption_psk_secret=derive_secret(epoch_secret, "resumption"),
-			confirmation_key=expand_with_label(auth_secret, "confirmation", b"", _NH),
+			confirmation_key=expand_with_label(auth_secret, "confirm", b"", _NH),
 			membership_key=expand_with_label(auth_secret, "membership", b"", _NH),
 			init_secret=derive_secret(epoch_secret, "init"),
 		)

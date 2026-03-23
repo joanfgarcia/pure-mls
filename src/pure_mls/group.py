@@ -1189,10 +1189,13 @@ class MLSGroup:
 		if my_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 
-		# 6. Reconstruct KeySchedule from joiner_secret (Phase 1: PSKSecret = 0^NH for no PSKs)
-		# RFC §9.1: epoch_secret = HKDF-Extract(PSKSecret, joiner_secret)
-		# PSKSecret = HKDFExtract(0^NH, 0^NH) when no PSKs → effectively 0^NH
-		epoch_secret = hkdf_extract(b"\x00" * 32, gs.joiner_secret, hashlib.sha256)
+		# 6. Reconstruct KeySchedule from joiner_secret (RFC 9420 §8 Figure 22)
+		# Must use same derivation as KeySchedule.derive() to produce matching epoch_secret:
+		#   intermediate = HKDF-Extract(salt=psk_secret, ikm=joiner_secret)
+		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", group_context, NH)
+		psk_zeros = b"\x00" * 32
+		intermediate = hkdf_extract(psk_zeros, gs.joiner_secret, hashlib.sha256)
+		epoch_secret = expand_with_label(intermediate, "epoch", b"", 32)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
 
 		state = EpochState(
@@ -1312,8 +1315,8 @@ class MLSGroup:
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
 		content_ct = AESGCM(content_key).encrypt(content_nonce, plaintext, ad)
 
-		# RFC 9420 §9.4: Encrypt SenderData = leaf_index using first 4B of content_ct as sample
-		sample = content_ct[:4] if len(content_ct) >= 4 else content_ct.ljust(4, b"\x00")
+		# RFC 9420 §9.4: SenderData key/nonce derived from first Nh=32 bytes of content_ct
+		sample = content_ct[:32].ljust(32, b"\x00")
 		sd_key = derive_sender_data_key(self.state.key_schedule.sender_data_secret, sample)
 		sd_nonce = derive_sender_data_nonce(self.state.key_schedule.sender_data_secret, sample)
 		sd_plaintext = struct.pack(">I", self.my_index)  # leaf_index (4 bytes)
@@ -1341,11 +1344,8 @@ class MLSGroup:
 		offset += 4
 		content_ct = payload[offset:]
 
-		if len(content_ct) < 4:
-			raise ValueError("Content ciphertext too short for SenderData sample")
-
-		# 2. Decrypt SenderData to recover sender leaf_index
-		sample = content_ct[:4]
+		# RFC 9420 §9.4: SenderData sample = first Nh=32 bytes of content_ct
+		sample = content_ct[:32].ljust(32, b"\x00")
 		sd_key = derive_sender_data_key(self.state.key_schedule.sender_data_secret, sample)
 		sd_nonce = derive_sender_data_nonce(self.state.key_schedule.sender_data_secret, sample)
 		try:
