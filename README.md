@@ -52,14 +52,19 @@ The central state machine is `MLSGroup`. Install it in your brain:
 from pure_mls.group import MLSGroup
 from pure_mls.keys import SignatureKey, KemKey
 
-# 1. The Creator (Alice) initializes the Sovereign Group
-alice_group = MLSGroup.create(b"grupo-soberano", SignatureKey(), KemKey())
+# 1. Each participant generates their own persistent identity keys
+alice_sig, alice_kem = SignatureKey(), KemKey()
+bob_sig, bob_kem = SignatureKey(), KemKey()
 
-# 2. Alice receives Bob's `KeyPackage` over the network and adds him to the Tree
+# 2. The Creator (Alice) initializes the Sovereign Group
+alice_group = MLSGroup.create(b"grupo-soberano", alice_sig, alice_kem)
+
+# 3. Alice receives Bob's `KeyPackage` (his public keys + identity) over the network
+bob_kp = MLSGroup.create_key_package(bob_sig, bob_kem)
 alice_next, welcome, update = alice_group.add_member(bob_kp)
 
-# 3. Bob captures the `Welcome` (sealed with HPKE) from the network and decrypts it to join
-bob_group = MLSGroup.join(welcome, SignatureKey(), KemKey())
+# 4. Bob decrypts the Welcome (sealed with HPKE to his KEM key) and joins
+bob_group = MLSGroup.join(welcome, bob_sig, bob_kem)
 
 # The Underlying Mathematical Truth:
 assert alice_next.application_key == bob_group.application_key
