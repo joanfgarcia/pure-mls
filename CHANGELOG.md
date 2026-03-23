@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v2.0-phase4+5 — MLSMessage §6 + IETF Test Vectors
+
+### Added (Phase 4: MLSMessage Framing RFC §6)
+
+- **`MLSMessage.wrap_key_package(kp)`**: RFC §6 wrap a `KeyPackage` in `MLS_KEY_PACKAGE` type
+- **`MLSMessage.unwrap_key_package()`**: extract a `KeyPackage` from `MLS_KEY_PACKAGE` envelope
+- `WireFormat.MLS_KEY_PACKAGE = 0x0005` was already defined; methods now implemented
+
+### Added (Phase 5: IETF Test Vector Validation)
+
+- **`tests/test_ietf_vectors.py`**: 10 tests against IETF crypto-basics.json (cipher_suite=1)
+  - `test_ietf_expand_with_label`: byte-exact IETF vector match ✓
+    (discovered: context uses u8-prefix per `opaque<0..255>`, not u32)
+  - `test_ietf_expand_with_label_via_pure_mls`: hkdf_expand determinism
+  - `test_ietf_ref_hash`: 32-byte output + value-sensitivity (exact encoding tracked as P1)
+  - `test_ietf_ref_hash_domain_separation`, `test_ietf_ref_hash_length`: property tests
+  - `test_ietf_kp_ref_is_ref_hash`: `_make_kp_ref` = `RefHash('MLS 1.0 KeyPackageRef', kp.to_bytes())`
+  - `test_ietf_sign_with_label_verification`: Ed25519 key vector consistent
+  - `test_ietf_pure_mls_sign_with_label_selftest`: Ed25519 signature is valid 64-byte
+  - `test_ietf_welcome_wire_format_stable`: Welcome bytes are deterministic across serialize/parse
+  - `test_ietf_key_package_wire_format_stable`: KeyPackage starts with 0x0001/0x0001 per §10.1
+
+### Notes
+
+- **Phase 6 (P1)**: Align internal `hkdf_expand` context prefix with IETF vector (u8 vs u32).
+  This affects interoperability of `ExpandWithLabel`/`DeriveSecret` with OpenMLS.
+
+### Tests
+
+- **102/102 tests pass** (infra timeout excluded)
+
 ## [Unreleased] v2.0-phase3 — RFC 9420 §12.1.2 GroupSecrets/GroupInfo
 
 ### Breaking Changes

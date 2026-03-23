@@ -525,6 +525,17 @@ class MLSMessage:
 			raise ValueError(f"Expected MLS_PUBLIC_MESSAGE, got {self.wire_format:#06x}")
 		return PublicMessage.from_bytes(self.body).to_group_update()
 
+	@classmethod
+	def wrap_key_package(cls, kp: "KeyPackage") -> "MLSMessage":
+		"""RFC 9420 §6: Wrap a KeyPackage in MLSMessage for out-of-band advertisement."""
+		return cls(wire_format=WireFormat.MLS_KEY_PACKAGE, body=kp.to_bytes())
+
+	def unwrap_key_package(self) -> "KeyPackage":
+		"""RFC 9420 §6: Extract a KeyPackage from an MLS_KEY_PACKAGE MLSMessage."""
+		if self.wire_format != WireFormat.MLS_KEY_PACKAGE:
+			raise ValueError(f"Expected MLS_KEY_PACKAGE, got {self.wire_format:#06x}")
+		return KeyPackage.from_bytes(self.body)
+
 
 # UpdatePath / TreeKEM (RFC 9420 §12.1.1)
 
