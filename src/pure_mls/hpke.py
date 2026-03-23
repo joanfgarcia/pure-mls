@@ -9,13 +9,13 @@ from pure_mls.keys import KemKey
 class HPKE:
 	"""
 	Hybrid Public Key Encryption (RFC 9180) - Base Mode.
-	Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM.
+	Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM.
 
-	Used for end-to-end encrypting isolated messages like 'Welcome' Envelopes
-	or TreeKEM UpdatePaths across the network.
+	Matches the MLS ciphersuite MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (0x0001).
+	SUITE_ID per RFC 9180 §8: KEM=0x0020 (X25519), KDF=0x0001 (SHA-256), AEAD=0x0001 (AES-128-GCM).
 	"""
 
-	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x02"  # KEM=X25519, KDF=SHA-256, AEAD=AES-256-GCM
+	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x01"  # KEM=X25519, KDF=SHA-256, AEAD=AES-128-GCM
 	KEM_SUITE_ID = b"KEM\x00\x20"  # DHKEM(X25519)
 
 	@staticmethod
@@ -68,7 +68,7 @@ class HPKE:
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(None, b"secret", shared_secret)
-		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
 
@@ -96,7 +96,7 @@ class HPKE:
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(None, b"secret", shared_secret)
-		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 32)
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
 

@@ -54,20 +54,33 @@ class GroupContext:
 	_CIPHER_SUITE: int = 0x0001
 
 	def to_bytes(self) -> bytes:
-		"""RFC 9420 §8.1 TLS encoding of GroupContext."""
+		"""RFC 9420 §8.1 TLS encoding of GroupContext.
+
+		Wire format:
+			uint16  version (0x0001)
+			uint16  cipher_suite (0x0001)
+			uint8   len(group_id) + group_id bytes   [opaque<0..255>]
+			uint64  epoch
+			uint8   len(tree_hash) + tree_hash bytes [opaque<0..255>]
+			uint8   len(cth) + cth bytes             [opaque<0..255>]
+			uint8   0 (empty extensions vector)
+		"""
 		return (
 			tls_u16(self._VERSION)
 			+ tls_u16(self._CIPHER_SUITE)
-			+ tls_opaque(self.group_id)  # group_id<V>
-			+ tls_u64(self.epoch)  # epoch uint64
-			+ tls_opaque(self.tree_hash)  # tree_hash<V>
-			+ tls_opaque(self.confirmed_transcript_hash)  # confirmed_transcript_hash<V>
-			+ tls_u32(0)  # extensions<V> empty
+			+ tls_u8(len(self.group_id))
+			+ self.group_id
+			+ tls_u64(self.epoch)
+			+ tls_u8(len(self.tree_hash))
+			+ self.tree_hash
+			+ tls_u8(len(self.confirmed_transcript_hash))
+			+ self.confirmed_transcript_hash
+			+ tls_u8(0)  # extensions<V> empty
 		)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupContext":
-		"""Decode a TLS-encoded GroupContext."""
+		"""Decode a TLS-encoded GroupContext (RFC 9420 §8.1)."""
 		offset = 0
 		version, offset = read_u16(data, offset)
 		if version != cls._VERSION:
@@ -75,13 +88,19 @@ class GroupContext:
 		cipher_suite, offset = read_u16(data, offset)
 		if cipher_suite != cls._CIPHER_SUITE:
 			raise ValueError(f"Unsupported cipher suite: {cipher_suite:#06x}")
-		group_id, offset = read_opaque(data, offset)
+		# opaque<0..255> fields use uint8 length prefix
+		gid_len, offset = read_u8(data, offset)
+		group_id, offset = data[offset : offset + gid_len], offset + gid_len
 		epoch, offset = read_u64(data, offset)
-		tree_hash, offset = read_opaque(data, offset)
-		confirmed_transcript_hash, offset = read_opaque(data, offset)
-		# SEC-MED-01: read and discard extensions vector per RFC 9420 §8.1 TLS encoding
-		ext_len, offset = read_u32(data, offset)
-		offset += ext_len
+		th_len, offset = read_u8(data, offset)
+		tree_hash, offset = data[offset : offset + th_len], offset + th_len
+		cth_len, offset = read_u8(data, offset)
+		confirmed_transcript_hash = data[offset : offset + cth_len]
+		offset += cth_len
+		# skip extensions (uint8 length prefix)
+		if offset < len(data):
+			ext_len, offset = read_u8(data, offset)
+			offset += ext_len
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
