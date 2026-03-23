@@ -31,7 +31,13 @@ def _add_member_scenario():
 
 	sig_b = SignatureKey()
 	kem_b = KemKey()
-	kp_b = KeyPackage(identity_key_pub=sig_b.public_bytes(), init_key_pub=kem_b.public_bytes())
+	kp_b = KeyPackage.create(
+		encryption_key=kem_b.public_bytes(),
+		init_key_pub=kem_b.public_bytes(),
+		signature_key=sig_b.public_bytes(),
+		identity=sig_b.public_bytes(),
+		sign_fn=sig_b.sign,
+	)
 
 	group_a2, welcome, update = group_a.add_member(kp_b)
 	group_b = MLSGroup.join(welcome, sig_b, kem_b)
@@ -75,11 +81,23 @@ def test_group_id_substitution_attack_rejected():
 
 	sig_b = SignatureKey()
 	kem_b = KemKey()
-	kp_b = KeyPackage(identity_key_pub=sig_b.public_bytes(), init_key_pub=kem_b.public_bytes())
+	kp_b = KeyPackage.create(
+		encryption_key=kem_b.public_bytes(),
+		init_key_pub=kem_b.public_bytes(),
+		signature_key=sig_b.public_bytes(),
+		identity=sig_b.public_bytes(),
+		sign_fn=sig_b.sign,
+	)
 
 	sig_c = SignatureKey()
 	kem_c = KemKey()
-	kp_c = KeyPackage(identity_key_pub=sig_c.public_bytes(), init_key_pub=kem_c.public_bytes())
+	kp_c = KeyPackage.create(
+		encryption_key=kem_c.public_bytes(),
+		init_key_pub=kem_c.public_bytes(),
+		signature_key=sig_c.public_bytes(),
+		identity=sig_c.public_bytes(),
+		sign_fn=sig_c.sign,
+	)
 
 	# Commit on group-X — produces a GroupUpdate signed with group-X's transcript
 	_group_x2, _welcome_x, update_x = group_x.add_member(kp_b)
@@ -91,7 +109,13 @@ def test_group_id_substitution_attack_rejected():
 	# who is at epoch 1 and expects epoch 2 updates from group-Y.
 	sig_d = SignatureKey()
 	kem_d = KemKey()
-	kp_d = KeyPackage(identity_key_pub=sig_d.public_bytes(), init_key_pub=kem_d.public_bytes())
+	kp_d = KeyPackage.create(
+		encryption_key=kem_d.public_bytes(),
+		init_key_pub=kem_d.public_bytes(),
+		signature_key=sig_d.public_bytes(),
+		identity=sig_d.public_bytes(),
+		sign_fn=sig_d.sign,
+	)
 	group_y2_loaded = MLSGroup.join(welcome_y, sig_c, kem_c)
 	_group_y3, _welcome_y3, update_y2 = _group_y2.add_member(kp_d)
 
@@ -109,7 +133,13 @@ def test_group_id_substitution_attack_rejected():
 	# then try to apply update_x on a joiner of group-Z
 	sig_e = SignatureKey()
 	kem_e = KemKey()
-	kp_e = KeyPackage(identity_key_pub=sig_e.public_bytes(), init_key_pub=kem_e.public_bytes())
+	kp_e = KeyPackage.create(
+		encryption_key=kem_e.public_bytes(),
+		init_key_pub=kem_e.public_bytes(),
+		signature_key=sig_e.public_bytes(),
+		identity=sig_e.public_bytes(),
+		sign_fn=sig_e.sign,
+	)
 	_gz2, _welcome_z, _update_z = group_z.add_member(kp_e)
 
 	# Confirm a legitimate joiner of group-X (same group, correct epoch) does exist.
@@ -142,7 +172,13 @@ def test_kp_ref_is_deterministic():
 	"""STATE-04: _make_kp_ref returns the same value for the same KeyPackage."""
 	sig = SignatureKey()
 	kem = KemKey()
-	kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
+	kp = KeyPackage.create(
+		encryption_key=kem.public_bytes(),
+		init_key_pub=kem.public_bytes(),
+		signature_key=sig.public_bytes(),
+		identity=sig.public_bytes(),
+		sign_fn=sig.sign,
+	)
 	ref1 = _make_kp_ref(kp)
 	ref2 = _make_kp_ref(kp)
 	assert ref1 == ref2
@@ -153,8 +189,20 @@ def test_kp_ref_differs_for_different_keys():
 	"""STATE-04: two different KeyPackages produce different refs."""
 	sig1, kem1 = SignatureKey(), KemKey()
 	sig2, kem2 = SignatureKey(), KemKey()
-	kp1 = KeyPackage(identity_key_pub=sig1.public_bytes(), init_key_pub=kem1.public_bytes())
-	kp2 = KeyPackage(identity_key_pub=sig2.public_bytes(), init_key_pub=kem2.public_bytes())
+	kp1 = KeyPackage.create(
+		encryption_key=kem1.public_bytes(),
+		init_key_pub=kem1.public_bytes(),
+		signature_key=sig1.public_bytes(),
+		identity=sig1.public_bytes(),
+		sign_fn=sig1.sign,
+	)
+	kp2 = KeyPackage.create(
+		encryption_key=kem2.public_bytes(),
+		init_key_pub=kem2.public_bytes(),
+		signature_key=sig2.public_bytes(),
+		identity=sig2.public_bytes(),
+		sign_fn=sig2.sign,
+	)
 	assert _make_kp_ref(kp1) != _make_kp_ref(kp2)
 
 
@@ -181,7 +229,13 @@ def test_process_update_uses_kp_ref_not_index():
 
 	sig_b = SignatureKey()
 	kem_b = KemKey()
-	kp_b = KeyPackage(identity_key_pub=sig_b.public_bytes(), init_key_pub=kem_b.public_bytes())
+	kp_b = KeyPackage.create(
+		encryption_key=kem_b.public_bytes(),
+		init_key_pub=kem_b.public_bytes(),
+		signature_key=sig_b.public_bytes(),
+		identity=sig_b.public_bytes(),
+		sign_fn=sig_b.sign,
+	)
 
 	# A adds B (epoch 0 -> 1)
 	group_a2, welcome_b, update_ab = group_a.add_member(kp_b)
@@ -197,7 +251,13 @@ def test_process_update_uses_kp_ref_not_index():
 
 	sig_c = SignatureKey()
 	kem_c = KemKey()
-	kp_c = KeyPackage(identity_key_pub=sig_c.public_bytes(), init_key_pub=kem_c.public_bytes())
+	kp_c = KeyPackage.create(
+		encryption_key=kem_c.public_bytes(),
+		init_key_pub=kem_c.public_bytes(),
+		signature_key=sig_c.public_bytes(),
+		identity=sig_c.public_bytes(),
+		sign_fn=sig_c.sign,
+	)
 
 	# B adds C (epoch 1 -> 2). B is now the committer.
 	group_b2, welcome_c, update_bc = group_b.add_member(kp_c)

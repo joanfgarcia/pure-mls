@@ -114,7 +114,13 @@ async def test_mls_webrtc_e2e():
 
 			sig = SignatureKey()
 			kem = KemKey()
-			kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
+			kp = KeyPackage.create(
+				encryption_key=kem.public_bytes(),
+				init_key_pub=kem.public_bytes(),
+				signature_key=sig.public_bytes(),
+				identity=sig.public_bytes(),
+				sign_fn=sig.sign,
+			)
 
 			@pc.on("datachannel")
 			def on_datachannel(channel):

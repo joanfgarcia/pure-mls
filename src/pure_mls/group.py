@@ -769,8 +769,14 @@ class MLSGroup:
 		The creator becomes leaf 0.
 		"""
 		tree = RatchetTree(num_leaves=1)
-		kp = KeyPackage(identity_key_pub=creator_sig_key.public_bytes(), init_key_pub=creator_kem_key.public_bytes())
-		tree.set_leaf(0, LeafNode(key_package=kp))
+		kp = KeyPackage.create(
+			encryption_key=creator_kem_key.public_bytes(),
+			init_key_pub=creator_kem_key.public_bytes(),
+			signature_key=creator_sig_key.public_bytes(),
+			identity=creator_sig_key.public_bytes(),
+			sign_fn=creator_sig_key.sign,
+		)
+		tree.set_leaf(0, kp.leaf_node)
 
 		state = EpochState.genesis(group_id, tree)
 		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key)
@@ -793,9 +799,9 @@ class MLSGroup:
 				elif isinstance(node, ParentNode):
 					new_tree.set_parent(i, node)
 
-		# Insert the new leaf at the next available even index
+		# Insert the new leaf using the joiner's LeafNode directly
 		new_leaf_idx = (new_num_leaves - 1) * 2
-		new_tree.set_leaf(new_leaf_idx, LeafNode(key_package=key_package))
+		new_tree.set_leaf(new_leaf_idx, key_package.leaf_node)
 
 		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
 		# Validate incoming KeyPackage signature if present
@@ -826,11 +832,13 @@ class MLSGroup:
 		# tree_hash in group_ctx_pre matches what process_update() will see in update.tree.
 		new_committer_kem = KemKey()
 		new_committer_kp = KeyPackage.create(
-			identity_key_pub=self.my_sig_key.public_bytes(),
+			encryption_key=new_committer_kem.public_bytes(),
 			init_key_pub=new_committer_kem.public_bytes(),
+			signature_key=self.my_sig_key.public_bytes(),
+			identity=self.my_sig_key.public_bytes(),
 			sign_fn=self.my_sig_key.sign,
 		)
-		new_tree.set_leaf(self.my_index, LeafNode(key_package=new_committer_kp))
+		new_tree.set_leaf(self.my_index, new_committer_kp.leaf_node)
 
 		# Build UpdatePath: encrypt each path_secret to copath resolution members
 		# and compute parent_hash per RFC 9420 §7.9
@@ -1046,7 +1054,9 @@ class MLSGroup:
 		# STATE-02: recompute full GroupInfo transcript hash
 		ciphertexts_bytes = b"".join(k + v for k, v in sorted(update.encrypted_commit_secrets.items()))
 		try:
-			public_key = ed25519.Ed25519PublicKey.from_public_bytes(committer_node.key_package.identity_key_pub)
+			# Access signature_key via leaf_node (RFC 9420 §7.2)
+			sig_key_bytes = committer_node.signature_key
+			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
 			transcript_hash = _transcript_hash(
 				self.group_id,
 				update.epoch_id,

@@ -88,8 +88,10 @@ def test_key_package_ref_length():
 	kem_key = KemKey()
 	# SEC-CRIT-01 regression: KeyPackage.create requires identity_key_pub, init_key_pub, sign_fn
 	kp = KeyPackage.create(
-		identity_key_pub=sig_key.public_bytes(),
+		encryption_key=kem_key.public_bytes(),
 		init_key_pub=kem_key.public_bytes(),
+		signature_key=sig_key.public_bytes(),
+		identity=sig_key.public_bytes(),
 		sign_fn=sig_key.sign,
 	)
 	kp_ref = _make_kp_ref(kp)

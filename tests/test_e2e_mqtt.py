@@ -121,7 +121,13 @@ async def test_mls_mqtt_e2e(mqtt_broker):
 				# Bob initializes his identity
 				sig = SignatureKey()
 				kem = KemKey()
-				kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
+				kp = KeyPackage.create(
+					encryption_key=kem.public_bytes(),
+					init_key_pub=kem.public_bytes(),
+					signature_key=sig.public_bytes(),
+					identity=sig.public_bytes(),
+					sign_fn=sig.sign,
+				)
 
 				# Bob subscribes to welcomes
 				await client.subscribe(topic_welcome)

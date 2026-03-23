@@ -25,7 +25,13 @@ def alice_bob_group():
 	"""Create a 2-member MLS group and return (alice_group, bob_group, welcome, update)."""
 	alice_sig, alice_kem = SignatureKey(), KemKey()
 	bob_sig, bob_kem = SignatureKey(), KemKey()
-	bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+	bob_kp = KeyPackage.create(
+		encryption_key=bob_kem.public_bytes(),
+		init_key_pub=bob_kem.public_bytes(),
+		signature_key=bob_sig.public_bytes(),
+		identity=bob_sig.public_bytes(),
+		sign_fn=bob_sig.sign,
+	)
 
 	alice_group = MLSGroup.create(b"wire-format-test", alice_sig, alice_kem)
 	alice_group2, welcome, update = alice_group.add_member(bob_kp)
@@ -195,7 +201,13 @@ def test_mls_message_full_firebase_flow():
 	"""
 	alice_sig, alice_kem = SignatureKey(), KemKey()
 	bob_sig, bob_kem = SignatureKey(), KemKey()
-	bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+	bob_kp = KeyPackage.create(
+		encryption_key=bob_kem.public_bytes(),
+		init_key_pub=bob_kem.public_bytes(),
+		signature_key=bob_sig.public_bytes(),
+		identity=bob_sig.public_bytes(),
+		sign_fn=bob_sig.sign,
+	)
 
 	# Alice: create + add member
 	alice = MLSGroup.create(b"firebase-group", alice_sig, alice_kem)

@@ -13,9 +13,7 @@ def test_tree_math_coverage():
 	assert right(0) == 0
 	parent(8, 5)
 
-
-def test_keypackage_coverage():
-	with pytest.raises(ValueError, match="Invalid KeyPackage size"):
+	with pytest.raises(ValueError):
 		KeyPackage.from_bytes(b"short")
 
 
@@ -32,14 +30,26 @@ def test_group_process_update_coverage():
 	# Bob joins to set up a group2 at epoch 1
 	sig2 = SignatureKey()
 	kem2 = KemKey()
-	kp2 = KeyPackage(sig2.public_bytes(), kem2.public_bytes())
+	kp2 = KeyPackage.create(
+		encryption_key=kem2.public_bytes(),
+		init_key_pub=kem2.public_bytes(),
+		signature_key=sig2.public_bytes(),
+		identity=sig2.public_bytes(),
+		sign_fn=sig2.sign,
+	)
 	group1_next, welcome, update1 = group1.add_member(kp2)
 	group2 = MLSGroup.join(welcome, sig2, kem2)
 
 	# Charlie joins to generate an update2 at epoch 2
 	sig3 = SignatureKey()
 	kem3 = KemKey()
-	kp3 = KeyPackage(sig3.public_bytes(), kem3.public_bytes())
+	kp3 = KeyPackage.create(
+		encryption_key=kem3.public_bytes(),
+		init_key_pub=kem3.public_bytes(),
+		signature_key=sig3.public_bytes(),
+		identity=sig3.public_bytes(),
+		sign_fn=sig3.sign,
+	)
 	group1_final, welcome3, update2 = group1_next.add_member(kp3)
 
 	# Valid format, wrong signature (64 bytes)

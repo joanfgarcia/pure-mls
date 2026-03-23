@@ -9,7 +9,7 @@ import hashlib
 
 from pure_mls.group import MLSGroup, _compute_parent_hash, _subtree_hash
 from pure_mls.keys import KemKey, SignatureKey
-from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
+from pure_mls.tree import KeyPackage, ParentNode, RatchetTree
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -21,8 +21,10 @@ def _make_member() -> tuple[SignatureKey, KemKey, KeyPackage]:
 	sig_key = SignatureKey()
 	kem_key = KemKey()
 	kp = KeyPackage.create(
-		identity_key_pub=sig_key.public_bytes(),
+		encryption_key=kem_key.public_bytes(),
 		init_key_pub=kem_key.public_bytes(),
+		signature_key=sig_key.public_bytes(),
+		identity=sig_key.public_bytes(),
 		sign_fn=sig_key.sign,
 	)
 	return sig_key, kem_key, kp
@@ -46,8 +48,8 @@ def test_subtree_hash_recursive_structure() -> None:
 	_, kem_a, kp_a = _make_member()
 	_, kem_b, kp_b = _make_member()
 
-	tree.set_leaf(0, LeafNode(key_package=kp_a))
-	tree.set_leaf(2, LeafNode(key_package=kp_b))
+	tree.set_leaf(0, kp_a.leaf_node)
+	tree.set_leaf(2, kp_b.leaf_node)
 
 	parent_pub = kp_a.init_key_pub  # arbitrary 32 bytes for the parent key
 	tree.set_parent(1, ParentNode(public_key=parent_pub, parent_hash=b""))
@@ -66,8 +68,8 @@ def test_subtree_hash_blank_parent_no_public_key() -> None:
 	_, _, kp_a = _make_member()
 	_, _, kp_b = _make_member()
 
-	tree.set_leaf(0, LeafNode(key_package=kp_a))
-	tree.set_leaf(2, LeafNode(key_package=kp_b))
+	tree.set_leaf(0, kp_a.leaf_node)
+	tree.set_leaf(2, kp_b.leaf_node)
 	# Parent at index 1 remains None (blank)
 
 	h_leaf0 = hashlib.sha256(kp_a.to_bytes()).digest()

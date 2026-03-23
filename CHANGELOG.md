@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v2.0-phase1 — RFC 9420 Wire-Format Migration: LeafNode / KeyPackage
+
+### Breaking Changes
+
+- **`tree.py` — complete rewrite for RFC 9420 §7.2/§10.1/§7.4 wire-format compliance**
+  - `KeyPackage.create()` now requires `encryption_key`, `init_key_pub`, `signature_key`,
+    `identity`, `sign_fn` (was: `identity_key_pub`, `init_key_pub`, `sign_fn`)
+  - `KeyPackage.to_bytes()` / `from_bytes()` now produce RFC 9420 §10.1 TLS wire format
+    (variable-length, not fixed 128-byte format)
+  - `LeafNode` is now a full RFC §7.2 struct; the old `LeafNode(key_package=kp)` constructor
+    is removed. Use `kp.leaf_node` to access the leaf from a `KeyPackage`
+  - `RatchetTree.to_bytes()` now uses RFC §7.4 `optional<Node>[]` uint32-prefixed encoding
+  - `RatchetTree.from_bytes(data)` is backward-compatible; new streaming API is `from_bytes_at(data, offset)`
+
+### Added
+
+- **`Credential`** (RFC 9420 §7.2): `basic` credential type binding an identity to a leaf
+- **`Capabilities`** (RFC 9420 §7.2): static struct declaring supported versions, ciphersuites, extensions
+- **`LeafNode.create(encryption_key, signature_key, identity, sign_fn)`**: factory for signed leaf
+- **`LeafNode.sign(sign_fn, group_id, leaf_index)`**: produces a new signed copy of the leaf
+- **`LeafNode.verify_signature()`**: verifies the Ed25519 signature on the leaf
+- **`LeafNode.from_bytes_at(data, offset)`**: TLS streaming parser
+- **`KeyPackage.from_bytes_legacy(data)`**: migration helper for pre-v2.0 flat-format packages
+- **`ParentNode.to_bytes()` / `from_bytes_at()`**: RFC §7.3 TLS encoding with `unmerged_leaves<V>`
+- **`RatchetTree.from_bytes_at(data, offset)`**: TLS streaming parser returning `(tree, offset)`
+
+### Tests
+
+- Updated 25 fixture call sites across 10 test files to use new `KeyPackage.create()` API
+- Updated `test_keys.py` for RFC 9420 dual-signature semantics (KeyPackageTBS ≠ LeafNodeTBS)
+- Updated `test_tree.py`, `test_coverage_edge.py`, `test_parent_hash_multi_member.py`
+- **92/93 tests pass** (1 infra timeout in `test_e2e_webrtc`, unrelated to this change)
+
 ## [1.3.0] - 2026-03-22
 
 ### Added (Full RFC 9420 TreeKEM + KeyPackage Authentication)

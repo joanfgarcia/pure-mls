@@ -20,7 +20,13 @@ def test_mls_group_lifecycle():
 	# 2. Bob wants to join. He publishes a KeyPackage
 	bob_sig = SignatureKey()
 	bob_kem = KemKey()
-	bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+	bob_kp = KeyPackage.create(
+		encryption_key=bob_kem.public_bytes(),
+		init_key_pub=bob_kem.public_bytes(),
+		signature_key=bob_sig.public_bytes(),
+		identity=bob_sig.public_bytes(),
+		sign_fn=bob_sig.sign,
+	)
 
 	# 3. Alice adds Bob
 	alice_group_next, welcome, update = alice_group.add_member(bob_kp)
@@ -40,7 +46,13 @@ def test_mls_group_lifecycle():
 	# 5. Assume Bob adds Charlie
 	charlie_sig = SignatureKey()
 	charlie_kem = KemKey()
-	charlie_kp = KeyPackage(identity_key_pub=charlie_sig.public_bytes(), init_key_pub=charlie_kem.public_bytes())
+	charlie_kp = KeyPackage.create(
+		encryption_key=charlie_kem.public_bytes(),
+		init_key_pub=charlie_kem.public_bytes(),
+		signature_key=charlie_sig.public_bytes(),
+		identity=charlie_sig.public_bytes(),
+		sign_fn=charlie_sig.sign,
+	)
 
 	bob_group_next, charlie_welcome, charlie_update = bob_group.add_member(charlie_kp)
 

@@ -59,7 +59,13 @@ async def test_mls_websockets_e2e():
 			# Bob -> Joiner
 			bob_sig = SignatureKey()
 			bob_kem = KemKey()
-			bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+			bob_kp = KeyPackage.create(
+				encryption_key=bob_kem.public_bytes(),
+				init_key_pub=bob_kem.public_bytes(),
+				signature_key=bob_sig.public_bytes(),
+				identity=bob_sig.public_bytes(),
+				sign_fn=bob_sig.sign,
+			)
 
 			# Alice adds Bob
 			alice_next, welcome, update = alice_group.add_member(bob_kp)

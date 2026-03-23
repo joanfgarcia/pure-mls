@@ -17,15 +17,23 @@ def test_welcome_info_from_bytes_errors():
 	"""Test Welcome RFC to_bytes()/from_bytes() round-trip and tree error handling."""
 	sig = SignatureKey()
 	kem = KemKey()
-	kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
+	kp = KeyPackage.create(
+		encryption_key=kem.public_bytes(),
+		init_key_pub=kem.public_bytes(),
+		signature_key=sig.public_bytes(),
+		identity=sig.public_bytes(),
+		sign_fn=sig.sign,
+	)
 	group = MLSGroup.create(b"cov-group", sig, kem)
 	_group2, welcome, _update = group.add_member(kp)
 
 	# SEC-LOW-01: WelcomeInfo has been replaced with Welcome directly — alias removed from API
 
 	# Tree error: invalid node type in raw bytes triggers ValueError
-	bad_tree_bytes = b"\x00\x00\x00\x00\x03" + b"X" * 64
-	with pytest.raises(ValueError, match="Invalid node type"):
+	# New RFC format: uint32 length prefix + node bytes. Use 0xFF as an unknown node type.
+	inner = b"\xff" + b"X" * 10  # unknown node type 0xFF
+	bad_tree_bytes = len(inner).to_bytes(4, "big") + inner
+	with pytest.raises(ValueError, match="Unknown node type"):
 		RatchetTree.from_bytes(bad_tree_bytes)
 
 
@@ -43,7 +51,13 @@ def test_add_member_parent_node():
 
 	sig2 = SignatureKey()
 	kem2 = KemKey()
-	kp = KeyPackage(identity_key_pub=sig2.public_bytes(), init_key_pub=kem2.public_bytes())
+	kp = KeyPackage.create(
+		encryption_key=kem2.public_bytes(),
+		init_key_pub=kem2.public_bytes(),
+		signature_key=sig2.public_bytes(),
+		identity=sig2.public_bytes(),
+		sign_fn=sig2.sign,
+	)
 	group.add_member(kp)  # Should hit elif isinstance(node, ParentNode)
 
 
@@ -97,7 +111,13 @@ def test_process_update_errors():
 
 	sig2 = SignatureKey()
 	kem2 = KemKey()
-	kp = KeyPackage(identity_key_pub=sig2.public_bytes(), init_key_pub=kem2.public_bytes())
+	kp = KeyPackage.create(
+		encryption_key=kem2.public_bytes(),
+		init_key_pub=kem2.public_bytes(),
+		signature_key=sig2.public_bytes(),
+		identity=sig2.public_bytes(),
+		sign_fn=sig2.sign,
+	)
 	_, _, real_update = group.add_member(kp)
 
 	# Alter my_index to point to a ParentNode (leaf_node lookup fails)
