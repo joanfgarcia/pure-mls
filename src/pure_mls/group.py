@@ -16,8 +16,10 @@ from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
 from pure_mls.secret_tree import SecretTree, derive_sender_data_key, derive_sender_data_nonce
 from pure_mls.tls import (
+	_varint_decode,
 	read_opaque,
 	read_opaque32,
+	read_opaque_varint,
 	read_u8,
 	read_u16,
 	read_u32,
@@ -125,24 +127,32 @@ class GroupSecrets:
 	path_secret: bytes | None = None  # optional — RFC §12.1.2 optional<PathSecret>
 
 	def to_bytes(self) -> bytes:
+		from pure_mls.tls import tls_varint
+
 		actual_path = self.path_secret if self.path_secret else b""
 		present = bool(actual_path)
-		result = tls_opaque(self.joiner_secret)
+		# joiner_secret<V> — varint length prefix
+		result = tls_varint(len(self.joiner_secret)) + self.joiner_secret
 		if present:
-			result += b"\x01" + tls_opaque(actual_path)
+			result += b"\x01" + tls_varint(len(actual_path)) + actual_path
 		else:
 			result += b"\x00"
+		# psk_ids vector = empty: varint(0)
+		result += b"\x00"
 		return result
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupSecrets":
 		offset = 0
-		joiner_secret, offset = read_opaque(data, offset)
+		joiner_secret, offset = read_opaque_varint(data, offset)  # joiner_secret<V>
 		has_path = data[offset]
 		offset += 1
 		path_secret: bytes | None = None
 		if has_path:
-			path_secret, offset = read_opaque(data, offset)
+			path_secret, offset = read_opaque_varint(data, offset)  # path_secret<V>
+		# psk_ids: varint(0) = skip
+		if offset < len(data):
+			_psk_count, _ = _varint_decode(data, offset)  # usually 0
 		return cls(joiner_secret=joiner_secret, path_secret=path_secret)
 
 
@@ -155,17 +165,20 @@ class EncryptedGroupSecrets:
 	ciphertext: bytes  # HPKE ciphertext
 
 	def to_bytes(self) -> bytes:
-		return (
-			tls_opaque(self.new_member)  # new_member<V>  = KPRef
-			+ tls_opaque(self.kem_output)  # HPKECiphertext.kem_output<V>
-			+ tls_opaque(self.ciphertext)  # HPKECiphertext.ciphertext<V>
-		)
+		"""Encode to varint-prefixed TLS wire format (RFC 9420 §12.1.2 + §5.1)."""
+		from pure_mls.tls import tls_varint
+
+		def vop(b: bytes) -> bytes:
+			return tls_varint(len(b)) + b
+
+		return vop(self.new_member) + vop(self.kem_output) + vop(self.ciphertext)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["EncryptedGroupSecrets", int]:
-		new_member, offset = read_opaque(data, offset)
-		kem_output, offset = read_opaque(data, offset)
-		ciphertext, offset = read_opaque(data, offset)
+		"""Parse from varint-prefixed TLS wire format (RFC 9420 §12.1.2 + §5.1)."""
+		new_member, offset = read_opaque_varint(data, offset)  # kp_ref<V>
+		kem_output, offset = read_opaque_varint(data, offset)  # HPKECiphertext.kem_output<V>
+		ciphertext, offset = read_opaque_varint(data, offset)  # HPKECiphertext.ciphertext<V>
 		return cls(new_member=new_member, kem_output=kem_output, ciphertext=ciphertext), offset
 
 
@@ -189,32 +202,80 @@ class Welcome:
 	_CIPHER_SUITE: int = 0x0001
 
 	def to_bytes(self) -> bytes:
+		"""Encode to MLS varint wire format (RFC 9420 §12.1.2)."""
+		from pure_mls.tls import tls_varint
+
 		secrets_bytes = b"".join(e.to_bytes() for e in self.encrypted_group_secrets)
 		return (
 			tls_u16(self._CIPHER_SUITE)
-			+ tls_opaque32(secrets_bytes)  # secrets<V> uint32-prefixed
-			+ tls_opaque32(self.encrypted_group_info)  # encrypted_group_info<V>
+			+ tls_varint(len(secrets_bytes))
+			+ secrets_bytes  # EGS<V> varint-prefixed
+			+ tls_varint(len(self.encrypted_group_info))
+			+ self.encrypted_group_info  # EGI<V>
 		)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "Welcome":
+		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper).
+
+		Format per RFC 9420 §12.1.2:
+		uint16 cipher_suite
+		EncryptedGroupSecrets<V>  -- varint-prefixed vector of EGS records
+		opaque encrypted_group_info<V> -- varint-prefixed EGI
+		"""
 		offset = 0
 		cipher_suite, offset = read_u16(data, offset)
-		secrets_raw, offset = read_opaque32(data, offset)
-		encrypted_group_info, offset = read_opaque32(data, offset)
-
-		# Parse EncryptedGroupSecrets vector
+		# EGS vector: varint length prefix
+		egs_total_len, offset = _varint_decode(data, offset)
+		egs_end = offset + egs_total_len
 		encrypted_group_secrets: list[EncryptedGroupSecrets] = []
-		soffset = 0
-		while soffset < len(secrets_raw):
-			egs, soffset = EncryptedGroupSecrets.from_bytes(secrets_raw, soffset)
+		while offset < egs_end:
+			egs, offset = EncryptedGroupSecrets.from_bytes(data, offset)
 			encrypted_group_secrets.append(egs)
-
+		# EGI: varint length prefix
+		egi_len, offset = _varint_decode(data, offset)
+		encrypted_group_info = data[offset : offset + egi_len]
 		return cls(
 			cipher_suite=cipher_suite,
 			encrypted_group_secrets=encrypted_group_secrets,
 			encrypted_group_info=encrypted_group_info,
 		)
+
+	@classmethod
+	def from_mlsmessage_bytes(cls, data: bytes) -> "Welcome":
+		"""Parse from full MLSMessage wire format (version+wire_format header + inner Welcome).
+
+		MLSMessage header (4 bytes): uint16 version + uint16 wire_format (=3 for Welcome).
+		"""
+		# strip 4-byte MLSMessage header
+		inner = data[4:]
+		return cls.from_bytes(inner)
+
+	def decrypt_group_secrets(
+		self,
+		init_key: "KemKey",  # type: ignore[name-defined]  # noqa: F821
+	) -> "GroupSecrets | None":
+		"""Decrypt GroupSecrets for the joiner matching init_key.
+
+		Searches encrypted_group_secrets for an entry whose kem_output can be
+		decapsulated with init_key, then decrypts via HPKE.open with the
+		RFC 9420 §12.4 EncryptWithLabel context.
+
+		Returns GroupSecrets on success, None if no matching entry found.
+		"""
+		from pure_mls.hkdf import varint_encode
+		from pure_mls.hpke import HPKE
+
+		label = b"MLS 1.0 Welcome"
+		info = varint_encode(len(label)) + label + varint_encode(len(self.encrypted_group_info)) + self.encrypted_group_info
+
+		for egs in self.encrypted_group_secrets:
+			try:
+				gs_bytes = HPKE.open(init_key, egs.kem_output, egs.ciphertext, info=info)
+				return GroupSecrets.from_bytes(gs_bytes)
+			except Exception:
+				continue
+		return None
 
 
 def WelcomeInfo(*args, **kwargs) -> "Welcome":
