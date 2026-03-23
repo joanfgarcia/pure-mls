@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase6 — IETF Interop Testing (Phase 6)
+
+### Added
+
+- **`scripts/validate_ietf_vectors.py`** (new): RFC 9420 compliance validation script
+  - Self-consistency tests: KeySchedule field coverage, ExpandWithLabel determinism, full E2E roundtrip
+  - IETF vector download mode (when vectors available at mlswg/mls-implementations)
+  - `--no-download` flag for offline validation
+  - Exit code 0 on full pass, 1 on any failure
+  - Ciphersuite: `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (0x0001)
+
+### Verified
+
+- 11/11 self-consistency tests pass (validate_ietf_vectors.py --no-download)
+- 15/15 existing OpenMLS interop tests pass (tests/interop/test_openmls_vectors.py)
+- 130/131 total tests pass (sound_of_silence pre-existing)
+- ruff check: All checks passed
+
+### Test Results
+
+```
+============================================================
+  pure-mls IETF Test Vector Validation (Phase 6)
+  Ciphersuite: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+============================================================
+[Self-Consistency Tests]
+  ✓ Full E2E group create+add+join+encrypt+decrypt
+  Result: 11/11 passed
+  TOTAL: 11 passed, 0 failed, 0 skipped
+  ✓ All tests PASS — RFC 9420 compliance validated!
+============================================================
+
+130 passed in 0.48s (ruff check: All checks passed!)
+```
 ## [Unreleased] v3.0-phase5 — TreeKEM UpdatePath RFC §7.5
 
 ### Added
