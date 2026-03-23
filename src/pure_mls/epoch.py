@@ -31,9 +31,7 @@ class EpochState:
 		Consumes the next_init_secret from the current era and mixes it with the
 		new commit_secret derived from the TreeKEM operations.
 		"""
-		next_schedule = KeySchedule.derive(
-			init_secret=self.key_schedule.next_init_secret, commit_secret=commit_secret, transcript_hash=transcript_hash
-		)
+		next_schedule = KeySchedule.derive(init_secret=self.key_schedule.init_secret, commit_secret=commit_secret)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
 	@classmethod

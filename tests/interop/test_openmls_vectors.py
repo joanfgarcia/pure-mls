@@ -21,7 +21,7 @@ import hashlib
 
 import pytest
 
-from pure_mls.hkdf import hkdf_expand, hkdf_extract
+from pure_mls.hkdf import expand_with_label, hkdf_expand, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keyschedule import KeySchedule
 
@@ -146,13 +146,9 @@ _EXPAND_CASES = [
 	},
 ]
 
-# Pre-compute expected values so the tests are self-contained
+# Pre-compute expected values so the tests are self-contained using VarInt encoding
 for _tc in _EXPAND_CASES:
-	_full_label = b"MLS 1.0 " + _tc["label"]
-	_hkdf_label = (
-		_tc["length"].to_bytes(2, "big") + len(_full_label).to_bytes(1, "big") + _full_label + len(_tc["context"]).to_bytes(4, "big") + _tc["context"]
-	)
-	_tc["expected"] = hkdf_expand(_tc["secret"], _hkdf_label, _tc["length"], hashlib.sha256)
+	_tc["expected"] = expand_with_label(_tc["secret"], _tc["label"].decode(), _tc["context"], _tc["length"])
 
 
 @pytest.mark.parametrize(
@@ -164,8 +160,8 @@ for _tc in _EXPAND_CASES:
 	],
 )
 def test_keyschedule_expand_with_label_determinism(tc: dict) -> None:
-	"""KeySchedule._expand_with_label must be deterministic and match pre-computed vectors."""
-	result = KeySchedule._expand_with_label(tc["secret"], tc["label"], tc["context"], tc["length"])
+	"""expand_with_label must be deterministic and match pre-computed VarInt vectors."""
+	result = expand_with_label(tc["secret"], tc["label"].decode(), tc["context"], tc["length"])
 	assert result == tc["expected"], f"ExpandWithLabel({tc['label']!r}) mismatch: {result.hex()} != {tc['expected'].hex()}"
 
 
@@ -177,15 +173,14 @@ def test_keyschedule_derive_is_deterministic() -> None:
 	"""
 	init_secret = b"\x01" * 32
 	commit_secret = b"\x02" * 32
-	transcript_hash = b"\x03" * 32
 
-	ks1 = KeySchedule.derive(init_secret, commit_secret, transcript_hash)
-	ks2 = KeySchedule.derive(init_secret, commit_secret, transcript_hash)
+	ks1 = KeySchedule.derive(init_secret, commit_secret)
+	ks2 = KeySchedule.derive(init_secret, commit_secret)
 
 	assert ks1.epoch_secret == ks2.epoch_secret, "epoch_secret must be deterministic"
 	assert ks1.encryption_secret == ks2.encryption_secret, "encryption_secret must be deterministic"
 	assert ks1.confirmation_key == ks2.confirmation_key, "confirmation_key must be deterministic"
-	assert ks1.authentication_secret == ks2.authentication_secret, "authentication_secret must be deterministic"
+	assert ks1.epoch_authenticator == ks2.epoch_authenticator, "epoch_authenticator must be deterministic"
 
 
 def test_keyschedule_different_commit_secrets_produce_different_epochs() -> None:

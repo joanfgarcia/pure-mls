@@ -375,7 +375,7 @@ class GroupUpdate:
 	# Set by add_member(); None when GroupUpdate is deserialized from wire.
 	_group_ctx: "GroupContext | None" = None
 	_confirmation_key: bytes | None = None
-	_authentication_secret: bytes | None = None
+	_epoch_authenticator: bytes | None = None
 	_transcript_hash: bytes | None = None
 
 	def _body_bytes(self) -> bytes:
@@ -480,7 +480,7 @@ class MLSMessage:
 		if (
 			commit._group_ctx is not None
 			and commit._confirmation_key is not None
-			and commit._authentication_secret is not None
+			and commit._epoch_authenticator is not None
 			and commit._transcript_hash is not None
 		):
 			# Full RFC mode: proper confirmation_tag + membership_tag
@@ -488,7 +488,7 @@ class MLSMessage:
 				commit,
 				group_ctx=commit._group_ctx,
 				confirmation_key=commit._confirmation_key,
-				authentication_secret=commit._authentication_secret,
+				epoch_authenticator=commit._epoch_authenticator,
 				transcript_hash=commit._transcript_hash,
 			)
 		else:
@@ -504,7 +504,7 @@ class MLSMessage:
 				commit,
 				group_ctx=_dummy_ctx,
 				confirmation_key=b"\x00" * 32,
-				authentication_secret=b"\x00" * 32,
+				epoch_authenticator=b"\x00" * 32,
 				transcript_hash=b"\x00" * 32,
 			)
 		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
@@ -707,7 +707,7 @@ class PublicMessage:
 		update: "GroupUpdate",
 		group_ctx: "GroupContext",
 		confirmation_key: bytes,
-		authentication_secret: bytes,
+		epoch_authenticator: bytes,
 		transcript_hash: bytes,
 	) -> "PublicMessage":
 		"""Wrap a GroupUpdate as a RFC 9420 PublicMessage.
@@ -736,8 +736,8 @@ class PublicMessage:
 			confirmation_tag=conf_tag,
 		)
 
-		# RFC 9420 §6.2: membership_key = ExpandWithLabel(authentication_secret, 'membership', b'', 32)
-		membership_key = KeySchedule.derive_membership_key(authentication_secret)
+		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
+		membership_key = expand_with_label(epoch_authenticator, "membership", b"", 32)
 		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + FramedContent
 		public_msg_tbs = (
 			tls_u16(0x0001)  # version
@@ -999,7 +999,7 @@ class MLSGroup:
 			update_path=update_path,
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
-			_authentication_secret=next_state.key_schedule.authentication_secret,
+			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
 			_transcript_hash=transcript_hash,
 		)
 

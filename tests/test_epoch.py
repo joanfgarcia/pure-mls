@@ -12,11 +12,11 @@ def test_key_schedule_derivation() -> None:
 
 	schedule_1 = KeySchedule.derive(init_secret, commit_secret)
 	assert len(schedule_1.encryption_secret) == 32
-	assert len(schedule_1.next_init_secret) == 32
+	assert len(schedule_1.init_secret) == 32
 
 	# Simulating a second commit
 	commit_secret_2 = os.urandom(32)
-	schedule_2 = KeySchedule.derive(schedule_1.next_init_secret, commit_secret_2)
+	schedule_2 = KeySchedule.derive(schedule_1.init_secret, commit_secret_2)
 
 	# Asserts Post-Compromise Security isolation (keys differ completely)
 	assert schedule_1.encryption_secret != schedule_2.encryption_secret

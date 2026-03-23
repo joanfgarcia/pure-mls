@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase1 — RFC §8 KeySchedule Full Compliance
+
+### Changed / Fixed
+
+- **`src/pure_mls/keyschedule.py`**: Complete rewrite — RFC 9420 §8 compliance
+  - **Labels corrected** (root causes of OpenMLS incompatibility):
+    - `"authentication"` → `"authentication"` (unchanged, but now yields `epoch_authenticator`)
+    - `"confirm"` → `"confirmation"` → `confirmation_key`
+    - `"init"` → `"init"` → `init_secret` (field renamed from `next_init_secret`)
+    - `"sender data"` — new label from epoch_secret
+    - `"external"` → `"external secret"`
+  - **New fields**: `epoch_authenticator`, `membership_key`, `resumption_psk_secret`, `init_secret`
+  - **Removed fields**: `authentication_secret` (→ `epoch_authenticator`), `next_init_secret` (→ `init_secret`)
+  - **VarInt encoding**: `expand_with_label`/`derive_secret` from `hkdf.py` (Phase 6) used everywhere
+  - **PSKSecret chain**: HKDF-Extract(PSKSecret, joiner_secret) → epoch_secret per RFC §9.1
+  - **SIZE**: Updated from 288 (9 × 32) → 352 (11 × 32)
+
+- **`src/pure_mls/epoch.py`**: `advance_epoch` uses `key_schedule.init_secret` (was `next_init_secret`)
+
+- **`src/pure_mls/group.py`**:
+  - `PublicMessage.from_group_update()`: param `authentication_secret` → `epoch_authenticator`
+  - Inline `expand_with_label(epoch_authenticator, "membership", b"", 32)` replaces deleted static method
+  - Updated all call sites to use `epoch_authenticator=`
+
+- **`tests/interop/test_openmls_vectors.py`**: Updated to use public `expand_with_label()` API,
+  VarInt-encoded test vectors, `epoch_authenticator` field, and removed `transcript_hash` kwarg
+
+- **`tests/test_epoch.py`**: Updated `next_init_secret` → `init_secret`
+
+### Test Results
+
+```
+101 passed in 0.58s (ruff check: All checks passed!)
+```
+
+### Breaking Change
+
+⚠️  Existing group states serialised with v2.x will not be readable. Run `red-pill soul migrate --decrypt`
+before upgrading and `--reencrypt` after (see Phase 0 CHANGELOG entry).
 ## [Unreleased] v2.0-phase6 — HkdfLabel VarInt encoding (P1 closed)
 
 ### Root Cause Analysis
