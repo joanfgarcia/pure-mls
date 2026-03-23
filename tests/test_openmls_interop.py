@@ -90,7 +90,7 @@ _PCW_VECTORS = _load_pcw_suite1()
 
 
 # ---------------------------------------------------------------------------
-# P8-3: Welcome TLS wire format validation
+# P8-3a: Welcome TLS wire format validation (varint parser)
 # ---------------------------------------------------------------------------
 
 
@@ -106,6 +106,40 @@ def test_welcome_wire_parse_suite1(vec: dict, idx: int) -> None:
 	assert parsed["cipher_suite"] == 1
 	assert len(parsed["kem_output"]) == 32, f"X25519 kem_output must be 32 bytes, got {len(parsed['kem_output'])}"
 	assert len(parsed["kp_ref"]) == 32, f"kp_ref must be 32 bytes, got {len(parsed['kp_ref'])}"
+
+
+# ---------------------------------------------------------------------------
+# P8-3b: Welcome HPKE GroupSecrets decrypt (full IETF vector validation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("idx,vec", [pytest.param(i, v, id=f"suite1-{i}") for i, v in enumerate(_PCW_VECTORS)])
+def test_welcome_hpke_decrypt_suite1(idx: int, vec: dict) -> None:
+	"""P8-3b: HPKE.open decrypts GroupSecrets from IETF passive-client-welcome vectors.
+
+	Root cause of prior failures was ExtractAndExpand label:
+	eae_prk = LabeledExtract('', 'eae_prk', dh)  -- not 'shared_secret'
+	shared_secret = LabeledExpand(eae_prk, 'shared_secret', kem_context)
+	(RFC 9180 §4.1, confirmed by pyhpke 0.6.4)
+
+	Also: KeySchedule salt=shared_secret, IKM=psk=b'' per RFC 9180 §5.1.
+	"""
+	from pure_mls.group import Welcome
+	from pure_mls.keys import KemKey
+
+	wb = _h(vec["welcome"])
+	init_priv = _h(vec["init_priv"])
+
+	welcome = Welcome.from_mlsmessage_bytes(wb)
+	kem_key = KemKey.from_private_bytes(init_priv)
+	gs = welcome.decrypt_group_secrets(kem_key)
+
+	assert gs is not None, f"Vector {idx}: decrypt_group_secrets returned None (no matching EGS entry)"
+	# joiner_secret: SHA-256 output length = 32 bytes
+	assert len(gs.joiner_secret) == 32, f"Vector {idx}: joiner_secret must be 32 bytes, got {len(gs.joiner_secret)}"
+	# path_secret is optional (present only in vectors with an update path)
+	if gs.path_secret is not None:
+		assert len(gs.path_secret) == 32, f"Vector {idx}: path_secret must be 32 bytes if present"
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +181,13 @@ def test_groupcontext_tls_roundtrip(idx: int, gc_bytes: bytes) -> None:
 	reason="openmls-cli not found — install with: cargo install openmls-cli",
 )
 def test_openmls_creates_pure_mls_joins() -> None:
-	"""
-	Full round-trip: OpenMLS creates group → pure-mls joins and verifies epoch_authenticator.
+	"""Full round-trip: OpenMLS creates group → pure-mls joins and verifies epoch_authenticator.
 
-	BLOCKED on P8-3: HPKE GroupSecrets decrypt requires EncryptWithLabel
-	info parameter clarification (tested: empty, egi, MLS-1.0-Welcome+egi — all fail).
+	P8-3 RESOLVED: HPKE decrypt works (8/8 IETF vectors pass).
+	Remaining blocker: epoch_authenticator derivation requires full
+	GroupContext + SecretTree chain (P8-5 scope).
 	"""
-	pytest.skip("P8-3 HPKE GroupSecrets decrypt not yet resolved")
+	pytest.skip("P8-5 epoch_authenticator derivation pending (full GroupContext+SecretTree chain)")
 
 
 @pytest.mark.interop
@@ -162,9 +196,8 @@ def test_openmls_creates_pure_mls_joins() -> None:
 	reason="openmls-cli not found",
 )
 def test_pure_mls_creates_openmls_joins() -> None:
-	"""
-	Full round-trip: pure-mls creates group → OpenMLS client joins.
+	"""Full round-trip: pure-mls creates group → OpenMLS client joins.
 
-	BLOCKED on P8-3 (Welcome wire format) and P8-4 (KeyPackage TLS).
+	BLOCKED on P8-4 (KeyPackage TLS signature) and P8-5 (SecretTree ratchet).
 	"""
-	pytest.skip("P8-3/P8-4 not yet fully resolved")
+	pytest.skip("P8-4/P8-5 not yet fully resolved")

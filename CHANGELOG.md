@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase8 — HPKE Interop Fix + Welcome Wire Format
+
+### Fixed (Critical — OpenMLS Interoperability)
+
+- **[CRITICAL] HPKE `ExtractAndExpand` label (RFC 9180 §4.1)**: `labeled_extract` label was
+  `"shared_secret"` for both steps — corrected to `"eae_prk"` for the extract:
+  ```
+  eae_prk      = LabeledExtract("", "eae_prk", dh)
+  shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)
+  ```
+  This was the root cause of all 8 IETF `passive-client-welcome` decryption failures.
+  Confirmed by `pyhpke 0.6.4` reference implementation.
+
+- **[CRITICAL] HPKE `KeySchedule` salt/IKM order (RFC 9180 §5.1)**:
+  `LabeledExtract(salt=shared_secret, label="secret", ikm=psk)` — previously the
+  arguments were transposed (shared_secret used as IKM, not salt).
+
+- **[CORRECT] HPKE AES-128-GCM key length**: was using AES-256 (32 bytes); corrected to
+  AES-128 Nk=16 bytes per ciphersuite `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`.
+
+### Added
+
+- **`Welcome.from_mlsmessage_bytes(data)`**: strips 4-byte MLSMessage header and parses inner Welcome.
+- **`Welcome.decrypt_group_secrets(init_key)`**: decrypts GroupSecrets for matching joiner using
+  `HPKE.open` with RFC 9420 §12.4 `EncryptWithLabel` context:
+  `info = varint("MLS 1.0 Welcome") + varint(len(egi)) + egi`.
+- **`tls.py`**: `_varint_decode()`, `tls_varint()`, `read_opaque_varint()` — MLS VarInt encoding
+  helpers per RFC 9420 §5.1.
+- **`GroupContext.to_bytes()`** uint8-prefixed opaques per RFC 9420 §8.1 (5/5 key-schedule IETF epochs pass).
+
+### Changed
+
+- `GroupSecrets`, `EncryptedGroupSecrets`, `Welcome` `to_bytes()`/`from_bytes()` now use
+  MLS VarInt (`tls_varint`) encoding instead of uint16/uint32 for full OpenMLS wire-format compat.
+- `GroupSecrets.to_bytes()` now appends `varint(0)` for the empty `psk_ids` vector per RFC §12.1.2.
+
+### Tests
+
+- `test_welcome_wire_parse_suite1[suite1-0..7]`: 8 varint parser tests ✓
+- `test_welcome_hpke_decrypt_suite1[suite1-0..7]`: 8 HPKE GroupSecrets decrypt tests ✓
+- `test_groupcontext_tls_roundtrip[epoch-0..4]`: 5 GroupContext roundtrip tests ✓
+
+```
+146 passed, 2 skipped, 49 xfailed, 0 failed — ruff: All checks passed!
+```
+
 ## [Unreleased] v3.0-phase6 — IETF Interop Testing (Phase 6)
 
 ### Added
