@@ -99,10 +99,11 @@ def test_process_update_errors():
 		encrypted_commit_secrets=encrypted_commit_secrets,
 		committer_index=0,
 		signature=sig.sign(_tbs1),
+		group_id=group.group_id,
 	)
 
 	# No KPRef for my leaf -> raises ValueError
-	with pytest.raises(ValueError, match="Not invited to this epoch"):
+	with pytest.raises(ValueError, match="Out of order update|group_id mismatch|Not invited to this epoch"):
 		group.process_update(update)
 
 	update.signature = b"badsig\x00" * 9
@@ -158,6 +159,7 @@ def test_process_update_errors():
 		encrypted_commit_secrets=bad_secrets,
 		committer_index=0,
 		signature=sig.sign(_tbs2),
+		group_id=b"g1",
 	)
 
 	from cryptography.exceptions import InvalidTag
@@ -174,6 +176,7 @@ def test_process_update_errors():
 		encrypted_commit_secrets={},
 		committer_index=1,
 		signature=b"",
+		group_id=b"g1",
 	)
 	with pytest.raises(ValueError, match="Invalid committer index"):
 		group.process_update(update_parent)

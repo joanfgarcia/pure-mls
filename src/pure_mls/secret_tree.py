@@ -4,20 +4,12 @@ The SecretTree converts an epoch's encryption_secret into per-leaf,
 per-generation symmetric keys (content_key, content_nonce) for
 encrypting/decrypting PrivateMessage payloads.
 
-Derivation chain (§9.3):
-    encryption_secret
-      └─ tree_node_secret[leaf]  = ExpandWithLabel(encryption_secret, "tree", leaf_bytes(4), NH)
-           └─ leaf_secret[gen]   = ExpandWithLabel(tree_node_secret, "application", gen_bytes(4), NH)
-                ├─ content_key   = ExpandWithLabel(leaf_secret, "key",   b"", AES128_KEY_LEN=16)
-                └─ content_nonce = ExpandWithLabel(leaf_secret, "nonce", b"", 12)
+Derivation chain (§9.3): encryption_secret -> tree_node_secret[leaf]
+-> leaf_secret[gen] -> content_key / content_nonce.
 
-SenderData encryption (§9.4):
-    sender_data_secret
-      ├─ sd_key   = ExpandWithLabel(sender_data_secret, "key",   ciphertext_sample, 16)
-      └─ sd_nonce = ExpandWithLabel(sender_data_secret, "nonce", ciphertext_sample, 12)
+SenderData (§9.4): sender_data_secret -> sd_key / sd_nonce via ExpandWithLabel.
 
-Note: AES-128-GCM is used (16-byte key) per
-      MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ciphersuite.
+Note: AES-128-GCM (16-byte key) per MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519.
 """
 
 import struct
@@ -86,6 +78,12 @@ class SecretTree:
 		key = expand_with_label(leaf_secret, "key", b"", _KEY_LEN)
 		nonce = expand_with_label(leaf_secret, "nonce", b"", _NONCE_LEN)
 		return key, nonce
+
+	def wipe(self) -> None:
+		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy)."""
+		self.encryption_secret = b"\x00" * len(self.encryption_secret)
+		self._ratchet_cache.clear()
+		self._generations.clear()
 
 
 def derive_sender_data_key(sender_data_secret: bytes, ciphertext_sample: bytes) -> bytes:

@@ -1,14 +1,14 @@
 """RFC 9420 §12: Proposal types and wire formats.
 
 Proposal = one of:
-  Add         (§12.1.1) – introduces a new member via KeyPackage
-  Remove      (§12.1.3) – evicts a member by leaf index
-  Update      (§12.1.2) – refreshes the sender's leaf key material
-  PreSharedKey (§12.1.4) – injects a PSK into the next epoch
-  ReInit      (§12.1.5) – requests a group reset (tombstone)
+Add         (§12.1.1) – introduces a new member via KeyPackage
+Remove      (§12.1.3) – evicts a member by leaf index
+Update      (§12.1.2) – refreshes the sender's leaf key material
+PreSharedKey (§12.1.4) – injects a PSK into the next epoch
+ReInit      (§12.1.5) – requests a group reset (tombstone)
 
 Each Proposal serialises as:
-  proposal_type (uint16 ProposalType) | body...
+proposal_type (uint16 ProposalType) | body...
 
 ProposalRef = Hash(Proposal wire bytes) — used by Commit.proposals[].
 A Commit embeds a vector of ProposalOrRef items, each prefixed by a

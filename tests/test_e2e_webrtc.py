@@ -22,6 +22,7 @@ class MockSignaler:
 
 
 @pytest.mark.asyncio
+@pytest.mark.network
 async def test_mls_webrtc_e2e():
 	"""
 	End-to-End P2P test using aiortc (WebRTC Data Channels).

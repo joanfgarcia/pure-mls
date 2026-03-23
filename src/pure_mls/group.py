@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.epoch import EpochState
 from pure_mls.hkdf import expand_with_label, hkdf_expand, hkdf_extract
@@ -473,6 +474,7 @@ class GroupUpdate:
 	encrypted_commit_secrets: dict[bytes, bytes]
 	committer_index: int
 	signature: bytes
+	group_id: bytes = b""
 	# RFC 9420 §12.1.1: UpdatePath (TreeKEM) — present when committer uses full TreeKEM
 	update_path: "UpdatePath | None" = None
 	# RFC 9420 §6.2 context fields — carried for PublicMessage construction
@@ -868,6 +870,7 @@ class MLSGroup:
 		self.my_index = my_index
 		self.my_sig_key = my_sig_key
 		self.my_kem_key = my_kem_key
+		self._secret_tree: SecretTree | None = None
 
 	@property
 	def group_id(self) -> bytes:
@@ -889,13 +892,19 @@ class MLSGroup:
 
 	def _get_secret_tree(self) -> SecretTree:
 		"""Lazily create or return the per-epoch SecretTree."""
-		if not hasattr(self, "_secret_tree") or self._secret_tree is None:
+		if self._secret_tree is None:
 			n_leaves = (len(self.state.tree.nodes) + 1) // 2
 			self._secret_tree = SecretTree(
 				encryption_secret=self.state.key_schedule.encryption_secret,
 				n_leaves=n_leaves,
 			)
 		return self._secret_tree
+
+	def _wipe_secret_tree(self) -> None:
+		"""RFC 9420 §9: zero old-epoch key material to enforce forward secrecy."""
+		if self._secret_tree is not None:
+			self._secret_tree.wipe()
+			self._secret_tree = None
 
 	@classmethod
 	def create(cls, group_id: bytes, creator_sig_key: SignatureKey, creator_kem_key: KemKey) -> "MLSGroup":
@@ -1106,11 +1115,10 @@ class MLSGroup:
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
 		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret, b"")
-		from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
 
 		# GroupInfo plaintext = GroupInfo.to_bytes() + ratchet_tree extension (opaque<V>)
 		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
-		gi_ct = _AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
+		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
 		# Store as nonce(12) || ciphertext for join() to decode
 		welcome = Welcome(
 			cipher_suite=Welcome._CIPHER_SUITE,
@@ -1120,6 +1128,7 @@ class MLSGroup:
 
 		update = GroupUpdate(
 			epoch_id=next_state.epoch_id,
+			group_id=self.group_id,
 			tree=new_tree,
 			encrypted_commit_secrets=encrypted_secrets,
 			committer_index=self.my_index,
@@ -1141,26 +1150,28 @@ class MLSGroup:
 		Initializes a Group from a Welcome message (RFC 9420 §12.1.2).
 		Decrypts GroupSecrets and reconstructs the EpochState.
 		"""
-		# Find our EncryptedGroupSecrets: match by our init_key (KPRef would be optimal
-		# but requires the full KeyPackage — for now we take index 0 for single-joiner)
-		if not welcome.encrypted_group_secrets:
-			raise ValueError("Welcome contains no encrypted group secrets")
-
-		# RFC 9420 §12.1.2 join sequence:
-		# 1. Decrypt GroupSecrets via HPKE (info=b'' per RFC)
-		egs = welcome.encrypted_group_secrets[0]
-		gs_bytes_raw = HPKE.open(my_kem_key, egs.kem_output, egs.ciphertext, info=b"")
+		# RFC 9420 §12.1.2: find our EncryptedGroupSecrets by trying each (KPRef match).
+		# For single-joiner cases, take the only entry. For multi-joiner, try each.
+		gs_bytes_raw: bytes | None = None
+		egs_match: EncryptedGroupSecrets | None = None
+		for candidate in welcome.encrypted_group_secrets:
+			try:
+				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=b"")
+				egs_match = candidate
+				break
+			except Exception:
+				continue
+		if gs_bytes_raw is None or egs_match is None:
+			raise ValueError("No EncryptedGroupSecrets could be decrypted with the provided KEM key")
 		gs = GroupSecrets.from_bytes(gs_bytes_raw)
 
 		# 2. Derive welcome_key from joiner_secret and decrypt GroupInfo (AES-GCM)
 		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret, b"")
-		from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM2
-
 		gi_payload_raw = welcome.encrypted_group_info
 		if len(gi_payload_raw) < 12:
 			raise ValueError("encrypted_group_info too short")
 		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
-		gi_bytes = _AESGCM2(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
+		gi_bytes = AESGCM(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
 
 		# 3. Parse signed GroupInfo and ratchet tree
 		gi = GroupInfo.from_bytes(gi_bytes)
@@ -1211,6 +1222,8 @@ class MLSGroup:
 		Process a Commit from another member.
 		Advances local state using the new tree and decrypted commit_secret.
 		"""
+		if update.group_id != self.group_id:
+			raise ValueError(f"GroupUpdate group_id mismatch: {update.group_id!r} != {self.group_id!r}")
 		if update.epoch_id != self.epoch_id + 1:
 			raise ValueError("Out of order update")
 

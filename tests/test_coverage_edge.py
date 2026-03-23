@@ -22,8 +22,8 @@ def test_group_process_update_coverage():
 	kem1 = KemKey()
 	group1 = MLSGroup.create(b"cov", sig1, kem1)
 
-	# Line 228: Out of order update
-	update_out = GroupUpdate(epoch_id=2, tree=group1.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"")
+	# Line 228: Out of order update (group_id=b"cov" matches the group)
+	update_out = GroupUpdate(epoch_id=2, tree=group1.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"", group_id=b"cov")
 	with pytest.raises(ValueError, match="Out of order update"):
 		group1.process_update(update_out)
 
@@ -59,6 +59,7 @@ def test_group_process_update_coverage():
 		encrypted_commit_secrets=update2.encrypted_commit_secrets,
 		committer_index=update2.committer_index,
 		signature=b"0" * 64,
+		group_id=group2.group_id,
 	)
 	with pytest.raises(ValueError, match="Commit Forgery Detected"):
 		group2.process_update(update_forged)
