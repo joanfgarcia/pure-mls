@@ -30,8 +30,16 @@ class EpochState:
 		Transitions the group to the next cryptographic Era.
 		Consumes the next_init_secret from the current era and mixes it with the
 		new commit_secret derived from the TreeKEM operations.
+
+		Note: group_context = b"" for pure-mls internal groups (consistent approximation).
+		For full RFC 9420 compliance with external clients, group_context should be the
+		TLS-serialized GroupContext bytes shared by all epoch members.
 		"""
-		next_schedule = KeySchedule.derive(init_secret=self.key_schedule.init_secret, commit_secret=commit_secret)
+		next_schedule = KeySchedule.derive(
+			init_secret=self.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=b"",  # consistent for pure-mls ↔ pure-mls; IETF join uses real GC
+		)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
 	@classmethod

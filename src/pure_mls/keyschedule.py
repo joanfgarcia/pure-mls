@@ -1,27 +1,31 @@
 """RFC 9420 §8 Key Schedule — full compliant implementation.
 
-Derivation chain:
-	commit_secret + init_secret → HKDF-Extract(salt=commit_secret, ikm=init_secret) → joiner_secret
-	joiner_secret + PSKSecret   → HKDF-Extract(salt=PSKSecret, ikm=joiner_secret) → epoch_secret
+Derivation chain (confirmed against IETF key-schedule IETF test vectors
+and validated against OpenMLS Rust source):
 
-From epoch_secret (all via DeriveSecret / ExpandWithLabel with VarInt encoding):
-	sender_data_secret    = DeriveSecret(epoch_secret, "sender data")
-	encryption_secret     = DeriveSecret(epoch_secret, "encryption")
-	exporter_secret       = DeriveSecret(epoch_secret, "exporter")
-	epoch_authenticator   = DeriveSecret(epoch_secret, "authentication")
-	external_secret       = DeriveSecret(epoch_secret, "external")
-	resumption_psk_secret = DeriveSecret(epoch_secret, "resumption")
-	init_secret           = DeriveSecret(epoch_secret, "init")
+raw           = HKDF-Extract(salt=init_secret, IKM=commit_secret)
+joiner_secret = ExpandWithLabel(raw, "joiner", GroupContext, Nh)
+intermediate  = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+welcome_secret = DeriveSecret(intermediate, "welcome")
+welcome_key   = EWL(welcome_secret, "key",   b"", Nk)   # ← AES-128 key
+welcome_nonce = EWL(welcome_secret, "nonce", b"", Nn)   # ← AES-128-GCM nonce
+epoch_secret  = ExpandWithLabel(intermediate, "epoch", GroupContext, Nh)
 
-From authentication_secret (= epoch_authenticator in RFC nomenclature):
-	confirmation_key = ExpandWithLabel(authentication_secret, "confirmation", b"", NH)
-	membership_key   = ExpandWithLabel(authentication_secret, "membership", b"", NH)
+From epoch_secret (all via DeriveSecret = EWL(..., b"", Nh)):
+sender_data_secret    = DeriveSecret(epoch_secret, "sender data")
+encryption_secret     = DeriveSecret(epoch_secret, "encryption")
+exporter_secret       = DeriveSecret(epoch_secret, "exporter")
+epoch_authenticator   = DeriveSecret(epoch_secret, "authentication")
+external_secret       = DeriveSecret(epoch_secret, "external")
+confirmation_key      = DeriveSecret(epoch_secret, "confirm")    ← label is 'confirm'
+membership_key        = DeriveSecret(epoch_secret, "membership")
+resumption_psk_secret = DeriveSecret(epoch_secret, "resumption")
+init_secret           = DeriveSecret(epoch_secret, "init")
 
-PSKSecret (RFC §9.1): XOR combination of all PSK contributions.
-When no PSKs are used: PSKSecret = b"\\x00" * NH (all-zero).
+PSKSecret (RFC §8.4): HKDF-Extract chain over all PSK contributions.
+When no PSKs used: PSKSecret = b"\\x00" * NH (all-zero).
 """
 
-import hashlib
 from dataclasses import dataclass
 
 from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract
@@ -77,46 +81,55 @@ class KeySchedule:
 	) -> "KeySchedule":
 		"""RFC 9420 §8: Derive all epoch secrets from previous init_secret + commit_secret.
 
+		Formulas confirmed against IETF key-schedule vectors and OpenMLS source:
+			raw           = HKDF-Extract(salt=init_secret, IKM=commit_secret)
+			joiner_secret = ExpandWithLabel(raw, "joiner", GroupContext, Nh)
+			intermediate  = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+			epoch_secret  = ExpandWithLabel(intermediate, "epoch", GroupContext, Nh)
+
 		Args:
-			init_secret:    Previous epoch's init_secret (or b"\\x00" * 32 for epoch 0).
-			commit_secret:  TreeKEM commit secret (path secret at root after update).
-			group_context:  TLS-encoded GroupContext (used in PSKSecret derivation, often b"" here).
+			init_secret:    Previous epoch's init_secret (b"\\x00"*32 for new groups;
+					use initial_init_secret from setup for epoch 0).
+			commit_secret:  TreeKEM root path secret after Commit.
+			group_context:  TLS-encoded GroupContext for current epoch.
 			psk_list:       Optional list of PSK contributions [(psk_id, psk_value)].
 		"""
-		# RFC 9420 §8 Figure 22:
-		#   joiner_secret = HKDF-Extract(
-		#       salt = ExpandWithLabel(init_secret, "joiner", commit_secret, NH),
-		#       ikm  = commit_secret
-		#   )
-		joiner_salt = expand_with_label(init_secret, "joiner", commit_secret, _NH)
-		joiner_secret = hkdf_extract(joiner_salt, commit_secret, hashlib.sha256)
+		# Step 1: joiner_secret
+		# raw = HKDF-Extract(salt=init_secret, IKM=commit_secret)
+		raw = hkdf_extract(init_secret, commit_secret)
+		# joiner_secret = ExpandWithLabel(raw, "joiner", GroupContext, Nh)
+		joiner_secret = expand_with_label(raw, "joiner", group_context, _NH)
 
-		# RFC 9420 §8:
-		#   intermediate = HKDF-Extract(salt=psk_secret, ikm=joiner_secret)
-		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", group_context, NH)
+		# Step 2: intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+		# (PSK injection: non-zero psk_secret = Extract chain per RFC §8.4)
 		psk_secret = _psk_secret(psk_list)
-		intermediate = hkdf_extract(psk_secret, joiner_secret, hashlib.sha256)
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
+
+		# Step 3: epoch_secret = ExpandWithLabel(intermediate, "epoch", GroupContext, Nh)
 		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
 
-		return cls._from_epoch_secret(epoch_secret, joiner_secret)
+		return cls._from_epoch_secret(epoch_secret, joiner_secret, intermediate)
 
 	@classmethod
-	def _from_epoch_secret(cls, epoch_secret: bytes, joiner_secret: bytes) -> "KeySchedule":
-		"""Construct the full schedule from a known epoch_secret (used by joiners)."""
-		# All labels are the exact strings from RFC 9420 §8 Table 3
-		auth_secret = derive_secret(epoch_secret, "authentication")
+	def _from_epoch_secret(cls, epoch_secret: bytes, joiner_secret: bytes, intermediate: bytes | None = None) -> "KeySchedule":
+		"""Construct the full schedule from a known epoch_secret.
 
+		Used both by KeySchedule.derive() and by joiner code after
+		GroupInfo decrypt (where intermediate = Extract(joiner, psk)).
+		"""
+		# Labels are exact strings from OpenMLS schedule/mod.rs and
+		# confirmed against IETF key-schedule test vectors.
 		return cls(
 			joiner_secret=joiner_secret,
 			epoch_secret=epoch_secret,
 			sender_data_secret=derive_secret(epoch_secret, "sender data"),
 			encryption_secret=derive_secret(epoch_secret, "encryption"),
 			exporter_secret=derive_secret(epoch_secret, "exporter"),
-			epoch_authenticator=auth_secret,
+			epoch_authenticator=derive_secret(epoch_secret, "authentication"),
 			external_secret=derive_secret(epoch_secret, "external"),
 			resumption_psk_secret=derive_secret(epoch_secret, "resumption"),
-			confirmation_key=expand_with_label(auth_secret, "confirm", b"", _NH),
-			membership_key=expand_with_label(auth_secret, "membership", b"", _NH),
+			confirmation_key=derive_secret(epoch_secret, "confirm"),
+			membership_key=derive_secret(epoch_secret, "membership"),
 			init_secret=derive_secret(epoch_secret, "init"),
 		)
 
@@ -125,21 +138,29 @@ class KeySchedule:
 	# -------------------------------------------------------------------------
 
 	@staticmethod
-	def derive_welcome_key(joiner_secret: bytes, context: bytes) -> bytes:
-		"""RFC 9420 §12.1.2: welcome_key = ExpandWithLabel(joiner_secret, "welcome", ctx, Nk).
+	def derive_welcome_key(joiner_secret: bytes, context: bytes = b"") -> bytes:
+		"""RFC 9420 §12.4: welcome_key from intermediate_secret.
 
-		Nk = 16 bytes (AES-128-GCM key length for MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519).
-		context = SHA-256(GroupInfo TBS) as per RFC §12.4.
+		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret=0^32)
+		welcome_secret = DeriveSecret(intermediate, "welcome")
+		welcome_key = EWL(welcome_secret, "key", b"", 16)  ← AES-128-GCM Nk=16
 		"""
-		return expand_with_label(joiner_secret, "welcome", context, 16)
+		# For the common case (no PSK): psk_secret = 0^32
+		psk_secret_0 = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		welcome_s = derive_secret(intermediate, "welcome")
+		return expand_with_label(welcome_s, "key", b"", 16)
 
 	@staticmethod
-	def derive_welcome_nonce(joiner_secret: bytes, context: bytes) -> bytes:
-		"""RFC 9420 §12.1.2: welcome_nonce = ExpandWithLabel(joiner_secret, "nonce", ctx, Nn).
+	def derive_welcome_nonce(joiner_secret: bytes, context: bytes = b"") -> bytes:
+		"""RFC 9420 §12.4: welcome_nonce from intermediate_secret.
 
 		Nn = 12 bytes (AES-128-GCM nonce length).
 		"""
-		return expand_with_label(joiner_secret, "nonce", context, 12)
+		psk_secret_0 = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		welcome_s = derive_secret(intermediate, "welcome")
+		return expand_with_label(welcome_s, "nonce", b"", 12)
 
 	# -------------------------------------------------------------------------
 	# Serialization

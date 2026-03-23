@@ -1286,13 +1286,15 @@ class MLSGroup:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 
 		# 6. Reconstruct KeySchedule from joiner_secret (RFC 9420 §8 Figure 22)
-		# Must use same derivation as KeySchedule.derive() to produce matching epoch_secret:
-		#   intermediate = HKDF-Extract(salt=psk_secret, ikm=joiner_secret)
-		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", group_context, NH)
+		# Correct formula (confirmed against IETF key-schedule vectors):
+		#   intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret=0^32)
+		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", GroupContext, NH)
+		# NOTE: pure-mls Welcome doesn't carry a TLS GroupContext, so we use b"" to match
+		# alice's advance_epoch() which also uses b"". IETF interop join would use gi_ctx.to_bytes().
 		psk_zeros = b"\x00" * 32
-		intermediate = hkdf_extract(psk_zeros, gs.joiner_secret, hashlib.sha256)
+		intermediate = hkdf_extract(gs.joiner_secret, psk_zeros)  # NOTE: joiner=salt, psk=IKM
 		epoch_secret = expand_with_label(intermediate, "epoch", b"", 32)
-		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
+		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret, intermediate)
 
 		state = EpochState(
 			group_id=gi_ctx.group_id,
