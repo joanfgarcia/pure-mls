@@ -200,6 +200,108 @@ def WelcomeInfo(*args, **kwargs) -> "Welcome":
 	return Welcome(*args, **kwargs)
 
 
+# GroupInfo (RFC 9420 §12.1.2) — signed by the committer
+
+
+@dataclass
+class GroupInfo:
+	"""RFC 9420 §12.1.2: GroupInfo — sent (AES-GCM encrypted) inside the Welcome.
+
+	Wire format (TBS portion signed by committer):
+		GroupContext     — standard TLS struct
+		extensions<V>   — uint32 vector; empty (0x00000000) for now
+		confirmation_tag — HMAC-SHA256(confirmation_key, confirmed_transcript_hash)
+		signer           — uint32 leaf index of committer
+
+	Full wire:
+		TBS bytes        (above)
+		signature<V>     — Ed25519 signature over TBS, by committer's signing key
+
+	RFC §12.4: the confirmation_tag links the epoch's key material to the
+	transcript, guaranteeing freshness. The signature links the GroupInfo
+	to the committer's identity key.
+	"""
+
+	group_context: GroupContext
+	extensions_bytes: bytes  # empty: b"" → serialised as uint32(0)
+	confirmation_tag: bytes  # HMAC-SHA256(confirmation_key, transcript_hash)
+	signer: int  # committer leaf index
+	signature: bytes  # Ed25519(TBS)
+
+	# ------------------------------------------------------------------
+	# Serialisation helpers
+	# ------------------------------------------------------------------
+
+	def _tbs_bytes(self) -> bytes:
+		"""TBS = GroupContext + extensions<V> + confirmation_tag<V> + signer(uint32)."""
+		return (
+			self.group_context.to_bytes()
+			+ tls_u32(len(self.extensions_bytes))
+			+ self.extensions_bytes
+			+ tls_opaque(self.confirmation_tag)
+			+ tls_u32(self.signer)
+		)
+
+	def to_bytes(self) -> bytes:
+		"""Full wire encoding: TBS + signature<V>."""
+		return self._tbs_bytes() + tls_opaque(self.signature)
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "GroupInfo":
+		offset = 0
+		group_context = GroupContext.from_bytes(data)
+		offset = len(group_context.to_bytes())
+		ext_len = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		extensions_bytes = data[offset : offset + ext_len]
+		offset += ext_len
+		confirmation_tag, offset = read_opaque(data, offset)
+		signer = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		signature, offset = read_opaque(data, offset)
+		return cls(
+			group_context=group_context,
+			extensions_bytes=extensions_bytes,
+			confirmation_tag=confirmation_tag,
+			signer=signer,
+			signature=signature,
+		)
+
+	# ------------------------------------------------------------------
+	# Signing and verification
+	# ------------------------------------------------------------------
+
+	@classmethod
+	def build_and_sign(
+		cls,
+		group_context: GroupContext,
+		confirmation_tag: bytes,
+		signer: int,
+		sig_key: "SignatureKey",
+	) -> "GroupInfo":
+		"""Create a GroupInfo and sign it with the committer's Ed25519 key."""
+		gi = cls(
+			group_context=group_context,
+			extensions_bytes=b"",
+			confirmation_tag=confirmation_tag,
+			signer=signer,
+			signature=b"\x00",  # placeholder
+		)
+		gi.signature = sig_key.sign(gi._tbs_bytes())
+		return gi
+
+	def verify(self, committer_sig_key_bytes: bytes) -> bool:
+		"""Verify the committer's Ed25519 signature over TBS.
+
+		Returns True if valid. Raises cryptography.exceptions.InvalidSignature on failure.
+		"""
+		from cryptography.hazmat.primitives.asymmetric import ed25519
+
+		pub = ed25519.Ed25519PublicKey.from_public_bytes(committer_sig_key_bytes)
+		pub.verify(self.signature, self._tbs_bytes())
+		return True
+
+
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
 
 # Deprecated constants (kept for test compatibility, removed in v1.0 final cleanup)
@@ -955,7 +1057,6 @@ class MLSGroup:
 		signature = self.my_sig_key.sign(tbs)
 
 		# 4. Build RFC-compliant Welcome
-		new_epoch_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, b"")
 		# GroupSecrets for the joiner (HPKE-sealed) — RFC §12.1.2: no joiner_index in wire format
 		group_secrets = GroupSecrets(
 			joiner_secret=next_state.key_schedule.joiner_secret,
@@ -971,19 +1072,29 @@ class MLSGroup:
 			ciphertext=gs_ct,
 		)
 
-		# GroupInfo payload (tree + transcript_hash) — AES-GCM welcome_key (RFC §12.1.2)
-		group_info_payload = (
-			new_epoch_group_ctx.to_bytes() + tls_opaque(new_tree.to_bytes())  # ratchet tree extension
+		# Build signed GroupInfo (RFC 9420 §12.1.2):
+		# confirmation_tag = HMAC(confirmation_key, transcript_hash)
+		import hmac as _hmac_gi
+
+		conf_tag = _hmac_gi.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		# GroupInfo GroupContext uses the NEW epoch + transcript_hash (confirmed)
+		gi_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, transcript_hash)
+		group_info = GroupInfo.build_and_sign(
+			group_context=gi_group_ctx,
+			confirmation_tag=conf_tag,
+			signer=self.my_index,
+			sig_key=self.my_sig_key,
 		)
-		# welcome_key = ExpandWithLabel(joiner_secret, 'welcome', b'', 16)
-		# welcome_nonce = ExpandWithLabel(joiner_secret, 'nonce', b'', 12)
+		# Encrypt GroupInfo with AES-GCM (welcome_key from joiner_secret)
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
 		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret, b"")
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
 
-		gi_ct = _AESGCM(welcome_key).encrypt(welcome_nonce_enc, group_info_payload, b"")
-		# Store as nonce(12) + ciphertext so join() can decode without kem_output
+		# GroupInfo plaintext = GroupInfo.to_bytes() + ratchet_tree extension (opaque<V>)
+		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
+		gi_ct = _AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
+		# Store as nonce(12) || ciphertext for join() to decode
 		welcome = Welcome(
 			cipher_suite=Welcome._CIPHER_SUITE,
 			encrypted_group_secrets=[egs],
@@ -1034,15 +1145,23 @@ class MLSGroup:
 		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
 		gi_bytes = _AESGCM2(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
 
-		# 3. Parse GroupContext and ratchet tree from GroupInfo plaintext
-		gi_ctx = GroupContext.from_bytes(gi_bytes)
-		gi_ctx_len = len(gi_ctx.to_bytes())
-		tree_bytes, _ = read_opaque(gi_bytes, gi_ctx_len)
+		# 3. Parse signed GroupInfo and ratchet tree
+		gi = GroupInfo.from_bytes(gi_bytes)
+		gi_ctx = gi.group_context
+		gi_bytes_len = len(gi.to_bytes())
+		tree_bytes, _ = read_opaque(gi_bytes, gi_bytes_len)
 		tree = RatchetTree.from_bytes(tree_bytes)
 
-		# 4. RFC 9420: discover joiner leaf index by scanning the tree for our signature key.
-		# The committer added our LeafNode (with our signature_key) to the tree before
-		# serializing GroupInfo, so we can find our slot by matching.
+		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
+		committer_node = tree.get_node(gi.signer)
+		if not isinstance(committer_node, LeafNode):
+			raise ValueError(f"GroupInfo.signer ({gi.signer}) is not a leaf node")
+		try:
+			gi.verify(committer_node.signature_key)
+		except Exception as exc:
+			raise ValueError(f"GroupInfo signature verification failed: {exc}") from exc
+
+		# 5. RFC 9420: discover joiner leaf index by scanning tree for our signature key
 		my_sig_pub = my_sig_key.public_bytes()
 		my_index: int | None = None
 		for i, node in enumerate(tree.nodes):
@@ -1053,7 +1172,9 @@ class MLSGroup:
 		if my_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 
-		# 5. Reconstruct KeySchedule from joiner_secret
+		# 6. Reconstruct KeySchedule from joiner_secret (Phase 1: PSKSecret = 0^NH for no PSKs)
+		# RFC §9.1: epoch_secret = HKDF-Extract(PSKSecret, joiner_secret)
+		# PSKSecret = HKDFExtract(0^NH, 0^NH) when no PSKs → effectively 0^NH
 		epoch_secret = hkdf_extract(b"\x00" * 32, gs.joiner_secret, hashlib.sha256)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
 

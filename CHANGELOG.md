@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase2 — Signed GroupInfo (RFC 9420 §12.1.2)
+
+### Added
+
+- **`GroupInfo` dataclass** in `src/pure_mls/group.py` (RFC 9420 §12.1.2):
+  - `_tbs_bytes()`: TBS = GroupContext + extensions<V> + confirmation_tag<V> + signer(uint32)
+  - `to_bytes()` / `from_bytes()`: Full wire encoding (TBS + signature<V>)
+  - `build_and_sign(group_context, confirmation_tag, signer, sig_key)`: creates and signs GroupInfo
+  - `verify(committer_sig_key_bytes)`: verifies Ed25519 signature over TBS
+
+### Changed / Fixed
+
+- **`add_member()`** now builds a proper RFC-compliant signed GroupInfo inside the Welcome:
+  - `confirmation_tag = HMAC-SHA256(confirmation_key, transcript_hash)` links key material to transcript
+  - `GroupInfo` signed with committer's Ed25519 identity key
+  - GroupInfo payload = `GroupInfo.to_bytes() + ratchet_tree_bytes<V>`
+- **`join()`** now:
+  - Parses GroupInfo via `GroupInfo.from_bytes()`
+  - Verifies committer Ed25519 signature by cross-referencing `tree.get_node(gi.signer).signature_key`
+  - Raises `ValueError` if signature fails (prevents rogue-committer attacks)
+- Removed unused `new_epoch_group_ctx` variable (leftover from pre-Phase-2 code)
+
+### Test Results
+
+```
+101 passed in 0.47s (ruff check: All checks passed!)
+```
 ## [Unreleased] v3.0-phase1 — RFC §8 KeySchedule Full Compliance
 
 ### Changed / Fixed
