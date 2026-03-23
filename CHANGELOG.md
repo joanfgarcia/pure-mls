@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase4 — Proposal Types RFC §12
+
+### Added
+
+- **`src/pure_mls/proposals.py`** (new): RFC 9420 §12 Proposal wire formats
+  - `ProposalType` — IntEnum with ADD(0x01), UPDATE(0x02), REMOVE(0x03), PRE_SHARED_KEY(0x04), etc.
+  - `AddProposal(key_package_bytes)`, `UpdateProposal(leaf_node_bytes)`, `RemoveProposal(removed)`, `PSKProposal(psk_id, psk_nonce)`
+  - `proposal_from_bytes()` — type-dispatch deserialization
+  - `proposal_ref(bytes)` — SHA-256 hash for Commit references (ProposalRef)
+  - `ProposalOrRef(value|reference)` — ProposalOrRef with by_value(0x01)/by_hash(0x02) wire format
+- **`tests/test_proposals.py`** (new): 19 tests covering roundtrip, dispatch, proposal_ref, ProposalOrRef
+
+### Test Results
+
+```
+119 passed in 0.49s (ruff check: All checks passed!)
+```
 ## [Unreleased] v3.0-phase3 — SecretTree / PrivateMessage RFC §9
 
 ### Added
