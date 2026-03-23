@@ -1142,11 +1142,19 @@ class MLSGroup:
 		return new_group, welcome, update
 
 	@classmethod
-	def join(cls, welcome: Welcome, my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
+	def join(cls, welcome: "Welcome | bytes", my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
 		"""
 		Initializes a Group from a Welcome message (RFC 9420 §12.1.2).
 		Decrypts GroupSecrets and reconstructs the EpochState.
+
+		Accepts either a Welcome object or raw TLS wire-format bytes.
 		"""
+		# Auto-detect: if raw bytes, parse as Welcome TLS wire format
+		if isinstance(welcome, (bytes, bytearray)):
+			try:
+				welcome = Welcome.from_bytes(welcome)
+			except Exception as exc:
+				raise ValueError(f"Failed to parse Welcome TLS bytes: {exc}") from exc
 		# RFC 9420 §12.1.2: find our EncryptedGroupSecrets by trying each (KPRef match).
 		# For single-joiner cases, take the only entry. For multi-joiner, try each.
 		gs_bytes_raw: bytes | None = None

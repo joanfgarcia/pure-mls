@@ -119,16 +119,6 @@ def _load_ks_vectors() -> list[dict]:
 _KS_VECTORS = _load_ks_vectors()
 
 
-@pytest.mark.xfail(
-	reason=(
-		"Known gap (Phase 7 backlog): epoch_secret derivation requires exact GroupContext "
-		"TLS serialization (group_id, epoch, tree_hash, confirmed_transcript_hash, etc.) "
-		"matching the reference implementation. Our GroupContext encoding diverges from "
-		"what OpenMLS uses for the ExpandWithLabel('epoch', group_ctx) step. "
-		"crypto-basics primitives (expand_with_label, derive_secret) pass IETF vectors."
-	),
-	strict=False,
-)
 @pytest.mark.parametrize("vec", _KS_VECTORS, ids=[f"ks-suite1-vec{i}" for i in range(len(_KS_VECTORS))])
 def test_key_schedule_epoch_secrets(vec):
 	"""RFC 9420 §8: All epoch secrets derived correctly from given joiner_secret.
@@ -138,7 +128,7 @@ def test_key_schedule_epoch_secrets(vec):
 	We verify the full chain: joiner → intermediate → epoch_secret → all secrets.
 
 	Chain (RFC §8 Figure 22):
-		intermediate = HKDF-Extract(psk_secret, joiner_secret)
+		intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
 		epoch_secret = ExpandWithLabel(intermediate, "epoch", group_ctx, NH)
 		DeriveSecret(epoch_secret, label) for each derived secret
 	"""
@@ -150,7 +140,8 @@ def test_key_schedule_epoch_secrets(vec):
 		group_ctx = _h(epoch["group_context"])
 
 		# Derive epoch_secret from joiner_secret and psk_secret
-		intermediate = hkdf_extract(psk_s, joiner_s)
+		# RFC §8 Figure 22: HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+		intermediate = hkdf_extract(joiner_s, psk_s)
 		epoch_secret = expand_with_label(intermediate, "epoch", group_ctx, 32)
 
 		# Validate all derived secrets against IETF expected values
@@ -174,9 +165,8 @@ def test_key_schedule_epoch_secrets(vec):
 				f"Epoch {i} {field_name} mismatch:\n  label:    {label!r}\n  got:      {derived.hex()}\n  expected: {expected.hex()}"
 			)
 
-		# Validate confirmation_key (special: expand_with_label of authentication)
-		auth_secret = derive_secret(epoch_secret, "authentication")
-		conf_key = expand_with_label(auth_secret, "confirm", b"", 32)
+		# Validate confirmation_key: RFC §8 = DeriveSecret(epoch_secret, "confirm")
+		conf_key = derive_secret(epoch_secret, "confirm")
 		if epoch.get("confirmation_key"):
 			assert conf_key == _h(epoch["confirmation_key"]), f"Epoch {i} confirmation_key mismatch"
 
