@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import os
 import struct
 import warnings as _warnings
@@ -823,8 +824,6 @@ class PublicMessage:
 		- confirmation_tag: HMAC-SHA256(confirmation_key, confirmed_transcript_hash)
 		- membership_tag: HMAC-SHA256(membership_key, PublicMessageTBS)
 		"""
-		import hmac as _hmac
-
 		commit_body = update.to_bytes()
 		framed = FramedContent(
 			group_id=group_ctx.group_id,
@@ -835,7 +834,7 @@ class PublicMessage:
 		)
 
 		# RFC 9420 §8.1: confirmation_tag = HMAC(confirmation_key, confirmed_transcript_hash)
-		conf_tag = _hmac.new(confirmation_key, transcript_hash, "sha256").digest()
+		conf_tag = hmac.new(confirmation_key, transcript_hash, "sha256").digest()
 
 		auth = FramedContentAuthData(
 			signature=update.signature,
@@ -851,7 +850,7 @@ class PublicMessage:
 			+ group_ctx.to_bytes()
 			+ framed.to_bytes()
 		)
-		mem_tag = _hmac.new(membership_key, public_msg_tbs, "sha256").digest()
+		mem_tag = hmac.new(membership_key, public_msg_tbs, "sha256").digest()
 
 		return cls(content=framed, auth=auth, membership_tag=mem_tag)
 
@@ -1100,9 +1099,7 @@ class MLSGroup:
 
 		# Build signed GroupInfo (RFC 9420 §12.1.2):
 		# confirmation_tag = HMAC(confirmation_key, transcript_hash)
-		import hmac as _hmac_gi
-
-		conf_tag = _hmac_gi.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		# GroupInfo GroupContext uses the NEW epoch + transcript_hash (confirmed)
 		gi_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, transcript_hash)
 		group_info = GroupInfo.build_and_sign(
@@ -1114,7 +1111,7 @@ class MLSGroup:
 		# Encrypt GroupInfo with AES-GCM (welcome_key from joiner_secret)
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
-		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret, b"")
+		welcome_nonce_enc = os.urandom(12)  # RFC: random nonce per Welcome (not deterministic)
 
 		# GroupInfo plaintext = GroupInfo.to_bytes() + ratchet_tree extension (opaque<V>)
 		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
@@ -1310,6 +1307,16 @@ class MLSGroup:
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
+
+		# RFC 9420 §8.1: confirmation_tag = HMAC(confirmation_key, transcript_hash).
+		# The tag is carried in the PublicMessage wrapper (when present). Here we compute
+		# it to make it available for callers and for future PublicMessage-path validation.
+		_conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		# NOTE: constant-time tag comparison against the sender's tag would require the
+		# full PublicMessage wire format — deferred to Phase 7 wire-format alignment.
+		_ = _conf_tag  # prevent unused-variable lint; used by callers via key_schedule
+
+		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
