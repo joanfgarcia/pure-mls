@@ -93,23 +93,34 @@ class GroupContext:
 class GroupSecrets:
 	"""RFC 9420 §12.1.2: Internal struct sealed by HPKE for each joiner.
 
-	Contains the joiner_secret and the joiner's leaf index.
-	(PathSecret and PSKs omitted — not implemented in this version.)
-	This is sent as the HPKE plaintext inside EncryptedGroupSecrets.
+	Wire format: joiner_secret<V> + has_path_secret(u8) + [path_secret<V>]
+	The joiner_index is NOT part of the RFC wire format; the joiner discovers
+	their leaf by scanning GroupInfo tree for a leaf with their signature_key.
 	"""
 
 	joiner_secret: bytes  # 32 bytes
-	joiner_index: int  # uint32 (our extension — needed for join())
+	path_secret: bytes | None = None  # optional — RFC §12.1.2 optional<PathSecret>
 
 	def to_bytes(self) -> bytes:
-		return tls_opaque(self.joiner_secret) + tls_u32(self.joiner_index)
+		actual_path = self.path_secret if self.path_secret else b""
+		present = bool(actual_path)
+		result = tls_opaque(self.joiner_secret)
+		if present:
+			result += b"\x01" + tls_opaque(actual_path)
+		else:
+			result += b"\x00"
+		return result
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupSecrets":
 		offset = 0
 		joiner_secret, offset = read_opaque(data, offset)
-		joiner_index, offset = read_u32(data, offset)
-		return cls(joiner_secret=joiner_secret, joiner_index=joiner_index)
+		has_path = data[offset]
+		offset += 1
+		path_secret: bytes | None = None
+		if has_path:
+			path_secret, offset = read_opaque(data, offset)
+		return cls(joiner_secret=joiner_secret, path_secret=path_secret)
 
 
 @dataclass
@@ -940,10 +951,9 @@ class MLSGroup:
 
 		# 4. Build RFC-compliant Welcome
 		new_epoch_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, b"")
-		# GroupSecrets for the joiner (HPKE-sealed, info = GroupContext)
+		# GroupSecrets for the joiner (HPKE-sealed) — RFC §12.1.2: no joiner_index in wire format
 		group_secrets = GroupSecrets(
 			joiner_secret=next_state.key_schedule.joiner_secret,
-			joiner_index=new_leaf_idx,
 		)
 		gs_enc, gs_ct = HPKE.seal(
 			key_package.init_key_pub,
@@ -998,9 +1008,8 @@ class MLSGroup:
 		Initializes a Group from a Welcome message (RFC 9420 §12.1.2).
 		Decrypts GroupSecrets and reconstructs the EpochState.
 		"""
-		# Find our EncryptedGroupSecrets by scanning the secrets list.
-		# In practice we match by our KPRef or simply take the first entry
-		# when there is only one joiner (our current model).
+		# Find our EncryptedGroupSecrets: match by our init_key (KPRef would be optimal
+		# but requires the full KeyPackage — for now we take index 0 for single-joiner)
 		if not welcome.encrypted_group_secrets:
 			raise ValueError("Welcome contains no encrypted group secrets")
 
@@ -1026,7 +1035,20 @@ class MLSGroup:
 		tree_bytes, _ = read_opaque(gi_bytes, gi_ctx_len)
 		tree = RatchetTree.from_bytes(tree_bytes)
 
-		# 4. Reconstruct KeySchedule from joiner_secret
+		# 4. RFC 9420: discover joiner leaf index by scanning the tree for our signature key.
+		# The committer added our LeafNode (with our signature_key) to the tree before
+		# serializing GroupInfo, so we can find our slot by matching.
+		my_sig_pub = my_sig_key.public_bytes()
+		my_index: int | None = None
+		for i, node in enumerate(tree.nodes):
+			if i % 2 == 0 and isinstance(node, LeafNode):
+				if node.signature_key == my_sig_pub:
+					my_index = i
+					break
+		if my_index is None:
+			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
+
+		# 5. Reconstruct KeySchedule from joiner_secret
 		epoch_secret = hkdf_extract(b"\x00" * 32, gs.joiner_secret, hashlib.sha256)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
 
@@ -1036,7 +1058,7 @@ class MLSGroup:
 			tree=tree,
 			key_schedule=ks,
 		)
-		return cls(state, my_index=gs.joiner_index, my_sig_key=my_sig_key, my_kem_key=my_kem_key)
+		return cls(state, my_index=my_index, my_sig_key=my_sig_key, my_kem_key=my_kem_key)
 
 	def process_update(self, update: GroupUpdate) -> "MLSGroup":
 		"""

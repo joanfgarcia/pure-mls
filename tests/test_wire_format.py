@@ -75,11 +75,18 @@ def test_group_context_unsupported_version():
 
 
 def test_group_secrets_round_trip():
-	"""GroupSecrets to_bytes()/from_bytes() preserves fields."""
-	gs = GroupSecrets(joiner_secret=b"\x01" * 32, joiner_index=5)
+	"""GroupSecrets to_bytes()/from_bytes() preserves fields (RFC 9420 §12.1.2)."""
+	# Without path_secret (most common case)
+	gs = GroupSecrets(joiner_secret=b"\x01" * 32)
 	decoded = GroupSecrets.from_bytes(gs.to_bytes())
 	assert decoded.joiner_secret == gs.joiner_secret
-	assert decoded.joiner_index == gs.joiner_index
+	assert decoded.path_secret is None
+
+	# With path_secret (TreeKEM full commit case)
+	gs2 = GroupSecrets(joiner_secret=b"\x02" * 32, path_secret=b"\x03" * 32)
+	decoded2 = GroupSecrets.from_bytes(gs2.to_bytes())
+	assert decoded2.joiner_secret == gs2.joiner_secret
+	assert decoded2.path_secret == gs2.path_secret
 
 
 # ---------------------------------------------------------------------------

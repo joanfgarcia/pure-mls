@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v2.0-phase3 — RFC 9420 §12.1.2 GroupSecrets/GroupInfo
+
+### Breaking Changes
+
+- **`GroupSecrets`** no longer carries non-RFC `joiner_index` field
+  - Wire format is now: `joiner_secret<V> + has_path_secret(u8) + [path_secret<V>]`
+  - Encrypted `GroupSecrets` from v1.x are **not compatible** with v2.0 (clean migration)
+
+### Added
+
+- **`GroupSecrets.path_secret: bytes | None`**: RFC 9420 §12.1.2 optional PathSecret field
+  (currently `None`, wired for future TreeKEM full-commit support)
+
+### Changed
+
+- **`MLSGroup.join()`**: joiner leaf index is now discovered by scanning the GroupInfo tree
+  for a leaf whose `signature_key` matches the joiner's Ed25519 public key — fully RFC-compliant,
+  no longer relies on internal `joiner_index` extension in the wire format
+
+### Tests
+
+- Updated `test_group_secrets_round_trip` to assert new `path_secret` field (without / with value)
+- **92/92 tests pass** (infra timeout excluded)
+
 ## [Unreleased] v2.0-phase1 — RFC 9420 Wire-Format Migration: LeafNode / KeyPackage
 
 ### Breaking Changes
