@@ -67,7 +67,7 @@ class HPKE:
 		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
-		prk_key = HPKE._labeled_extract(None, b"secret", shared_secret)
+		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
 		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
@@ -95,7 +95,7 @@ class HPKE:
 		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
-		prk_key = HPKE._labeled_extract(None, b"secret", shared_secret)
+		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
 		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
