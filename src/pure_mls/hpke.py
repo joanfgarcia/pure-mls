@@ -57,8 +57,9 @@ class HPKE:
 		dh = ephemeral.dh_exchange(receiver_pub)
 		kem_context = enc + receiver_pub
 
-		# Phase 1: KEM (ExtractAndExpand with KEM_SUITE_ID)
-		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
+		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
+		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
+		prk_kem = HPKE._kem_extract(None, b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
@@ -85,8 +86,9 @@ class HPKE:
 		dh = receiver_priv.dh_exchange(enc)
 		kem_context = enc + receiver_priv.public_bytes()
 
-		# Phase 1: KEM
-		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
+		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
+		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
+		prk_kem = HPKE._kem_extract(None, b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule
