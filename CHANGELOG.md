@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase5 — TreeKEM UpdatePath RFC §7.5
+
+### Added
+
+- **`tests/test_treekem.py`** (new): 11 TreeKEM tests
+  - `HPKECiphertext` TLS roundtrip
+  - `UpdatePathNode` roundtrip (0 + N encrypted_path_secret)
+  - `UpdatePath` TLS roundtrip (with live KeyPackage)
+  - Full 2-member E2E: create → add_member → join → encrypt ↔ decrypt
+  - Forward secrecy: 5 messages, all different ciphertexts, all decryptable in order
+  - Wrong-epoch rejection test
+
+### Verified
+
+- `process_update()` TreeKEM path secret decryption chain (direct_path → copath resolution → HPKE.open → next path_secret derivation → commit_secret) verified via test suite
+- Per-leaf per-generation SecretTree keys work symmetrically between creator+joiner (Phase 3 integration)
+
+### Test Results
+
+```
+130 passed in 0.59s (ruff check: All checks passed!)
+```
 ## [Unreleased] v3.0-phase4 — Proposal Types RFC §12
 
 ### Added
