@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v2.0-phase6 — HkdfLabel VarInt encoding (P1 closed)
+
+### Root Cause Analysis
+
+The IETF test vector runner (mls-rs / OpenMLS) uses **MLS VarInt** encoding for
+`HkdfLabel` byte_vec field lengths, NOT fixed u32. VarInt encoding:
+- 0..63 → 1 byte, 64..16383 → 2 bytes, 16384..2^30-1 → 4 bytes
+
+For all practical MLS contexts (labels ≤63 bytes, contexts ≤63 bytes), VarInt = 1 byte,
+which is why our earlier brute-force found u8 works for the specific test vector.
+
+Our previous implementation used a fixed 4-byte (u32) context prefix — confirmed via
+reading the mls-rs source code (`mls-rs-codec::byte_vec` → `VarInt::mls_encode`).
+
+### Added (`hkdf.py`)
+
+- **`varint_encode(n)`**: MLS variable-length integer encoding (matches mls-rs VarInt)
+- **`expand_with_label(secret, label, context, length)`**: RFC 9420 §8 ExpandWithLabel
+  with correct VarInt byte_vec encoding — byte-exact with IETF test vectors ✓
+- **`derive_secret(secret, label)`**: RFC 9420 §8 DeriveSecret convenience wrapper
+
+### Changed
+
+- **`group.py`**: `_derive_path_node_key` and `_derive_next_path_secret` now use
+  `expand_with_label()` from `hkdf.py` instead of manual hkdf_label construction
+
+### Tests
+
+- `test_ietf_expand_with_label_via_pure_mls`: upgraded to BYTE-EXACT IETF vector match ✓
+- **102/102 tests pass**, ruff clean
+
+### Impact
+
+ExpandWithLabel and TreeKEM path derivation are now byte-exact compatible with OpenMLS
+and mls-rs. **Note**: groups created with v2.0-phase4 will have different epoch_secret
+derivation than phase6 — clients must update together if migrating existing groups.
+
 ## [Unreleased] v2.0-phase4+5 — MLSMessage §6 + IETF Test Vectors
 
 ### Added (Phase 4: MLSMessage Framing RFC §6)

@@ -7,7 +7,7 @@ from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import hkdf_expand, hkdf_extract
+from pure_mls.hkdf import expand_with_label, hkdf_expand, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
@@ -239,18 +239,12 @@ def _derive_path_node_key(path_secret: bytes) -> bytes:
 
 	Returns the HPKE private key material (used with KemKey to build a key pair).
 	"""
-	label = b"MLS 1.0 node"
-	hkdf_label = (
-		b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"  # empty context
-	)
-	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+	return expand_with_label(path_secret, "node", b"", 32)
 
 
 def _derive_next_path_secret(path_secret: bytes) -> bytes:
 	"""RFC 9420 §12.1.1: next_path_secret = ExpandWithLabel(path_secret, 'path', b'', 32)."""
-	label = b"MLS 1.0 path"
-	hkdf_label = b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"
-	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+	return expand_with_label(path_secret, "path", b"", 32)
 
 
 def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:

@@ -99,19 +99,15 @@ def test_ietf_expand_with_label():
 
 
 def test_ietf_expand_with_label_via_pure_mls():
-	"""pure-mls hkdf_expand is deterministic and produces the right output length.
+	"""pure-mls expand_with_label() matches IETF crypto-basics.json suite 1 vector BYTE-EXACT.
 
-	Note: pure-mls internally uses u32 context prefix in its hkdf_expand; the IETF test
-	vector matches the u8 context prefix variant (see _expand_with_label above). Both are
-	internally self-consistent. The encoding difference is tracked as Phase 6 (P1).
+	Phase 6 fix: pure-mls now uses VarInt (mls-rs byte_vec encoding) for HkdfLabel
+	context prefix instead of u32, making ExpandWithLabel byte-exact with OpenMLS/mls-rs.
 	"""
-	from pure_mls.hkdf import hkdf_expand
+	from pure_mls.hkdf import expand_with_label
 
-	# Verify pure-mls hkdf_expand is deterministic
-	result1 = hkdf_expand(_EWL_SECRET, b"test-info", _EWL_LENGTH)
-	result2 = hkdf_expand(_EWL_SECRET, b"test-info", _EWL_LENGTH)
-	assert result1 == result2, "hkdf_expand must be deterministic"
-	assert len(result1) == _EWL_LENGTH, f"Expected {_EWL_LENGTH} bytes output"
+	result = expand_with_label(_EWL_SECRET, _EWL_LABEL, _EWL_CONTEXT, _EWL_LENGTH)
+	assert result == _EWL_OUT, f"pure-mls expand_with_label mismatch:\n  got: {result.hex()}\n  expected: {_EWL_OUT.hex()}"
 
 
 # ---------------------------------------------------------------------------
