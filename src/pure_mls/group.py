@@ -243,19 +243,37 @@ def _derive_next_path_secret(path_secret: bytes) -> bytes:
 
 
 def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
-	"""RFC 9420 §7.8: subtree hash = SHA-256 of the public key(s) in a subtree.
+	"""RFC 9420 §7.8: recursive subtree hash for parent_hash computation.
 
+	- Blank node (None): SHA-256(b"")
+	- Leaf node:         SHA-256(KeyPackage.to_bytes())
+	- Parent node:       SHA-256(public_key + left_subtree_hash + right_subtree_hash)
+
+	index=-1 is the sentinel used by copath() for out-of-bounds siblings;
+	treated as a blank node (SHA-256(b"")).
 	Used as original_sibling_tree_hash in RFC 9420 §7.9 parent_hash computation.
 	"""
-	node = tree.get_node(index)
-	if node is None:
+	# Guard: index=-1 is the OOB sentinel from copath(); any invalid index = blank node
+	if index < 0 or index >= len(tree.nodes):
 		return hashlib.sha256(b"").digest()
-	if index % 2 == 0:  # leaf node
+	node = tree.get_node(index)
+	if index % 2 == 0:  # leaf
+		if node is None:
+			return hashlib.sha256(b"").digest()
+		assert isinstance(node, LeafNode)
 		return hashlib.sha256(node.key_package.to_bytes()).digest()
-	# Internal (parent) node: hash the public key only.
-	# RFC 9420 §7.8 specifies a recursive tree hash; we use a simplified non-recursive
-	# version that is safe for all LBBT sizes and sufficient for parent_hash computation.
-	return hashlib.sha256(node.public_key).digest()
+	# Internal (parent) node — recurse into children
+	lvl = tree.level(index)
+	left = index - (1 << (lvl - 1))
+	right = index + (1 << (lvl - 1))
+	left_hash = _subtree_hash(tree, left)
+	right_hash = _subtree_hash(tree, right)
+	if node is None:
+		# Blank parent: hash of children hashes (no public key contribution)
+		return hashlib.sha256(left_hash + right_hash).digest()
+	assert isinstance(node, ParentNode)
+	# Non-blank parent: public key binds to both subtrees
+	return hashlib.sha256(node.public_key + left_hash + right_hash).digest()
 
 
 def _compute_parent_hash(
