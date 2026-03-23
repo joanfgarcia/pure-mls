@@ -1,5 +1,6 @@
 import hashlib
 import os
+import struct
 import warnings as _warnings
 from dataclasses import dataclass
 
@@ -11,6 +12,7 @@ from pure_mls.hkdf import expand_with_label, hkdf_expand, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
+from pure_mls.secret_tree import SecretTree, derive_sender_data_key, derive_sender_data_nonce
 from pure_mls.tls import (
 	read_opaque,
 	read_opaque32,
@@ -877,8 +879,23 @@ class MLSGroup:
 
 	@property
 	def application_key(self) -> bytes:
-		"""The symmetric key used to encrypt application messages in this epoch."""
+		"""Deprecated: direct use of encryption_secret as key. Use SecretTree instead."""
+		_warnings.warn(
+			"application_key is deprecated; encrypt/decrypt now use SecretTree per RFC §9",
+			DeprecationWarning,
+			stacklevel=2,
+		)
 		return self.state.key_schedule.encryption_secret
+
+	def _get_secret_tree(self) -> SecretTree:
+		"""Lazily create or return the per-epoch SecretTree."""
+		if not hasattr(self, "_secret_tree") or self._secret_tree is None:
+			n_leaves = (len(self.state.tree.nodes) + 1) // 2
+			self._secret_tree = SecretTree(
+				encryption_secret=self.state.key_schedule.encryption_secret,
+				n_leaves=n_leaves,
+			)
+		return self._secret_tree
 
 	@classmethod
 	def create(cls, group_id: bytes, creator_sig_key: SignatureKey, creator_kem_key: KemKey) -> "MLSGroup":
@@ -1280,40 +1297,75 @@ class MLSGroup:
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
-		"""
-		Encrypts an application message for this epoch using AES-GCM.
-		RFC 9420: Uses the epoch's encryption_secret.
+		"""RFC 9420 §9: Encrypt an application message using SecretTree (per-leaf, per-generation).
+
+		Wire format:
+			sender_data_ct (32B AES-GCM) | gen(4B) | content_ct (nonce_12 + AESGCM_ct)
+			where sender_data plaintext = leaf_index(4B)
 		"""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-		aesgcm = AESGCM(self.application_key)
-		nonce = os.urandom(12)  # 96-bit nonce
-		# We use the group_id + epoch_id as Associated Data (AD) for integrity
-		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
-		ciphertext = aesgcm.encrypt(nonce, plaintext, ad)
+		st = self._get_secret_tree()
+		content_key, content_nonce, gen = st.get_key_and_nonce(self.my_index)
 
-		# Payload: [nonce (12)] + [ciphertext (tag+data)]
-		return nonce + ciphertext
+		# Associated Data: group_id + epoch_id for binding
+		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
+		content_ct = AESGCM(content_key).encrypt(content_nonce, plaintext, ad)
+
+		# RFC 9420 §9.4: Encrypt SenderData = leaf_index using first 4B of content_ct as sample
+		sample = content_ct[:4] if len(content_ct) >= 4 else content_ct.ljust(4, b"\x00")
+		sd_key = derive_sender_data_key(self.state.key_schedule.sender_data_secret, sample)
+		sd_nonce = derive_sender_data_nonce(self.state.key_schedule.sender_data_secret, sample)
+		sd_plaintext = struct.pack(">I", self.my_index)  # leaf_index (4 bytes)
+		sd_ct = AESGCM(sd_key).encrypt(sd_nonce, sd_plaintext, ad)
+
+		# Wire: sender_data_ct(len+bytes) | gen(4B big-endian) | content_ct
+		return len(sd_ct).to_bytes(2, "big") + sd_ct + struct.pack(">I", gen) + content_ct
 
 	def decrypt_application_message(self, payload: bytes) -> bytes:
-		"""
-		Decrypts an application message for this epoch.
-		"""
+		"""RFC 9420 §9: Decrypt an application message using SecretTree."""
 		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-		if len(payload) < 28:
+		if len(payload) < 2:
 			raise ValueError("Application message payload too short")
 
-		nonce = payload[:12]
-		ciphertext = payload[12:]
-
-		aesgcm = AESGCM(self.application_key)
 		ad = self.group_id + self.epoch_id.to_bytes(8, "big")
 
+		# 1. Parse sender_data ciphertext and content ciphertext
+		offset = 0
+		sd_ct_len = int.from_bytes(payload[offset : offset + 2], "big")
+		offset += 2
+		sd_ct = payload[offset : offset + sd_ct_len]
+		offset += sd_ct_len
+		gen = struct.unpack(">I", payload[offset : offset + 4])[0]
+		offset += 4
+		content_ct = payload[offset:]
+
+		if len(content_ct) < 4:
+			raise ValueError("Content ciphertext too short for SenderData sample")
+
+		# 2. Decrypt SenderData to recover sender leaf_index
+		sample = content_ct[:4]
+		sd_key = derive_sender_data_key(self.state.key_schedule.sender_data_secret, sample)
+		sd_nonce = derive_sender_data_nonce(self.state.key_schedule.sender_data_secret, sample)
 		try:
-			return aesgcm.decrypt(nonce, ciphertext, ad)
+			sd_plaintext = AESGCM(sd_key).decrypt(sd_nonce, sd_ct, ad)
 		except InvalidTag:
-			# SEC-MED-02: narrow to AESGCM authentication failure only
+			raise ValueError("SenderData authentication failed")
+
+		sender_leaf = struct.unpack(">I", sd_plaintext)[0]
+
+		# 3. Derive content key/nonce for sender's leaf + generation
+		st = self._get_secret_tree()
+		try:
+			content_key, content_nonce = st.get_key_and_nonce_for_gen(sender_leaf, gen)
+		except ValueError as exc:
+			raise ValueError(f"SecretTree: {exc}") from exc
+
+		# 4. Decrypt content
+		try:
+			return AESGCM(content_key).decrypt(content_nonce, content_ct, ad)
+		except InvalidTag:
 			raise ValueError("Application message decryption failed: authentication tag mismatch")
 
 	def to_bytes(self) -> bytes:

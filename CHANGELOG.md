@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] v3.0-phase3 — SecretTree / PrivateMessage RFC §9
+
+### Added
+
+- **`src/pure_mls/secret_tree.py`** (new): RFC 9420 §9 SecretTree implementation
+  - `SecretTree.get_key_and_nonce(leaf)` — derives (content_key, content_nonce, gen) per-leaf/per-gen
+  - `SecretTree.get_key_and_nonce_for_gen(leaf, gen)` — receiver side, enforces forward secrecy
+  - `derive_sender_data_key(sd_secret, sample)` / `derive_sender_data_nonce()` — RFC §9.4
+
+### Changed / Fixed
+
+- **`group.py`**: `encrypt/decrypt_application_message()` rewritten for RFC §9:
+  - Per-leaf per-generation key derivation (ExpandWithLabel chain per §9.3)
+  - Encrypted SenderData header: `leaf_index` AES-GCM encrypted with `HKDFLabel(sender_data_secret, sample)` (§9.4)
+  - Wire format: `sd_ct_len(2B) | sd_ct | gen(4B) | content_ct`
+  - `application_key` property deprecated (DeprecationWarning)
+- **`tests/test_storage.py`**: Updated to use `state.key_schedule.encryption_secret` directly
+
+### Test Results
+
+```
+100 passed in 0.41s (ruff check: All checks passed!)
+```
 ## [Unreleased] v3.0-phase2 — Signed GroupInfo (RFC 9420 §12.1.2)
 
 ### Added
