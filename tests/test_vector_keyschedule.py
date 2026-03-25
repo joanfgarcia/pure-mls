@@ -1,6 +1,5 @@
-import hashlib
-import pytest
 from pure_mls.keyschedule import KeySchedule
+
 
 def test_key_schedule_epoch_0_suite_1():
     """
@@ -24,7 +23,7 @@ def test_key_schedule_epoch_0_suite_1():
 
     # Derivation
     ks = KeySchedule.derive(initial_init_secret, commit_secret, group_context, psk_secret)
-    
+
     print(f"Derived Joiner: {ks.joiner_secret.hex()}")
     print(f"Derived Epoch:  {ks.epoch_secret.hex()}")
     assert ks.joiner_secret == expected_joiner_secret, f"joiner_secret mismatch: {ks.joiner_secret.hex()}"
@@ -34,7 +33,7 @@ def test_key_schedule_epoch_0_suite_1():
     assert ks.confirmation_key == expected_confirmation_key, f"confirmation_key mismatch: {ks.confirmation_key.hex()}"
     assert ks.sender_data_secret == expected_sender_data_secret, f"sender_data_secret mismatch: {ks.sender_data_secret.hex()}"
     assert ks.next_init_secret == expected_init_secret, f"next_init_secret mismatch: {ks.next_init_secret.hex()}"
-    
+
     # Membership key check
     m_key = KeySchedule.derive_membership_key(ks.epoch_secret)
     assert m_key == expected_membership_key, f"membership_key mismatch: {m_key.hex()}"

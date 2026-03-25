@@ -9,14 +9,16 @@ def test_key_schedule_derivation() -> None:
 	"""Asserts that a KeySchedule mathematically isolates eras."""
 	init_secret = os.urandom(32)
 	commit_secret = os.urandom(32)
+	group_context = os.urandom(32)  # Dummy context for math check
 
-	schedule_1 = KeySchedule.derive(init_secret, commit_secret)
+	schedule_1 = KeySchedule.derive(init_secret, commit_secret, group_context)
 	assert len(schedule_1.encryption_secret) == 32
 	assert len(schedule_1.next_init_secret) == 32
 
 	# Simulating a second commit
 	commit_secret_2 = os.urandom(32)
-	schedule_2 = KeySchedule.derive(schedule_1.next_init_secret, commit_secret_2)
+	group_context_2 = os.urandom(32)
+	schedule_2 = KeySchedule.derive(schedule_1.next_init_secret, commit_secret_2, group_context_2)
 
 	# Asserts Post-Compromise Security isolation (keys differ completely)
 	assert schedule_1.encryption_secret != schedule_2.encryption_secret
@@ -26,15 +28,17 @@ def test_key_schedule_derivation() -> None:
 def test_epoch_state_machine() -> None:
 	"""Asserts that Epoch transitions update the ID and hash strictly linearly."""
 	tree_v1 = RatchetTree(1)
-	state_v1 = EpochState.genesis(b"legion_770", tree_v1)
+	group_context = os.urandom(32)
+	state_v1 = EpochState.genesis(b"legion_770", tree_v1, group_context)
 
 	assert state_v1.epoch_id == 0
 
 	# Advance Epoch (A commit occurred)
 	tree_v2 = RatchetTree(2)  # E.g., someone joined
 	commit_secret = os.urandom(32)
+	group_context_2 = os.urandom(32)
 
-	state_v2 = state_v1.advance_epoch(commit_secret, tree_v2)
+	state_v2 = state_v1.advance_epoch(commit_secret, tree_v2, group_context_2)
 
 	assert state_v2.epoch_id == 1
 	assert state_v2.group_id == b"legion_770"

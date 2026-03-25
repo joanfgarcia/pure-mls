@@ -193,6 +193,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_state_findings.py` and `tests/test_group_errors.py` updated to use 32-byte
   `KeyPackageRef` keys and the RFC-correct 5-byte `Sender` struct in mock `GroupUpdate` objects.
 
+## [1.6.1] - 2026-03-25
+
+### Fixed (Handshake & Key Schedule Synchronization)
+
+- **[CRITICAL] `MLSGroup.join()`**: Realigned the Joiner's `KeySchedule` derivation to include the correct `MemberSecret` (KDF.Extract joiner + PSK) and `EpochSecret` (ExpandWithLabel member + GroupContext). Previously, the Joiner used a hardcoded zero-salt KDF.Extract, causing a desynchronization with the Committer's `encryption_secret`.
+- **[CRITICAL] `MLSGroup.process_update()`**: Fixed the `GroupContext` used in transcript hash verification to use the correct `update.epoch_id` (the target epoch) and injected the mandatory `prior_confirmed_transcript_hash` (previous `joiner_secret`), resolving a `InvalidSignature` error during multi-party handshakes.
+- **[STABILITY] `test_mls_group_lifecycle`**: Verified 3-party (Alice/Bob/Charlie) join-and-commit sequence functionality. Pure-mls now maintains perfect cryptographic parity across heterogeneous group operations.
+
 ## [1.6.0] - 2026-03-25
 
 ### Added (IETF Interoperability Audit - Phase 1)

@@ -919,7 +919,7 @@ class MLSGroup:
 		signature = self.my_sig_key.sign(tbs)
 
 		# 4. Build RFC-compliant Welcome
-		new_epoch_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, b"")
+		new_epoch_group_ctx = new_ctx  # Must match the context used in advance_epoch
 		# GroupSecrets for the joiner (HPKE-sealed, info = GroupContext)
 		group_secrets = GroupSecrets(
 			joiner_secret=next_state.key_schedule.joiner_secret,
@@ -1007,7 +1007,12 @@ class MLSGroup:
 		tree = RatchetTree.from_bytes(tree_bytes)
 
 		# 4. Reconstruct KeySchedule from joiner_secret
-		epoch_secret = hkdf_extract(b"\x00" * 32, gs.joiner_secret, hashlib.sha256)
+		# RFC 9420: member_secret = KDF.Extract(joiner_secret, psk_secret)
+		# For now, we assume psk_secret is all zeros (as we don't support PSKs yet).
+		psk_secret = b"\x00" * 32
+		member_secret = hkdf_extract(gs.joiner_secret, psk_secret, hashlib.sha256)
+		# RFC 9420: epoch_secret = ExpandWithLabel(member_secret, "epoch", group_context, 32)
+		epoch_secret = KeySchedule._expand_with_label(member_secret, b"epoch", gi_ctx.to_bytes(), 32)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret)
 
 		state = EpochState(
@@ -1042,6 +1047,7 @@ class MLSGroup:
 				self.state.key_schedule.confirmation_key,
 				ciphertexts_bytes,
 				sender_index=update.committer_index,
+				prior_confirmed_transcript_hash=self.state.key_schedule.joiner_secret,
 			)
 			# RFC 9420 §6.2: signature covers FramedContentTBS, not raw transcript_hash
 			group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
@@ -1108,7 +1114,7 @@ class MLSGroup:
 
 		# 3. Advance state
 		# confirmed_transcript_hash for next state is the current transcript_hash
-		new_ctx = _make_group_context(self.group_id, update.epoch_id + 1, update.tree, transcript_hash)
+		new_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
 		next_state = self.state.advance_epoch(commit_secret, update.tree, group_context=new_ctx.to_bytes())
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
 
