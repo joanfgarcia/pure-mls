@@ -3,15 +3,6 @@ import pytest
 from pure_mls.group import GroupUpdate, MLSGroup
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
-from pure_mls.tree_math import left, parent, right, root
-
-
-def test_tree_math_coverage():
-	with pytest.raises(ValueError, match="at least 1 leaf"):
-		root(0)
-	assert left(0) == 0
-	assert right(0) == 0
-	parent(8, 5)
 
 
 def test_keypackage_coverage():

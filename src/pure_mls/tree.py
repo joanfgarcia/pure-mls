@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+from pure_mls.tls import tls_opaque32, tls_u16
+
 
 @dataclass
 class KeyPackage:
@@ -29,13 +31,7 @@ class KeyPackage:
 
 	def _tbs_bytes(self) -> bytes:
 		"""KeyPackageTBS = cipher_suite(u16) + init_key(opaque32) + identity_key(opaque32)."""
-		return (
-			self._CIPHER_SUITE.to_bytes(2, "big")
-			+ len(self.init_key_pub).to_bytes(4, "big")
-			+ self.init_key_pub
-			+ len(self.identity_key_pub).to_bytes(4, "big")
-			+ self.identity_key_pub
-		)
+		return tls_u16(self._CIPHER_SUITE) + tls_opaque32(self.init_key_pub) + tls_opaque32(self.identity_key_pub)
 
 	def verify_signature(self) -> None:
 		"""Verify leaf_node_signature against identity_key_pub.

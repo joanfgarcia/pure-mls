@@ -31,12 +31,12 @@ def test_key_schedule_epoch_0_suite_1():
 	assert ks.joiner_secret == expected_joiner_secret, f"joiner_secret mismatch: {ks.joiner_secret.hex()}"
 	assert ks.encryption_secret == expected_encryption_secret, f"encryption_secret mismatch: {ks.encryption_secret.hex()}"
 	assert ks.exporter_secret == expected_exporter_secret, f"exporter_secret mismatch: {ks.exporter_secret.hex()}"
-	assert ks.authentication_secret == expected_auth_secret, f"authentication_secret mismatch: {ks.authentication_secret.hex()}"
+	assert ks.epoch_authenticator == expected_auth_secret, f"epoch_authenticator mismatch: {ks.epoch_authenticator.hex()}"
 	assert ks.confirmation_key == expected_confirmation_key, f"confirmation_key mismatch: {ks.confirmation_key.hex()}"
 	assert ks.sender_data_secret == expected_sender_data_secret, f"sender_data_secret mismatch: {ks.sender_data_secret.hex()}"
 	assert ks.next_init_secret == expected_init_secret, f"next_init_secret mismatch: {ks.next_init_secret.hex()}"
 
-	# Membership key check
+	# Membership key check — RFC 9420 §8.1: derived from epoch_secret (confirmed by IETF test vectors)
 	m_key = KeySchedule.derive_membership_key(ks.epoch_secret)
 	assert m_key == expected_membership_key, f"membership_key mismatch: {m_key.hex()}"
 

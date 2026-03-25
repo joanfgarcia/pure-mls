@@ -214,7 +214,8 @@ def _make_group_context(
 	confirmed_transcript_hash: bytes,
 ) -> GroupContext:
 	"""Build GroupContext for the given group state."""
-	tree_hash = hashlib.sha256(tree.to_bytes()).digest()
+	# P2-D: use RFC 9420 §7.8 recursive subtree hash instead of a flat bytes hash
+	tree_hash = _subtree_hash(tree, tree._root())
 	return GroupContext(
 		group_id=group_id,
 		epoch=epoch_id,
@@ -228,35 +229,36 @@ def _derive_path_node_key(path_secret: bytes) -> bytes:
 
 	Returns the HPKE private key material (used with KemKey to build a key pair).
 	"""
-	label = b"MLS 1.0 node"
-	hkdf_label = (
-		b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"  # empty context
-	)
-	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+	return KeySchedule._expand_with_label(path_secret, b"node", b"", 32)
 
 
 def _derive_next_path_secret(path_secret: bytes) -> bytes:
 	"""RFC 9420 §12.1.1: next_path_secret = ExpandWithLabel(path_secret, 'path', b'', 32)."""
-	label = b"MLS 1.0 path"
-	hkdf_label = b"\x00\x20" + len(label).to_bytes(1, "big") + label + b"\x00\x00\x00\x00"
-	return hkdf_expand(path_secret, hkdf_label, 32, hashlib.sha256)
+	return KeySchedule._expand_with_label(path_secret, b"path", b"", 32)
 
 
 def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
-	"""RFC 9420 §7.8: subtree hash = SHA-256 of the public key(s) in a subtree.
+	"""RFC 9420 §7.8: recursive subtree hash.
 
-	Used as original_sibling_tree_hash in RFC 9420 §7.9 parent_hash computation.
+	For leaf nodes: SHA-256(KeyPackage.to_bytes()).
+	For parent nodes: SHA-256(public_key + left_hash + right_hash).
+	For blank nodes: SHA-256(b"").
 	"""
+	if index < 0 or index >= len(tree.nodes):
+		return hashlib.sha256(b"").digest()
 	node = tree.get_node(index)
 	if node is None:
 		return hashlib.sha256(b"").digest()
 	if index % 2 == 0:  # leaf node
 		assert isinstance(node, LeafNode)
 		return hashlib.sha256(node.key_package.to_bytes()).digest()
-	# Internal (parent) node: hash the public key only.
-	# RFC 9420 §7.8 specifies a recursive tree hash; we use a simplified non-recursive
-	# version that is safe for all LBBT sizes and sufficient for parent_hash computation.
-	return hashlib.sha256(node.public_key).digest()
+	# Internal (parent) node: recurse into children
+	lvl = tree.level(index)
+	left_idx = index - (1 << (lvl - 1))
+	right_idx = index + (1 << (lvl - 1))
+	left_hash = _subtree_hash(tree, left_idx)
+	right_hash = _subtree_hash(tree, right_idx)
+	return hashlib.sha256(node.public_key + left_hash + right_hash).digest()
 
 
 def _compute_parent_hash(
@@ -353,7 +355,7 @@ class GroupUpdate:
 	# Set by add_member(); None when GroupUpdate is deserialized from wire.
 	_group_ctx: "GroupContext | None" = None
 	_confirmation_key: bytes | None = None
-	_authentication_secret: bytes | None = None
+	_epoch_authenticator: bytes | None = None
 	_transcript_hash: bytes | None = None
 
 	def _body_bytes(self) -> bytes:
@@ -458,7 +460,7 @@ class MLSMessage:
 		if (
 			commit._group_ctx is not None
 			and commit._confirmation_key is not None
-			and commit._authentication_secret is not None
+			and commit._epoch_authenticator is not None
 			and commit._transcript_hash is not None
 		):
 			# Full RFC mode: proper confirmation_tag + membership_tag
@@ -466,7 +468,7 @@ class MLSMessage:
 				commit,
 				group_ctx=commit._group_ctx,
 				confirmation_key=commit._confirmation_key,
-				authentication_secret=commit._authentication_secret,
+				epoch_authenticator=commit._epoch_authenticator,
 				transcript_hash=commit._transcript_hash,
 			)
 		else:
@@ -482,7 +484,7 @@ class MLSMessage:
 				commit,
 				group_ctx=_dummy_ctx,
 				confirmation_key=b"\x00" * 32,
-				authentication_secret=b"\x00" * 32,
+				epoch_authenticator=b"\x00" * 32,
 				transcript_hash=b"\x00" * 32,
 			)
 		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
@@ -674,7 +676,7 @@ class PublicMessage:
 		update: "GroupUpdate",
 		group_ctx: "GroupContext",
 		confirmation_key: bytes,
-		authentication_secret: bytes,
+		epoch_authenticator: bytes,
 		transcript_hash: bytes,
 	) -> "PublicMessage":
 		"""Wrap a GroupUpdate as a RFC 9420 PublicMessage.
@@ -703,8 +705,8 @@ class PublicMessage:
 			confirmation_tag=conf_tag,
 		)
 
-		# RFC 9420 §6.2: membership_key = ExpandWithLabel(authentication_secret, 'membership', b'', 32)
-		membership_key = KeySchedule.derive_membership_key(authentication_secret)
+		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
+		membership_key = KeySchedule.derive_membership_key(epoch_authenticator)
 		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + FramedContent
 		public_msg_tbs = (
 			tls_u16(0x0001)  # version
@@ -964,7 +966,7 @@ class MLSGroup:
 			update_path=update_path,
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
-			_authentication_secret=next_state.key_schedule.authentication_secret,
+			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
 			_transcript_hash=transcript_hash,
 		)
 

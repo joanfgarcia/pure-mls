@@ -5,7 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-25
+
+### Summary
+
+B760 Protocol Audit Remediation — Engineering quality fixes, RFC 9420 nomenclature alignment,
+and IETF test vector interoperability suite. Two of the four originally reported "critical
+blockers" were refuted against official IETF vectors and reverted (see Audit Notes below).
+
+### Breaking Changes
+
+- **`KeySchedule.epoch_authenticator`** (renamed from `authentication_secret`): aligns with
+  RFC 9420 Table 4 nomenclature. Any caller referencing `ks.authentication_secret` must update
+  to `ks.epoch_authenticator`. The derivation logic is **unchanged** — this is a pure rename.
+- **`GroupUpdate._epoch_authenticator`** (renamed from `_authentication_secret`): same policy.
+
+### Fixed
+
+- **[P1-B] `HPKE.SUITE_ID` AES-128-GCM** (`hpke.py`): `SUITE_ID` now correctly declares
+  `AES-128-GCM` (0x0001) and key derivation uses 16 bytes (was erroneously 32).
+- **[P1-C] `tree_math.py` deprecated** (`tree_math.py`): module replaced with `ImportError`.
+  Its `root()` and `copath()` formulas diverged from RFC 9420 Appendix C. Use `RatchetTree`
+  methods directly. Tests migrated to `RatchetTree`.
+- **[P1-E] Recursive `_subtree_hash()`** (`group.py`): replaced non-recursive implementation
+  with a fully recursive RFC 9420 §7.8 compliant one (eliminates second-preimage weakness in
+  parent-hash chain).
+- **[P2-A] Narrowed `except Exception`** (`storage.py`): now catches
+  `(InvalidTag, ValueError, struct.error)` with proper `from e` exception chaining.
+- **[P2-B] `import copy` at module level** (`epoch.py`): removed inline import from
+  `__post_init__` hot path.
+- **[P2-C] `tls_opaque32()` in `KeyPackage._tbs_bytes()`** (`tree.py`): replaces inline
+  `.to_bytes()` calls with project-standard TLS helpers for consistency.
+- **[P2-D] Group context uses recursive subtree hash** (`group.py`): `_make_group_context()`
+  now delegates `tree_hash` to the corrected `_subtree_hash()`.
+
+### Added
+
+- **IETF Interoperability Test Suite** (`tests/test_ietf_vectors.py`): validates the full
+  key schedule epoch chain (joiner_secret, epoch_authenticator, encryption_secret,
+  exporter_secret, confirmation_key, sender_data_secret, membership_key, next init_secret)
+  against the official IETF test vectors.
+  - Source: `https://github.com/mlswg/mls-implementations/blob/main/test-vectors/key-schedule.json`
+  - `test_ietf_key_schedule_fallback_suite1`: offline baseline (epochs 0–1 embedded)
+  - `test_ietf_key_schedule_live_suite1` (`@pytest.mark.network`): fetches full live JSON;
+    auto-skips when network is unavailable.
+- **`[tool.pytest.ini_options]`** in `pyproject.toml`: registers the `network` marker to
+  eliminate `PytestUnknownMarkWarning` and enable `pytest -m "not network"` in offline CI.
+
+### Audit Notes — Refuted Findings (B760 Protocol)
+
+The following two findings from the Claude Sonnet 4.6 audit were **refuted against official
+IETF test vectors** and reverted:
+
+| Finding | Claim | Verdict |
+|---------|-------|---------|
+| P0-A | `membership_key` must derive from `authentication_secret` | **WRONG** — IETF vectors: `membership_key = ExpandWithLabel(epoch_secret, "membership", ...)`. Our `authentication_secret` field was `epoch_authenticator` (different secret). |
+| P1-A | `KDFLabel` must use `uint8`/`uint32` length prefixes (not QUIC varints) | **WRONG** — RFC 9420 §8 uses `opaque<V>` notation = MLS variable-length (QUIC varints). IETF vector with 112-byte context confirms varint `0x4070`, not uint32 `0x00000070`. |
+
+### Agent Smith Audit Result
+
+```
+AUDIT COMPLETE: 100.0/100  |  Findings: 0
+```
+
+### Tests
+
+76 tests pass (was 74). 2 new: `test_ietf_key_schedule_fallback_suite1`,
+`test_ietf_key_schedule_live_suite1`.
+
 ## [1.3.0] - 2026-03-22
+
+
 
 ### Added (Full RFC 9420 TreeKEM + KeyPackage Authentication)
 

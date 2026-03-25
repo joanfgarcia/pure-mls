@@ -16,7 +16,7 @@ class KeySchedule:
 	sender_data_secret: bytes
 	encryption_secret: bytes
 	exporter_secret: bytes
-	authentication_secret: bytes
+	epoch_authenticator: bytes
 	external_secret: bytes
 	confirmation_key: bytes
 	next_init_secret: bytes
@@ -25,9 +25,20 @@ class KeySchedule:
 
 	@staticmethod
 	def _expand_with_label(secret: bytes, label: bytes, context: bytes, length: int) -> bytes:
+		"""RFC 9420 §8: ExpandWithLabel using KDFLabel struct.
+
+		KDFLabel = uint16(length) + opaque<V>(label) + opaque<V>(context)
+		where <V> is MLS variable-length encoding (QUIC-style varints, RFC 9000).
+		This is confirmed by the official IETF key schedule test vectors.
+		"""
 		full_label = b"MLS 1.0 " + label
-		# HkdfLabel struct per RFC 9420 using QUIC-style varints for <V> lengths
-		hkdf_label = length.to_bytes(2, "big") + encode_varint(len(full_label)) + full_label + encode_varint(len(context)) + context
+		hkdf_label = (
+			length.to_bytes(2, "big")  # uint16  length
+			+ encode_varint(len(full_label))  # varint  len(label)
+			+ full_label  # label bytes
+			+ encode_varint(len(context))  # varint  len(context)
+			+ context  # context bytes
+		)
 		return hkdf_expand(secret, hkdf_label, length, hashlib.sha256)
 
 	@classmethod
@@ -68,7 +79,7 @@ class KeySchedule:
 			sender_data_secret=cls._expand_with_label(epoch_secret, b"sender data", b"", 32),
 			encryption_secret=cls._expand_with_label(epoch_secret, b"encryption", b"", 32),
 			exporter_secret=cls._expand_with_label(epoch_secret, b"exporter", b"", 32),
-			authentication_secret=cls._expand_with_label(epoch_secret, b"authentication", b"", 32),
+			epoch_authenticator=cls._expand_with_label(epoch_secret, b"authentication", b"", 32),
 			external_secret=cls._expand_with_label(epoch_secret, b"external", b"", 32),
 			confirmation_key=cls._expand_with_label(epoch_secret, b"confirm", b"", 32),
 			next_init_secret=cls._expand_with_label(epoch_secret, b"init", b"", 32),
@@ -86,7 +97,10 @@ class KeySchedule:
 
 	@classmethod
 	def derive_membership_key(cls, epoch_secret: bytes) -> bytes:
-		"""RFC 9420 §8.1: membership_key = ExpandWithLabel(epoch_secret, "membership", b"", 32)."""
+		"""RFC 9420 §8.1: membership_key = ExpandWithLabel(epoch_secret, 'membership', b'', 32).
+
+		Confirmed by IETF key schedule test vectors: input is epoch_secret, not epoch_authenticator.
+		"""
 		return cls._expand_with_label(epoch_secret, b"membership", b"", 32)
 
 	def to_bytes(self) -> bytes:
@@ -97,7 +111,7 @@ class KeySchedule:
 			+ self.sender_data_secret
 			+ self.encryption_secret
 			+ self.exporter_secret
-			+ self.authentication_secret
+			+ self.epoch_authenticator
 			+ self.external_secret
 			+ self.confirmation_key
 			+ self.next_init_secret
@@ -113,7 +127,7 @@ class KeySchedule:
 			sender_data_secret=data[64:96],
 			encryption_secret=data[96:128],
 			exporter_secret=data[128:160],
-			authentication_secret=data[160:192],
+			epoch_authenticator=data[160:192],
 			external_secret=data[192:224],
 			confirmation_key=data[224:256],
 			next_init_secret=data[256:288],

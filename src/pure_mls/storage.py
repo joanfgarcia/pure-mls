@@ -1,7 +1,9 @@
 import asyncio
 import os
+import struct
 from typing import Optional
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup
@@ -80,8 +82,8 @@ class AsyncEncryptedStore:
 			# Decrypt (passing group_id as associated data for integrity check)
 			data = aesgcm.decrypt(nonce, ciphertext, group_id)
 			return MLSGroup.from_bytes(data)
-		except Exception as e:
-			raise ValueError(f"Failed to decrypt or parse group state: {e}")
+		except (InvalidTag, ValueError, struct.error) as e:
+			raise ValueError(f"Failed to decrypt or parse group state: {e}") from e
 
 	async def delete_group(self, group_id: bytes) -> bool:
 		"""Removes the group state from disk."""

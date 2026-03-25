@@ -312,7 +312,7 @@ def test_public_message_membership_tag_bound_to_epoch(alice_bob_group):
 	_, _, _, update1 = alice_bob_group
 	# membership_tag is bound to epoch via wrap_commit which uses full RFC context
 	pm1 = PublicMessage.from_bytes(MLSMessage.wrap_commit(update1).body)
-	# Verify membership_tag is derived from authentication_secret (non-trivial)
+	# Verify membership_tag is derived from epoch_authenticator (non-trivial)
 	assert len(pm1.membership_tag) == 32
 	assert pm1.auth.confirmation_tag != b""  # RFC confirmation_tag set
 	# Different epoch would produce different confirmation_tag (confirmation_key changes)
