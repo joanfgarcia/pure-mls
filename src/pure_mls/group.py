@@ -251,6 +251,7 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	if node is None:
 		return hashlib.sha256(b"").digest()
 	if index % 2 == 0:  # leaf node
+		assert isinstance(node, LeafNode)
 		return hashlib.sha256(node.key_package.to_bytes()).digest()
 	# Internal (parent) node: hash the public key only.
 	# RFC 9420 §7.8 specifies a recursive tree hash; we use a simplified non-recursive
@@ -754,10 +755,12 @@ class MLSGroup:
 		kp = KeyPackage(identity_key_pub=creator_sig_key.public_bytes(), init_key_pub=creator_kem_key.public_bytes())
 		tree.set_leaf(0, LeafNode(key_package=kp))
 
-		state = EpochState.genesis(group_id, tree)
+		# RFC 9420 §8.1: Epoch 0 GroupContext uses Nh bytes of zero for confirmed_transcript_hash
+		ctx_0 = _make_group_context(group_id, 0, tree, b"\x00" * 32)
+		state = EpochState.genesis(group_id, tree, ctx_0.to_bytes())
 		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key)
 
-	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", WelcomeInfo, GroupUpdate]:
+	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", "Welcome", "GroupUpdate"]:
 		"""
 		Adds a new member, generating a Commit and advancing the Epoch.
 		Returns the updated Group, the Welcome for the joiner, and the Update for peers.
@@ -888,8 +891,11 @@ class MLSGroup:
 			self.state.key_schedule.confirmation_key,
 			ciphertexts_bytes,
 			sender_index=self.my_index,
+			prior_confirmed_transcript_hash=self.state.key_schedule.joiner_secret,  # Placeholder for prior
 		)
-		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
+		# Wait! transcript_hash helper already builds group_ctx internally but we need the NEW one for advance_epoch
+		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		next_state = self.state.advance_epoch(commit_secret, new_tree, group_context=new_ctx.to_bytes())
 
 		# RFC 9420 §6.2: sign FramedContentTBS (not raw transcript_hash)
 		# GroupContext uses the new epoch with the confirmed transcript_hash
@@ -1100,7 +1106,10 @@ class MLSGroup:
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
 
-		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
+		# 3. Advance state
+		# confirmed_transcript_hash for next state is the current transcript_hash
+		new_ctx = _make_group_context(self.group_id, update.epoch_id + 1, update.tree, transcript_hash)
+		next_state = self.state.advance_epoch(commit_secret, update.tree, group_context=new_ctx.to_bytes())
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:

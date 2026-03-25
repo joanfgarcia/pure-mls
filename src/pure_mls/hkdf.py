@@ -2,6 +2,23 @@ import hashlib
 import hmac
 from typing import Any, Callable
 
+
+def encode_varint(val: int) -> bytes:
+	"""
+	QUIC-style variable-length integer encoding (RFC 9000).
+	Used by MLS (RFC 9420) for encoding the lengths of labels and contexts.
+	"""
+	if val <= 0x3F:
+		return bytes([val])
+	if val <= 0x3FFF:
+		return (0x4000 | val).to_bytes(2, "big")
+	if val <= 0x3FFFFFFF:
+		return (0x80000000 | val).to_bytes(4, "big")
+	if val <= 0x3FFFFFFFFFFFFFFF:
+		return (0xC000000000000000 | val).to_bytes(8, "big")
+	raise ValueError(f"Varint value too large: {val}")
+
+
 HashFunction = Callable[[], Any]
 
 

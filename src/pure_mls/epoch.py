@@ -25,27 +25,34 @@ class EpochState:
 		cloned.freeze()  # STATE-03: enforce immutability after deepcopy
 		super().__setattr__("tree", cloned)
 
-	def advance_epoch(self, commit_secret: bytes, next_tree: RatchetTree, transcript_hash: bytes = b"epoch") -> "EpochState":
+	def advance_epoch(self, commit_secret: bytes, next_tree: RatchetTree, group_context: bytes, psk_secret: bytes | None = None) -> "EpochState":
 		"""
 		Transitions the group to the next cryptographic Era.
 		Consumes the next_init_secret from the current era and mixes it with the
-		new commit_secret derived from the TreeKEM operations.
+		new commit_secret derived from the TreeKEM operations and GroupContext.
 		"""
 		next_schedule = KeySchedule.derive(
-			init_secret=self.key_schedule.next_init_secret, commit_secret=commit_secret, transcript_hash=transcript_hash
+			init_secret=self.key_schedule.next_init_secret,
+			commit_secret=commit_secret,
+			group_context=group_context,
+			psk_secret=psk_secret,
 		)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
 	@classmethod
-	def genesis(cls, group_id: bytes, creator_tree: RatchetTree) -> "EpochState":
+	def genesis(cls, group_id: bytes, creator_tree: RatchetTree, group_context: bytes) -> "EpochState":
 		"""Bootstraps Epoch 0 for a brand new sovereign group.
 		RFC 9420 §8.1: epoch 0 init_secret is the all-zeros vector.
-		This ensures genesis derivations are deterministic and testable.
 		"""
-		genesis_init = b"\x00" * 32  # RFC 9420 §8.1: epoch 0 init_secret = zeros
+		genesis_init = b"\x00" * 32
 		blank_commit = b"\x00" * 32
 
-		return cls(group_id=group_id, epoch_id=0, tree=creator_tree, key_schedule=KeySchedule.derive(genesis_init, blank_commit))
+		return cls(
+			group_id=group_id,
+			epoch_id=0,
+			tree=creator_tree,
+			key_schedule=KeySchedule.derive(genesis_init, blank_commit, group_context),
+		)
 
 	def to_bytes(self) -> bytes:
 		"""Full EpochState binary dump for persistence."""

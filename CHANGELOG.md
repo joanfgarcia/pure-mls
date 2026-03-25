@@ -193,6 +193,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_state_findings.py` and `tests/test_group_errors.py` updated to use 32-byte
   `KeyPackageRef` keys and the RFC-correct 5-byte `Sender` struct in mock `GroupUpdate` objects.
 
+## [1.6.0] - 2026-03-25
+
+### Added (IETF Interoperability Audit - Phase 1)
+
+- **[RFC 9420 §2.1.2] `pure_mls.hkdf.encode_varint()`**: implemented QUIC-style variable-length integer encoding to correctly prefix labels and context fields in `ExpandWithLabel`.
+- **[RFC 9420 §8] Corrected `joiner_secret` derivation**: now uses the mandatory `pre_joiner_secret` intermediate step:
+  - `pre_joiner_secret = HKDF-Extract(init_secret, commit_secret)`
+  - `joiner_secret = ExpandWithLabel(pre_joiner_secret, "joiner", GroupContext, 32)`
+- **[RFC 9420 §8.1 Table 4] Epoch Secret Topology**: refactored `KeySchedule` to derive symmetric material (encryption, exporter, confirmation, etc.) directly from `epoch_secret` in a flat topology, matching the standard.
+- **[RFC 9420 §8.1] `KeySchedule.derive()`**: now requires an explicit `GroupContext` argument to bind the derivation to the specific epoch and group state.
+- **`tests/test_vector_keyschedule.py`**: new test suite validating Suite 1, Epoch 0 against canonical IETF test vectors.
+
+### Changed
+
+- **`EpochState.advance_epoch()`**: signature updated to accept `group_context` (bytes) instead of raw `transcript_hash`, ensuring the full TLS-encoded context is injected into the next era's key schedule.
+- **`MLSGroup.create()`**: now builds an initial RFC-compliant `GroupContext` for Epoch 0.
+
 ## [1.5.0] - 2026-03-22 (Audit Remediation)
 
 **Auditor:** Claude Sonnet 4.6, Anthropic | **Previous verdict:** BETA-READY, conditioned on P0/P1.
