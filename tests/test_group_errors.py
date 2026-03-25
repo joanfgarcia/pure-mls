@@ -64,6 +64,7 @@ def test_process_update_errors():
 		group.state.key_schedule.confirmation_key,
 		ciphertexts_bytes,
 		sender_index=0,
+		prior_confirmed_transcript_hash=group.state.key_schedule.joiner_secret,
 	)
 	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
 	from pure_mls.tls import tls_opaque, tls_opaque32, tls_u32, tls_u64
@@ -119,6 +120,7 @@ def test_process_update_errors():
 		group.state.key_schedule.confirmation_key,
 		bad_ciphertexts_bytes,
 		sender_index=0,
+		prior_confirmed_transcript_hash=group.state.key_schedule.joiner_secret,
 	)
 	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
 	_n2 = len(bad_secrets)

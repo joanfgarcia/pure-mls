@@ -27,13 +27,7 @@ class KeySchedule:
 	def _expand_with_label(secret: bytes, label: bytes, context: bytes, length: int) -> bytes:
 		full_label = b"MLS 1.0 " + label
 		# HkdfLabel struct per RFC 9420 using QUIC-style varints for <V> lengths
-		hkdf_label = (
-			length.to_bytes(2, "big")
-			+ encode_varint(len(full_label))
-			+ full_label
-			+ encode_varint(len(context))
-			+ context
-		)
+		hkdf_label = length.to_bytes(2, "big") + encode_varint(len(full_label)) + full_label + encode_varint(len(context)) + context
 		return hkdf_expand(secret, hkdf_label, length, hashlib.sha256)
 
 	@classmethod
