@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] v3.0-phase8 — HPKE Interop Fix + Welcome Wire Format
 
+### Fixed (B760 Audit — Minor Findings)
+
+- **[STYLE] Inline `import hmac` in `add_member()`**: Removed redundant
+  `import hmac as _hmac_mod` inside method body; module-level `import hmac`
+  already present at L2 of `group.py`.
+
+- **[DEPRECATION] `application_key` DeprecationWarnings eliminated**:
+  Test assertions using deprecated `MLSGroup.application_key` property
+  replaced with `encrypt_application_message` / `decrypt_application_message`
+  roundtrip verification in `test_group.py` and `test_state_findings.py`.
+  Semantically stronger: proves shared SecretTree epoch, not just raw key bytes.
+  Also fixed `test_encrypt_decrypt_application_message` which incorrectly used
+  a solo-member group (SecretTree forward secrecy violated on self-encrypt).
+
+- **[FEATURE] PSK injection RFC 9420 §8.4 implemented** (`keyschedule.py`):
+  `_psk_secret()` placeholder (`NotImplementedError`) replaced with full
+  multi-PSK XOR accumulation chain per RFC 9420 §8.4 Figure 26:
+  ```
+  pskExtracted_i = HKDF-Extract(salt=b"", IKM=psk_value_i)
+  contribution_i = ExpandWithLabel(pskExtracted_i, "derived psk", psk_id_i, Nh)
+  pskInput(i+1)  = pskInput(i) XOR contribution_i   ← PSKSecret = pskInput(n)
+  ```
+  API: `KeySchedule.derive(..., psk_list=[(psk_id, psk_value), ...])`.
+  Empty list / `None` → PSKSecret = 0^Nh (unchanged no-PSK behaviour).
+  Functional test added: `test_psk_injection_multi_key` in
+  `test_vector_keyschedule.py`.
+
+- **[DOCS] xfailed IETF tests documented** (`test_vector_keyschedule.py`):
+  `test_key_schedule_epoch_0_suite_1` xfail reason clarified — the IETF
+  vector provides a pre-computed `psk_secret` without decomposable PSK inputs,
+  not an implementation bug.
+  Remaining 49 IETF xfails:
+  - 8 × `test_passive_client_welcome` — Welcome HPKE wire format (Phase 8 scope)
+  - 41 × `test_secret_tree_key_nonce` — SecretTree IETF vectors (Phase 7 scope)
+
+
 ### Fixed (Critical — OpenMLS Interoperability)
 
 - **[CRITICAL] HPKE `ExtractAndExpand` label (RFC 9180 §4.1)**: `labeled_extract` label was
