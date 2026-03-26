@@ -51,6 +51,6 @@ def test_tree_copath() -> None:
 
 
 def test_tree_math_deprecated() -> None:
-	"""Confirm tree_math.py raises ImportError on import."""
-	with pytest.raises(ImportError, match="deprecated"):
+	"""P1-03: tree_math.py eliminated — verify module no longer exists in the package."""
+	with pytest.raises(ModuleNotFoundError):
 		import pure_mls.tree_math  # noqa: F401

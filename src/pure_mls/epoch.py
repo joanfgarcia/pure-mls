@@ -25,20 +25,26 @@ class EpochState:
 		cloned.freeze()  # STATE-03: enforce immutability after deepcopy
 		super().__setattr__("tree", cloned)
 
-	def advance_epoch(self, commit_secret: bytes, next_tree: RatchetTree, transcript_hash: bytes = b"epoch") -> "EpochState":
-		"""
-		Transitions the group to the next cryptographic Era.
-		Consumes the next_init_secret from the current era and mixes it with the
-		new commit_secret derived from the TreeKEM operations.
+	def advance_epoch(
+		self,
+		commit_secret: bytes,
+		next_tree: RatchetTree,
+		transcript_hash: bytes = b"epoch",
+		group_context: bytes = b"",
+	) -> "EpochState":
+		"""Transitions the group to the next cryptographic era.
 
-		Note: group_context = b"" for pure-mls internal groups (consistent approximation).
-		For full RFC 9420 compliance with external clients, group_context should be the
-		TLS-serialized GroupContext bytes shared by all epoch members.
+		RFC 9420 §8: KeySchedule.derive MUST receive the TLS-serialized GroupContext
+		for the new epoch so that epoch secrets are bound to group_id, epoch_id,
+		tree_hash, and confirmed_transcript_hash. Passing group_context=b"" produces
+		keys that are identical across different groups — a full domain collapse (P0-01).
+
+		Callers must construct group_context via _make_group_context() before calling.
 		"""
 		next_schedule = KeySchedule.derive(
 			init_secret=self.key_schedule.init_secret,
 			commit_secret=commit_secret,
-			group_context=b"",  # consistent for pure-mls ↔ pure-mls; IETF join uses real GC
+			group_context=group_context,
 		)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 

@@ -1140,11 +1140,17 @@ class MLSGroup:
 			ciphertexts_bytes,
 			sender_index=self.my_index,
 		)
-		next_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=transcript_hash)
+		# RFC 9420 §6.2: GroupContext for new epoch (group_id, new_epoch_id, new_tree, transcript_hash)
+		# Computed BEFORE advance_epoch so epoch secrets are bound to the correct context (P0-01 fix)
+		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		next_state = self.state.advance_epoch(
+			commit_secret,
+			new_tree,
+			transcript_hash=transcript_hash,
+			group_context=new_ctx_signed.to_bytes(),  # P0-01: bind epoch secrets to GroupContext
+		)
 
 		# RFC 9420 §6.2: sign FramedContentTBS (not raw transcript_hash)
-		# GroupContext uses the new epoch with the confirmed transcript_hash
-		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		# Build an unsigned GroupUpdate body to construct the FramedContent for TBS
 		_unsigned_body = (
 			tls_u64(new_epoch_id)
@@ -1292,14 +1298,14 @@ class MLSGroup:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 
 		# 6. Reconstruct KeySchedule from joiner_secret (RFC 9420 §8 Figure 22)
-		# Correct formula (confirmed against IETF key-schedule vectors):
-		#   intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret=0^32)
-		#   epoch_secret = ExpandWithLabel(intermediate, "epoch", GroupContext, NH)
-		# NOTE: pure-mls Welcome doesn't carry a TLS GroupContext, so we use b"" to match
-		# alice's advance_epoch() which also uses b"". IETF interop join would use gi_ctx.to_bytes().
+		# RFC 9420 §8: epoch_secret MUST be bound to the GroupContext (group_id, epoch, tree_hash,
+		# confirmed_transcript_hash). Using b"" here produces keys identical across different groups
+		# — P1-02 / P0-01 mirror. Use gi_ctx.to_bytes() (already parsed above).
+		# NOTE: psk injection via _psk_secret([]) = 0^32 (no PSKs in Welcome flow by default)
 		psk_zeros = b"\x00" * 32
-		intermediate = hkdf_extract(gs.joiner_secret, psk_zeros)  # NOTE: joiner=salt, psk=IKM
-		epoch_secret = expand_with_label(intermediate, "epoch", b"", 32)
+		intermediate = hkdf_extract(gs.joiner_secret, psk_zeros)  # joiner=salt, psk_secret=IKM
+		# P1-02 fix: use gi_ctx.to_bytes() for GroupContext domain separation
+		epoch_secret = expand_with_label(intermediate, "epoch", gi_ctx.to_bytes(), 32)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret, intermediate)
 
 		state = EpochState(
@@ -1402,7 +1408,12 @@ class MLSGroup:
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
 
-		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
+		next_state = self.state.advance_epoch(
+			commit_secret,
+			update.tree,
+			transcript_hash=transcript_hash,
+			group_context=group_ctx_verify.to_bytes(),  # P0-01 fix: bind epoch to GroupContext
+		)
 
 		# P0-02: Verify confirmation_tag — RFC 9420 §8.3: every member MUST verify
 		# HMAC(confirmation_key, confirmed_transcript_hash) before accepting the epoch.

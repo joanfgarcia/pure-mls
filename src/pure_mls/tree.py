@@ -191,14 +191,21 @@ class LeafNode:
 		tbs = self._tbs_bytes(group_id, leaf_index)
 		return replace(self, signature=sign_fn(tbs))
 
-	def verify_signature(self) -> None:
-		"""Verify the Ed25519 signature on this LeafNode."""
+	def verify_signature(self, group_id: bytes = b"", leaf_index: int = 0) -> None:
+		"""Verify the Ed25519 signature on this LeafNode.
+
+		P1-04 fix: the TBS content depends on leaf_node_source (RFC 9420 §7.2):
+		- 0x01 key_package: TBS does NOT include group_id / leaf_index.
+		- 0x02 update / 0x03 commit: TBS MUST include group_id and leaf_index.
+		Callers must supply group_id and leaf_index when verifying non-KeyPackage leaves.
+		"""
 		from cryptography.hazmat.primitives.asymmetric import ed25519
 
 		if not self.signature:
 			raise ValueError("LeafNode has no signature")
 		pub = ed25519.Ed25519PublicKey.from_public_bytes(self.signature_key)
-		pub.verify(self.signature, self._tbs_bytes())
+		tbs = self._tbs_bytes(group_id=group_id, leaf_index=leaf_index)
+		pub.verify(self.signature, tbs)
 
 	def to_bytes(self) -> bytes:
 		"""RFC 9420 §7.2 TLS wire encoding of LeafNode."""
