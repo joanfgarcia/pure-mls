@@ -1206,9 +1206,7 @@ class MLSGroup:
 			encrypted_group_info=welcome_nonce_enc + gi_ct,
 		)
 
-		import hmac as _hmac_mod
-
-		_conf_tag_sender = _hmac_mod.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		_conf_tag_sender = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		update = GroupUpdate(
 			epoch_id=next_state.epoch_id,
 			group_id=self.group_id,

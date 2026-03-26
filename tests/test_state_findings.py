@@ -158,9 +158,13 @@ def test_legitimate_process_update_still_works():
 	_group_a, group_a2, group_b, update, sig_a, kem_a, sig_b, kem_b = _add_member_scenario()
 
 	# group_a2 is already advanced — it IS the new group after add_member.
-	# Both sides should share the same application_key and epoch_id.
-	assert group_a2.application_key == group_b.application_key
+	# Both sides must share the same epoch and be able to exchange messages.
 	assert group_a2.epoch_id == group_b.epoch_id
+
+	# Verify shared epoch via encrypt/decrypt roundtrip (replaces deprecated application_key check)
+	msg = b"state-verified"
+	ct = group_a2.encrypt_application_message(msg)
+	assert group_b.decrypt_application_message(ct) == msg
 
 
 # ---------------------------------------------------------------------------
