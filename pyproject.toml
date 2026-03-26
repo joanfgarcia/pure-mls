@@ -1,6 +1,6 @@
 [project]
 name = "pure-mls"
-version = "1.5.0"
+version = "2.0.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -46,3 +46,9 @@ ignore = [
 [tool.ruff.format]
 indent-style = "tab"
 quote-style = "double"
+
+[tool.pytest.ini_options]
+markers = [
+    "network: tests that require internet access to fetch live IETF vectors",
+]
+
