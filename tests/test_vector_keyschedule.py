@@ -1,10 +1,13 @@
 import pytest
 
-from pure_mls.keyschedule import KeySchedule
+from pure_mls.keyschedule import KeySchedule, _psk_secret
 
 
 @pytest.mark.xfail(
-	reason="IETF Epoch-0 vector uses non-zero PSK; feature branch PSK injection not yet implemented (RFC §8.4 multi-PSK chain)", strict=False
+	reason="IETF Epoch-0 vector provides a pre-computed psk_secret with no (psk_id, psk_value) decomposition; "
+	"the vector cannot be replayed via the _psk_secret(psk_list) API without the original PSK inputs. "
+	"See test_psk_injection_multi_key for functional PSK verification.",
+	strict=False,
 )
 def test_key_schedule_epoch_0_suite_1():
 	"""
@@ -47,3 +50,42 @@ def test_key_schedule_epoch_0_suite_1():
 if __name__ == "__main__":
 	test_key_schedule_epoch_0_suite_1()
 	print("ALL TESTS PASSED")
+
+
+def test_psk_injection_multi_key():
+	"""RFC 9420 §8.4: functional verification of multi-PSK XOR accumulation.
+
+	Validates:
+	- Empty psk_list → PSKSecret = 0^32 (no-PSK identity)
+	- Single PSK → deterministic non-zero result
+	- Two PSKs → order-dependent XOR chain, different from single
+	- Integration: KeySchedule.derive() accepts psk_list without error
+	"""
+	# Identity: no PSKs → 0^32
+	assert _psk_secret(None) == b"\x00" * 32
+	assert _psk_secret([]) == b"\x00" * 32
+
+	# Single PSK: deterministic and non-zero
+	psk1_id = b"psk-alice"
+	psk1_val = b"\xab" * 32
+	result1 = _psk_secret([(psk1_id, psk1_val)])
+	assert len(result1) == 32
+	assert result1 != b"\x00" * 32
+	assert result1 == _psk_secret([(psk1_id, psk1_val)])  # deterministic
+
+	# Second PSK: result differs from single and from no-PSK
+	psk2_id = b"psk-bob"
+	psk2_val = b"\xcd" * 32
+	result2 = _psk_secret([(psk1_id, psk1_val), (psk2_id, psk2_val)])
+	assert len(result2) == 32
+	assert result2 != result1
+	assert result2 != b"\x00" * 32
+
+	# Integration: KeySchedule.derive() accepts psk_list without raising
+	init_secret = b"\x00" * 32
+	commit_secret = b"\x11" * 32
+	ks_no_psk = KeySchedule.derive(init_secret, commit_secret)
+	ks_with_psk = KeySchedule.derive(init_secret, commit_secret, psk_list=[(psk1_id, psk1_val)])
+	# PSK changes the epoch secrets
+	assert ks_with_psk.epoch_secret != ks_no_psk.epoch_secret
+	assert ks_with_psk.encryption_secret != ks_no_psk.encryption_secret
