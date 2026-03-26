@@ -4,6 +4,8 @@ from pure_mls.group import GroupUpdate, MLSGroup
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
+
+def test_keypackage_coverage():
 	with pytest.raises(ValueError):
 		KeyPackage.from_bytes(b"short")
 

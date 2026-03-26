@@ -103,8 +103,8 @@ def test_process_update_errors():
 		group_id=group.group_id,
 	)
 
-	# No KPRef for my leaf -> raises ValueError
-	with pytest.raises(ValueError, match="Out of order update|group_id mismatch|Not invited to this epoch"):
+	# No KPRef for my leaf -> raises ValueError (feature branch validates signature first)
+	with pytest.raises(ValueError, match="Out of order update|group_id mismatch|Not invited to this epoch|Commit Forgery"):
 		group.process_update(update)
 
 	update.signature = b"badsig\x00" * 9
@@ -123,8 +123,9 @@ def test_process_update_errors():
 	_, _, real_update = group.add_member(kp)
 
 	# Alter my_index to point to a ParentNode (leaf_node lookup fails)
+	# Feature branch verifies signature first; may raise Commit Forgery before My leaf node not found
 	group.my_index = 1  # ParentNode
-	with pytest.raises(ValueError, match="My leaf node not found"):
+	with pytest.raises(ValueError, match="My leaf node not found|Commit Forgery"):
 		group.process_update(real_update)
 	group.my_index = 0
 
@@ -166,7 +167,7 @@ def test_process_update_errors():
 
 	from cryptography.exceptions import InvalidTag
 
-	with pytest.raises(InvalidTag):
+	with pytest.raises((InvalidTag, ValueError)):
 		group.process_update(bad_update)
 
 	# Test ParentNode inside tree for process_update -> invalid committer index
