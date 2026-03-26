@@ -2,14 +2,12 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import uuid
 
 import aiomqtt
 import pytest
 import pytest_asyncio
 from amqtt.broker import Broker
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
@@ -102,12 +100,9 @@ async def test_mls_mqtt_e2e(mqtt_broker):
 						# Now wait for data
 
 					elif topic == topic_data and msg["type"] == "app_data":
-						# We got Bob's encrypted message!
-						ct = base64.b64decode(msg["ct"])
-						nonce = base64.b64decode(msg["nonce"])
-
-						aes = AESGCM(alice_group.application_key)
-						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
+						# P0-03: use MLS-compliant decrypt_application_message
+						payload_bytes = base64.b64decode(msg["payload"])
+						plaintext = alice_group.decrypt_application_message(payload_bytes)
 
 						assert plaintext == b'{"temp": 24.5, "sensor": "bob_01"}'
 						test_done.set_result(True)
@@ -153,14 +148,11 @@ async def test_mls_mqtt_e2e(mqtt_broker):
 						# Reconstruct Sovereign Group in RAM
 						bob_group = MLSGroup.join(welcome_info, sig, kem)
 
-						# We are in! We share an opaque cryptographic layer.
-						# Let's send an encrypted reading.
-						aes = AESGCM(bob_group.application_key)
-						nonce = os.urandom(12)
+						# P0-03: use MLS-compliant encrypt_application_message
 						reading = b'{"temp": 24.5, "sensor": "bob_01"}'
-						ct = aes.encrypt(nonce, reading, b"sender_bob")
+						payload_bytes = bob_group.encrypt_application_message(reading)
 
-						data_msg = {"type": "app_data", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}
+						data_msg = {"type": "app_data", "payload": base64.b64encode(payload_bytes).decode()}
 						await client.publish(topic_data, json.dumps(data_msg))
 						break
 		except Exception as e:

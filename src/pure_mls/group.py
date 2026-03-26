@@ -564,6 +564,8 @@ class GroupUpdate:
 	_confirmation_key: bytes | None = None
 	_epoch_authenticator: bytes | None = None
 	_transcript_hash: bytes | None = None
+	# P0-02: confirmation_tag = HMAC(confirmation_key, transcript_hash) — set by add_member() for receiver-side verification
+	_confirmation_tag: bytes | None = None
 
 	def _body_bytes(self) -> bytes:
 		"""The unsigned Commit body (epoch + tree + secrets + committer_index)."""
@@ -1166,10 +1168,11 @@ class MLSGroup:
 		group_secrets = GroupSecrets(
 			joiner_secret=next_state.key_schedule.joiner_secret,
 		)
+		# P1-01: RFC 9420 §12.4 requires a domain-separating label for EncryptedGroupSecrets HPKE encapsulation
 		gs_enc, gs_ct = HPKE.seal(
 			key_package.init_key_pub,
 			group_secrets.to_bytes(),
-			info=b"",  # RFC §12.1.2: no additional info for EncryptedGroupSecrets
+			info=b"MLS 1.0 EncryptedGroupSecrets",
 		)
 		egs = EncryptedGroupSecrets(
 			new_member=_make_kp_ref(key_package),
@@ -1203,6 +1206,9 @@ class MLSGroup:
 			encrypted_group_info=welcome_nonce_enc + gi_ct,
 		)
 
+		import hmac as _hmac_mod
+
+		_conf_tag_sender = _hmac_mod.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		update = GroupUpdate(
 			epoch_id=next_state.epoch_id,
 			group_id=self.group_id,
@@ -1215,6 +1221,7 @@ class MLSGroup:
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
 			_transcript_hash=transcript_hash,
+			_confirmation_tag=_conf_tag_sender,  # P0-02: carried for receiver-side verification
 		)
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
@@ -1241,7 +1248,8 @@ class MLSGroup:
 		egs_match: EncryptedGroupSecrets | None = None
 		for candidate in welcome.encrypted_group_secrets:
 			try:
-				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=b"")
+				# P1-01: use domain-separating label per RFC 9420 §12.4
+				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=b"MLS 1.0 EncryptedGroupSecrets")
 				egs_match = candidate
 				break
 			except Exception:
@@ -1398,13 +1406,12 @@ class MLSGroup:
 
 		next_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=transcript_hash)
 
-		# RFC 9420 §8.1: confirmation_tag = HMAC(confirmation_key, transcript_hash).
-		# The tag is carried in the PublicMessage wrapper (when present). Here we compute
-		# it to make it available for callers and for future PublicMessage-path validation.
-		_conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-		# NOTE: constant-time tag comparison against the sender's tag would require the
-		# full PublicMessage wire format — deferred to Phase 7 wire-format alignment.
-		_ = _conf_tag  # prevent unused-variable lint; used by callers via key_schedule
+		# P0-02: Verify confirmation_tag — RFC 9420 §8.3: every member MUST verify
+		# HMAC(confirmation_key, confirmed_transcript_hash) before accepting the epoch.
+		if update._confirmation_tag is not None:
+			expected_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+			if not hmac.compare_digest(expected_tag, update._confirmation_tag):
+				raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)

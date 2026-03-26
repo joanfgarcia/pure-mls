@@ -1,11 +1,9 @@
 import asyncio
 import base64
 import json
-import os
 
 import pytest
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
@@ -74,11 +72,9 @@ async def test_mls_webrtc_e2e():
 						alice_group = alice_next
 
 					elif msg["type"] == "app_data":
-						ct = base64.b64decode(msg["ct"])
-						nonce = base64.b64decode(msg["nonce"])
-
-						aes = AESGCM(alice_group.application_key)
-						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
+						# P0-03: use MLS-compliant decrypt_application_message
+						payload_bytes = base64.b64decode(msg["payload"])
+						plaintext = alice_group.decrypt_application_message(payload_bytes)
 
 						assert plaintext == b"Hello Alice, P2P Edge Node Bob securely online."
 						print("Alice: Decrypted successfully!")
@@ -155,12 +151,11 @@ async def test_mls_webrtc_e2e():
 
 						bob_group = MLSGroup.join(welcome_info, sig, kem)
 
-						aes = AESGCM(bob_group.application_key)
-						nonce = os.urandom(12)
+						# P0-03: use MLS-compliant encrypt_application_message
 						reading = b"Hello Alice, P2P Edge Node Bob securely online."
-						ct = aes.encrypt(nonce, reading, b"sender_bob")
+						payload_bytes = bob_group.encrypt_application_message(reading)
 
-						data_msg = {"type": "app_data", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}
+						data_msg = {"type": "app_data", "payload": base64.b64encode(payload_bytes).decode()}
 						channel.send(json.dumps(data_msg))
 
 			print("Bob: Waiting for offer")
