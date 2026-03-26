@@ -34,20 +34,28 @@ _NH = 32  # SHA-256 hash length
 
 
 def _psk_secret(psk_list: list[tuple[bytes, bytes]] | None = None) -> bytes:
-	"""RFC 9420 §9.1: PSKSecret derivation.
+	"""RFC 9420 §8.4: PSKSecret derivation.
 
-	psk_list: list of (psk_id, psk_value) tuples.
-	When empty (no PSKs): PSKSecret = b"\\x00" * NH.
+	psk_list: list of (psk_id, psk_value) tuples. When empty: PSKSecret = 0^Nh.
 
-	Full multi-PSK XOR chain (simplified to 0..NH for no-PSK case):
-		psk_extracted_i = HKDF-Extract(psk_i, "psk")
-		pskInput(0)     = 0^NH
-		pskInput(i+1)   = XOR(pskInput(i), psk_extracted_i ^ ExpandWithLabel(...))
+	Multi-PSK chain (RFC §8.4 Figure 26):
+	pskExtracted_i = HKDF-Extract(salt="", IKM=psk_value_i)
+	pskInput(i+1) = XOR(pskInput(i), ExpandWithLabel(pskExtracted_i, "derived psk", psk_id_i, Nh))
+	PSKSecret = pskInput(n)
 	"""
 	if not psk_list:
 		return b"\x00" * _NH
-	# Full multi-PSK not yet needed — placeholder for future implementation
-	raise NotImplementedError("Multi-PSK not yet implemented (RFC §9.1)")
+
+	psk_input = b"\x00" * _NH
+	for psk_id, psk_value in psk_list:
+		# pskExtracted_i = HKDF-Extract(salt=b"", IKM=psk_value)
+		psk_extracted = hkdf_extract(b"", psk_value)
+		# contribution = ExpandWithLabel(pskExtracted_i, "derived psk", psk_id, Nh)
+		contribution = expand_with_label(psk_extracted, "derived psk", psk_id, _NH)
+		# pskInput(i+1) = pskInput(i) XOR contribution
+		psk_input = bytes(a ^ b for a, b in zip(psk_input, contribution))
+
+	return psk_input
 
 
 @dataclass
