@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] v3.0-phase8 — HPKE Interop Fix + Welcome Wire Format
 
+### Fixed (B760 Re-Audit — Security Remediation)
+
+- **[P0-01] GroupContext domain separation in `advance_epoch`** (`epoch.py`, `group.py`):
+  `advance_epoch()` now accepts `group_context: bytes` parameter.
+  Callers in `add_member` and `process_update` pass `_make_group_context(...).to_bytes()`
+  so epoch secrets are cryptographically bound to `group_id`, `epoch_id`, `tree_hash`,
+  and `transcript_hash` per RFC 9420 §8. GroupContext is computed before the call (fixes
+  forward-reference bug). Previously `b""` caused all groups sharing the same
+  `(init_secret, commit_secret)` to derive identical epoch material.
+
+- **[P0-03 residual] WebSocket E2E test migrated to RFC-compliant API** (`test_e2e_websockets.py`):
+  Removed raw `AESGCM(application_key)`, random plaintext nonce, static empty AAD,
+  and deprecated `application_key` property access. Replaced with:
+  `encrypt_application_message()` / `decrypt_application_message()` (RFC §9 SecretTree).
+
+- **[P1-02] `join()` epoch derivation uses `gi_ctx.to_bytes()`** (`group.py`):
+  Previously used `b""` as GroupContext in `epoch_secret = ExpandWithLabel(...)`.
+  Now uses `gi_ctx.to_bytes()` (GroupInfo context, already available). Mirror fix of P0-01.
+
+- **[P1-03] `tree_math.py` dead module eliminated**:
+  File deleted. `RatchetTree` inline methods remain the sole canonical LBBT implementation.
+  `test_tree_math_deprecated` updated to assert `ModuleNotFoundError`.
+
+- **[P1-04] `LeafNode.verify_signature()` honours `leaf_node_source`** (`tree.py`):
+  Method now accepts `group_id: bytes = b""` and `leaf_index: int = 0`.
+  For `update` (0x02) and `commit` (0x03) sources, TBS includes `group_id + leaf_index`
+  per RFC 9420 §7.2. KeyPackage verification (0x01) unchanged — defaults produce
+  the correct TBS without group binding.
+
+- **[N-01] Dead `encode_varint()` removed from `hkdf.py`**:
+  Duplicate QUIC-tier varint with 8-byte `0xC000…` tier (not in RFC 9420 Appendix C).
+  `varint_encode()` remains as the canonical MLS VarInt used by `expand_with_label`.
+
 ### Fixed (B760 Audit — Minor Findings)
 
 - **[STYLE] Inline `import hmac` in `add_member()`**: Removed redundant
