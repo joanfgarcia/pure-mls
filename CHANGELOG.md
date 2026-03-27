@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] v3.0-phase8 — HPKE Interop Fix + Welcome Wire Format
 
+### Documentation (B760 Residual Cleanup)
+
+- **[B760-DOC] README.md project map alignment**: Removed `tree_math.py` from the architectural map. The module was correctly eliminated in Phase 8 code but persisted in documentation.
+
 ### Fixed (B760 Re-Audit — Security Remediation)
 
 - **[P0-01] GroupContext domain separation in `advance_epoch`** (`epoch.py`, `group.py`):

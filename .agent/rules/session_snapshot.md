@@ -1,27 +1,77 @@
-# Session Snapshot: pure-mls v0.1.0 Engineering Grade
+# Session Snapshot — pure-mls B760 Audit
+**Fecha:** 2026-03-26 · **Branch:** `feat/v3.0-phase6-interop` · **Último commit:** `88b2625`
 
-## 1. Diccionario de Términos/Alias Técnico
-- `group.py` -> MLS Group State Machine (`MLSGroup`, `EpochState`, `WelcomeInfo`, `GroupUpdate`).
-- `hpke.py` -> RFC 9180 Base Mode encryptor (AES-GCM, HKDF-SHA256, X25519).
-- `tree.py` -> LBBT Math & Data Structures (`RatchetTree`, `LeafNode`, `ParentNode`).
-- `hkdf.py` -> RFC 5869 Extract & Expand primitives.
-- E2E Transports -> `test_e2e_websockets.py`, `test_e2e_mqtt.py`, `test_e2e_webrtc.py`, `test_e2e_grpc.py`.
+---
 
-## 2. Mapa de Arquitectura TÉCNICA
-- **pure-mls**: Implementación pura en Python del protocolo Messaging Layer Security (RFC 9420 / TreeKEM) agnóstica al transporte.
-- Depende únicamente de `cryptography` para las primitivas abstractas (Ed25519, X25519, AES256-GCM, SHA256).
-- Estado operando bajo inmutabilidad estricta (Dataclasses frozen y ruteo determinista LBBT).
+## 1. Diccionario de Alias Técnico
 
-## 3. Registro de Decisiones Técnicas (Log)
-| Prioridad | Decisión Técnica | Razón (Why) | Estado |
-| :--- | :--- | :--- | :--- |
-| **P0** | **HPKE RFC-9180 Compliance** | Inyectados prefijos `HPKE-v1` y `SUITE_ID` en `extract/expand` para aislar el dominio de derivación según RFC. | Completado |
-| **P0** | **WelcomeInfo State Sync** | Serializar `joiner_index` elimina la desincronización y los hardcodes espurios en inicializaciones multipartitas. | Completado |
-| **P0** | **AES-GCM Nonce XOR Counter** | Aplicar XOR a `base_nonce` con un contador aleatorio salva fallas críticas de colisión de cifrado en llaves efímeras reutilizadas. | Completado |
-| **P0** | **Commit Signature Coverage** | Incluir el `tree.to_bytes()` en el digest de la firma Ed25519 autentica la integridad estructural impidiendo bifurcaciones sibilinas. | Completado |
-| **P0** | **WelcomeInfo HMAC Sealing** | Adoptar bytes prefijados, indexación explícita de `RatchetTree` y firmas MAC desbarata cualquier alteración a nivel byte (ej. Padding nulos). | Completado |
+| Alias | Real |
+|---|---|
+| `advance_epoch` | `EpochState.advance_epoch()` → `src/pure_mls/epoch.py:28` |
+| `_psk_secret` | `keyschedule._psk_secret(psk_list)` → `src/pure_mls/keyschedule.py:36` |
+| `application_key` | Propiedad deprecated en `MLSGroup` — usar `encrypt/decrypt_application_message()` |
+| `gi_ctx` | `GroupContext` parseado en `MLSGroup.join()` → `group.py:~1268` |
+| `_make_group_context` | Helper en `group.py` → construye `GroupContext` TLS bytes |
+| `group_ctx_verify` | `GroupContext` con `transcript_hash` real (process_update) → `group.py:1343` |
+| `varint_encode` | Canonical MLS VarInt → `hkdf.py` (3-tier, max 2^30-1) |
+| `SecretTree` | API E2E: `encrypt/decrypt_application_message` → `src/pure_mls/secret_tree.py` |
+| `B760` | Identificador de la auditoría criptográfica de este sprint |
+
+---
+
+## 2. Mapa de Arquitectura
+
+```
+src/pure_mls/
+├── group.py         # MLSGroup: create, add_member, join, process_update, encrypt/decrypt_app_msg
+├── epoch.py         # EpochState + advance_epoch(group_context=...) [P0-01 fix]
+├── keyschedule.py   # KeySchedule.derive(psk_list) [PSK §8.4 implementado]
+├── hkdf.py          # expand_with_label, varint_encode [encode_varint eliminado N-01]
+├── hpke.py          # HPKE seal/open
+├── keys.py          # SignatureKey, KemKey
+├── tree.py          # RatchetTree, LeafNode.verify_signature(group_id, leaf_index) [P1-04]
+├── secret_tree.py   # SecretTree ratchet per-leaf
+└── tls.py           # Wire format helpers
+# tree_math.py → ELIMINADO (P1-03)
+```
+
+---
+
+## 3. Log de Decisiones Técnicas
+
+| Prioridad | Decisión | Razón | Estado |
+|---|---|---|---|
+| P0 | `advance_epoch()` acepta `group_context: bytes` | RFC 9420 §8: epoch secrets deben estar bound al GroupContext (group_id, epoch, tree_hash, transcript_hash). `b""` = domain collapse | ✅ `88b2625` |
+| P0 | `join()` usa `gi_ctx.to_bytes()` para `epoch_secret` | Mirror de P0-01; joiner debe derivar el mismo epoch secret que el creador | ✅ `88b2625` |
+| P0 | `test_e2e_websockets.py` migrado a `encrypt/decrypt_application_message` | MQTT y WebRTC ya migrados; WebSocket quedó olvidado. Elimina raw AESGCM, nonce en claro, empty AAD | ✅ `88b2625` |
+| P1 | `tree_math.py` eliminado | Dead code — implementación duplicada de RatchetTree. `RatchetTree` inline es canonical | ✅ `88b2625` |
+| P1 | `LeafNode.verify_signature(group_id, leaf_index)` | TBS para `update`/`commit` source incluye group_id+leaf_index per RFC §7.2. Sin estos args → false positive silencioso | ✅ `88b2625` |
+| N1 | `encode_varint()` eliminado de `hkdf.py` | Duplicado del QUIC tier (8-byte, no en RFC 9420). `varint_encode()` es canonical | ✅ `88b2625` |
+| Minor | `import hmac` inline → module-level | Style fix audit B760 | ✅ `993f9a9` |
+| Minor | `application_key` DeprecationWarnings eliminados en tests | Tests reescritos con roundtrip encrypt/decrypt | ✅ `993f9a9` |
+| Minor | PSK injection RFC §8.4 implementado | `_psk_secret()` XOR chain multi-PSK; reemplaza `NotImplementedError` | ✅ `d57e08e` |
+
+---
 
 ## 4. Última Frontera (Checkpoint)
-- **Situación**: Batería de E2E Transports en verde absoluto (100% Coverage, 32 passed test). Linter enmudecido ("Sound of Silence").
-- **Acciones Recientes**: Pusheados commits 5238c90 y aa9dfe6 al master remote origin, ostentando validación 'Engineering Grade'.
-- **Blocker**: Ninguno. Listo para hibernación.
+
+### Últimas 3 acciones
+1. **B760 re-audit: 6 findings resueltos** — commit `f67aacb` + changelog `88b2625` pusheados a `feat/v3.0-phase6-interop`
+2. **B760 minor findings (4 items)** — commits `b91a2e3`→`6105a4c` (inline import, DeprecationWarnings, PSK §8.4, xfail docs)
+3. **Reverse merge `main`→`feat/v3.0-phase6-interop`** — conflictos resueltos favoreciendo feature branch
+
+### Estado actual
+```
+branch: feat/v3.0-phase6-interop
+HEAD:   88b2625
+tests:  145 passed · 0 failed · 50 xfailed · ruff clean
+```
+
+### Blocker / Próximos pasos
+- **No hay P0 blockers** — todos los B760 findings resueltos
+- **50 xfails** son backlog legítimo de fases 7+8:
+  - 41 × `test_secret_tree_key_nonce` — SecretTree IETF wire format (Fase 7)
+  - 8 × `test_passive_client_welcome` — Welcome HPKE wire format (Fase 8)
+  - 1 × `test_key_schedule_epoch_0_suite_1` — IETF PSK vector sin descomponer
+- **Próximo paso sugerido**: abrir PR `feat/v3.0-phase6-interop` → `main` (o continuar con Fase 7: SecretTree IETF vectors)
+- **`main` protegida** — sólo vía PR

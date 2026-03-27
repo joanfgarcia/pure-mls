@@ -32,7 +32,6 @@ pure-mls/
 │   └── pure_mls/
 │       ├── group.py        # [API] State Machine (MLSGroup)
 │       ├── tree.py         # Nodes and RatchetTree structure
-│       ├── tree_math.py    # LBBT index mathematics
 │       ├── epoch.py        # Immutable states (Epochs)
 │       ├── keys.py         # Ed25519 Identities and X25519 KEMs
 │       ├── keyschedule.py  # Secret Derivation (Application_Key)
