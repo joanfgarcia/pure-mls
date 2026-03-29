@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously all groups at epoch 0 shared identical key material regardless of `group_id`.
   Circular-import avoided via parameter injection (epoch.py does not import group.py).
 
+- **[P1-E] `proposals.py` migrated to `tls.py` VarInt encoding** (`proposals.py`):
+  Removed 6 local helpers (`_u16`, `_u32`, `_opaque`, `_read_u16`, `_read_u32`, `_read_opaque`)
+  and replaced with imports from `tls.py` (`tls_u16`, `tls_u32`, `tls_varint`, `read_u16`,
+  `read_u32`, `read_opaque_varint`). All `opaque<V>` fields (key_package_bytes, leaf_node_bytes,
+  psk_id_wire, ProposalOrRef.value) now use MLS VarInt length prefix per RFC 9420 §5.1.
+  `RemoveProposal.removed` retains uint32 (fixed-width per RFC §12.1.3).
+  Previously uint32 opaque lengths caused OpenMLS deserialization failures for `AddProposal`
+  embedded in a Commit — the length prefix mismatch (4B vs 1B for short payloads) was the root cause.
+
 ### Analysis (B760 Re-Audit — Findings Investigated, Not Patched)
 
 - **[P0-B] `decrypt_group_secrets()` info string — auditor finding CLARIFIED** (`group.py`):

@@ -13,6 +13,10 @@ proposal_type (uint16 ProposalType) | body...
 ProposalRef = Hash(Proposal wire bytes) — used by Commit.proposals[].
 A Commit embeds a vector of ProposalOrRef items, each prefixed by a
 type byte (0x01=by_value, 0x02=by_reference).
+
+P1-E fix: all opaque<V> fields now use MLS VarInt length prefix per
+RFC 9420 §5.1 (previously used uint32, causing OpenMLS deserialization
+failures for AddProposal.key_package_bytes and similar fields).
 """
 
 from __future__ import annotations
@@ -20,6 +24,15 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from enum import IntEnum
+
+from pure_mls.tls import (
+	read_opaque_varint,
+	read_u16,
+	read_u32,
+	tls_u16,
+	tls_u32,
+	tls_varint,
+)
 
 
 class ProposalType(IntEnum):
@@ -34,30 +47,9 @@ class ProposalType(IntEnum):
 	GROUP_CONTEXT_EXTENSIONS = 0x000A
 
 
-def _u16(n: int) -> bytes:
-	return n.to_bytes(2, "big")
-
-
-def _u32(n: int) -> bytes:
-	return n.to_bytes(4, "big")
-
-
-def _opaque(data: bytes) -> bytes:
-	return len(data).to_bytes(4, "big") + data
-
-
-def _read_u16(data: bytes, offset: int) -> tuple[int, int]:
-	return int.from_bytes(data[offset : offset + 2], "big"), offset + 2
-
-
-def _read_u32(data: bytes, offset: int) -> tuple[int, int]:
-	return int.from_bytes(data[offset : offset + 4], "big"), offset + 4
-
-
-def _read_opaque(data: bytes, offset: int) -> tuple[bytes, int]:
-	length = int.from_bytes(data[offset : offset + 4], "big")
-	offset += 4
-	return data[offset : offset + length], offset + length
+def _opaque_varint(data: bytes) -> bytes:
+	"""Encode bytes as varint-prefixed opaque<V> per RFC 9420 §5.1."""
+	return tls_varint(len(data)) + data
 
 
 @dataclass
@@ -67,13 +59,13 @@ class AddProposal:
 	key_package_bytes: bytes  # TLS-encoded KeyPackage
 
 	def to_bytes(self) -> bytes:
-		return _u16(ProposalType.ADD) + _opaque(self.key_package_bytes)
+		return tls_u16(ProposalType.ADD) + _opaque_varint(self.key_package_bytes)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["AddProposal", int]:
-		proposal_type, offset = _read_u16(data, offset)
+		proposal_type, offset = read_u16(data, offset)
 		assert proposal_type == ProposalType.ADD, f"Expected ADD, got {proposal_type:#06x}"
-		kp_bytes, offset = _read_opaque(data, offset)
+		kp_bytes, offset = read_opaque_varint(data, offset)
 		return cls(key_package_bytes=kp_bytes), offset
 
 
@@ -84,13 +76,13 @@ class UpdateProposal:
 	leaf_node_bytes: bytes  # TLS-encoded LeafNode
 
 	def to_bytes(self) -> bytes:
-		return _u16(ProposalType.UPDATE) + _opaque(self.leaf_node_bytes)
+		return tls_u16(ProposalType.UPDATE) + _opaque_varint(self.leaf_node_bytes)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdateProposal", int]:
-		proposal_type, offset = _read_u16(data, offset)
+		proposal_type, offset = read_u16(data, offset)
 		assert proposal_type == ProposalType.UPDATE, f"Expected UPDATE, got {proposal_type:#06x}"
-		ln_bytes, offset = _read_opaque(data, offset)
+		ln_bytes, offset = read_opaque_varint(data, offset)
 		return cls(leaf_node_bytes=ln_bytes), offset
 
 
@@ -101,13 +93,13 @@ class RemoveProposal:
 	removed: int  # leaf index (uint32)
 
 	def to_bytes(self) -> bytes:
-		return _u16(ProposalType.REMOVE) + _u32(self.removed)
+		return tls_u16(ProposalType.REMOVE) + tls_u32(self.removed)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["RemoveProposal", int]:
-		proposal_type, offset = _read_u16(data, offset)
+		proposal_type, offset = read_u16(data, offset)
 		assert proposal_type == ProposalType.REMOVE, f"Expected REMOVE, got {proposal_type:#06x}"
-		removed, offset = _read_u32(data, offset)
+		removed, offset = read_u32(data, offset)
 		return cls(removed=removed), offset
 
 
@@ -116,7 +108,7 @@ class PSKProposal:
 	"""RFC 9420 §12.1.4: Inject a PreSharedKey into the next epoch.
 
 	PSK ID wire format (simplified — external PSK only):
-		psk_type (1B: 0x01=external) | psk_id<V>(opaque32) | psk_nonce<V>(opaque)
+		psk_type (1B: 0x01=external) | psk_id<V>(opaque_varint) | psk_nonce<V>(opaque)
 	"""
 
 	psk_id: bytes  # application-defined PSK identifier
@@ -125,21 +117,21 @@ class PSKProposal:
 	def to_bytes(self) -> bytes:
 		psk_id_wire = (
 			b"\x01"  # psk_type = external
-			+ _opaque(self.psk_id)
+			+ _opaque_varint(self.psk_id)
 			+ len(self.psk_nonce).to_bytes(1, "big")
 			+ self.psk_nonce
 		)
-		return _u16(ProposalType.PRE_SHARED_KEY) + _opaque(psk_id_wire)
+		return tls_u16(ProposalType.PRE_SHARED_KEY) + _opaque_varint(psk_id_wire)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["PSKProposal", int]:
-		proposal_type, offset = _read_u16(data, offset)
+		proposal_type, offset = read_u16(data, offset)
 		assert proposal_type == ProposalType.PRE_SHARED_KEY, f"Expected PSK, got {proposal_type:#06x}"
-		psk_id_wire, offset = _read_opaque(data, offset)
+		psk_id_wire, offset = read_opaque_varint(data, offset)
 		inner = 0
 		_psk_type = psk_id_wire[inner]
 		inner += 1
-		psk_id, inner = _read_opaque(psk_id_wire, inner)
+		psk_id, inner = read_opaque_varint(psk_id_wire, inner)
 		nonce_len = psk_id_wire[inner]
 		inner += 1
 		psk_nonce = psk_id_wire[inner : inner + nonce_len]
@@ -182,7 +174,7 @@ class ProposalOrRef:
 
 	def to_bytes(self) -> bytes:
 		if self.value is not None:
-			return b"\x01" + _opaque(self.value)
+			return b"\x01" + _opaque_varint(self.value)
 		elif self.reference is not None:
 			return b"\x02" + self.reference  # 32B, fixed-length (SHA-256 output)
 		raise ValueError("ProposalOrRef must have value or reference")
@@ -192,7 +184,7 @@ class ProposalOrRef:
 		kind = data[offset]
 		offset += 1
 		if kind == 0x01:
-			value, offset = _read_opaque(data, offset)
+			value, offset = read_opaque_varint(data, offset)
 			return cls(value=value), offset
 		elif kind == 0x02:
 			reference = data[offset : offset + 32]
