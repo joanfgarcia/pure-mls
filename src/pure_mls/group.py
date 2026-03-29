@@ -259,7 +259,14 @@ class Welcome:
 
 		Searches encrypted_group_secrets for an entry whose kem_output can be
 		decapsulated with init_key, then decrypts via HPKE.open with the
-		RFC 9420 §12.4 EncryptWithLabel context.
+		RFC 9420 §12.4 EncryptWithLabel("Welcome", encrypted_group_info) context.
+
+		This method is RFC-compliant and compatible with OpenMLS IETF vectors.
+		The HPKE info string follows RFC 9420 §12.4: varint(label) + label + varint(egi) + egi.
+
+		Note: MLSGroup.join() uses b"MLS 1.0 EncryptedGroupSecrets" (pure-mls internal
+		convention, P0-B audit note). For OpenMLS interoperability, use this method
+		or Welcome.from_mlsmessage_bytes() + decrypt_group_secrets() directly.
 
 		Returns GroupSecrets on success, None if no matching entry found.
 		"""
