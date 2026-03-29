@@ -54,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the HPKE info seed — a more significant refactor tracked separately.
   **No code change applied** — seal/open pair is self-consistent (no decryption failure risk).
 
+- **[P1-A] `_transcript_hash()` RFC 9420 §8.2 two-pass structure — analysis** (`group.py`):
+  Auditor correctly identifies that `_transcript_hash()` is a single-pass bespoke SHA-256 rather
+  than the RFC §8.2 two-pass `interim_transcript_hash`→`confirmed_transcript_hash` chain.
+  Investigation of the 50 xfails reveals they are caused by:
+  - 8 × `test_passive_client_welcome`: `MLSGroup.join()` fails on RFC Welcome wire format
+    (pure-mls uses a custom format); `pytest.xfail()` inside try/except triggers an
+    `UnboundLocalError` — a test infrastructure issue, not a transcript_hash issue.
+  - 41 × `test_secret_tree_key_nonce`: SecretTree ratchet O(N²) re-derivation (P1-B scope).
+  Implementing RFC §8.2 correctly requires: `_compute_interim_transcript_hash(prior_confirmed,
+  commit_content_bytes)` and `_compute_confirmed_transcript_hash(interim, confirmation_tag)`.
+  This is a P1 scope change — both sides (add_member + process_update) must be updated
+  simultaneously, and existing test vectors depend on the current hash. Tracked separately.
+  **No code change applied** — xfails are not caused by _transcript_hash structure.
+
 ## [3.0.0.8] - 2026-03-29
 
 ### Documentation (B760 Residual Cleanup)
