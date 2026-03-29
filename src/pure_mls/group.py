@@ -1088,7 +1088,7 @@ class MLSGroup:
 		# P0-A: genesis confirmed_transcript_hash = b"" (epoch 0 has no prior commit)
 		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key, confirmed_transcript_hash=b"")
 
-	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", WelcomeInfo, GroupUpdate]:
+	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", Welcome, GroupUpdate]:
 		"""
 		Adds a new member, generating a Commit and advancing the Epoch.
 		Returns the updated Group, the Welcome for the joiner, and the Update for peers.

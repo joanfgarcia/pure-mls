@@ -572,7 +572,7 @@ class RatchetTree:
 		root = self._root()
 		x = leaf_index
 		n = len(self.nodes)
-		path = []
+		path: list[int] = []
 		if x == root:
 			return path
 		while True:

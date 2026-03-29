@@ -171,9 +171,15 @@ def run_self_consistency_tests() -> tuple[int, int]:
 	commit_secret = b"\x01" * 32
 	ks = KeySchedule.derive(init_secret=init_secret, commit_secret=commit_secret)
 	required_fields = [
-		"joiner_secret", "epoch_authenticator", "sender_data_secret",
-		"encryption_secret", "exporter_secret", "membership_key",
-		"resumption_psk_secret", "init_secret", "confirmation_key"
+		"joiner_secret",
+		"epoch_authenticator",
+		"sender_data_secret",
+		"encryption_secret",
+		"exporter_secret",
+		"membership_key",
+		"resumption_psk_secret",
+		"init_secret",
+		"confirmation_key",
 	]
 	for field in required_fields:
 		if not hasattr(ks, field):
