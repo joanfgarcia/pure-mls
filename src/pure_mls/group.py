@@ -506,6 +506,22 @@ def _make_framed_content_tbs(group_ctx: GroupContext, framed: "FramedContent") -
 	)
 
 
+def _egs_info(encrypted_group_info: bytes) -> bytes:
+	"""RFC 9420 §12.4 EncryptWithLabel info for EncryptedGroupSecrets HPKE.
+
+	Info = varint(len(label)) + label + varint(len(egi)) + egi
+	Where label = b"MLS 1.0 Welcome"
+
+	This matches OpenMLS wire format and the IETF passive-client-welcome vectors.
+	Used by both add_member() (seal) and join() (open) to maintain symmetry.
+	Also used by Welcome.decrypt_group_secrets() which is the public RFC API.
+	"""
+	from pure_mls.hkdf import varint_encode
+
+	label = b"MLS 1.0 Welcome"
+	return varint_encode(len(label)) + label + varint_encode(len(encrypted_group_info)) + encrypted_group_info
+
+
 def _transcript_hash(
 	group_id: bytes,
 	epoch_id: int,
@@ -1181,27 +1197,19 @@ class MLSGroup:
 		tbs = _make_framed_content_tbs(new_ctx_signed, _framed_for_tbs)
 		signature = self.my_sig_key.sign(tbs)
 
-		# 4. Build RFC-compliant Welcome
-		# GroupSecrets for the joiner (HPKE-sealed) — RFC §12.1.2: no joiner_index in wire format
-		group_secrets = GroupSecrets(
-			joiner_secret=next_state.key_schedule.joiner_secret,
-		)
-		# P1-01: RFC 9420 §12.4 requires a domain-separating label for EncryptedGroupSecrets HPKE encapsulation
-		gs_enc, gs_ct = HPKE.seal(
-			key_package.init_key_pub,
-			group_secrets.to_bytes(),
-			info=b"MLS 1.0 EncryptedGroupSecrets",
-		)
-		egs = EncryptedGroupSecrets(
-			new_member=_make_kp_ref(key_package),
-			kem_output=gs_enc,
-			ciphertext=gs_ct,
-		)
+		# 4. Build RFC-compliant Welcome  (P0-B: RFC §12.4 ordering)
+		#
+		# Correct ordering to satisfy RFC §12.4 info = EncryptWithLabel("Welcome", egi):
+		#   a) Build + sign GroupInfo (does not depend on EGI or GroupSecrets)
+		#   b) Encrypt GroupInfo → encrypted_group_info (egi)
+		#   c) Seal GroupSecrets with info = _egs_info(egi)  ← RFC-compliant
+		#   d) Assemble Welcome
+		#
+		# This ensures join() can open EGS with _egs_info(welcome.encrypted_group_info)
+		# and get the same symmetric HPKE info, matching OpenMLS wire format.
 
-		# Build signed GroupInfo (RFC 9420 §12.1.2):
-		# confirmation_tag = HMAC(confirmation_key, transcript_hash)
+		# 4a. Build + sign GroupInfo
 		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-		# GroupInfo GroupContext uses the NEW epoch + transcript_hash (confirmed)
 		gi_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, transcript_hash)
 		group_info = GroupInfo.build_and_sign(
 			group_context=gi_group_ctx,
@@ -1209,19 +1217,33 @@ class MLSGroup:
 			signer=self.my_index,
 			sig_key=self.my_sig_key,
 		)
-		# Encrypt GroupInfo with AES-GCM (welcome_key from joiner_secret)
+
+		# 4b. Encrypt GroupInfo → encrypted_group_info (egi)
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
-		welcome_nonce_enc = os.urandom(12)  # RFC: random nonce per Welcome (not deterministic)
-
-		# GroupInfo plaintext = GroupInfo.to_bytes() + ratchet_tree extension (opaque<V>)
+		welcome_nonce_enc = os.urandom(12)
 		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
-		# Store as nonce(12) || ciphertext for join() to decode
+		egi = welcome_nonce_enc + gi_ct  # nonce(12) || ciphertext
+
+		# 4c. Seal GroupSecrets with RFC §12.4 info = EncryptWithLabel("Welcome", egi)
+		group_secrets = GroupSecrets(joiner_secret=next_state.key_schedule.joiner_secret)
+		gs_enc, gs_ct = HPKE.seal(
+			key_package.init_key_pub,
+			group_secrets.to_bytes(),
+			info=_egs_info(egi),
+		)
+		egs = EncryptedGroupSecrets(
+			new_member=_make_kp_ref(key_package),
+			kem_output=gs_enc,
+			ciphertext=gs_ct,
+		)
+
+		# 4d. Assemble Welcome with egi and egs
 		welcome = Welcome(
 			cipher_suite=Welcome._CIPHER_SUITE,
 			encrypted_group_secrets=[egs],
-			encrypted_group_info=welcome_nonce_enc + gi_ct,
+			encrypted_group_info=egi,
 		)
 
 		_conf_tag_sender = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
@@ -1264,8 +1286,9 @@ class MLSGroup:
 		egs_match: EncryptedGroupSecrets | None = None
 		for candidate in welcome.encrypted_group_secrets:
 			try:
-				# P1-01: use domain-separating label per RFC 9420 §12.4
-				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=b"MLS 1.0 EncryptedGroupSecrets")
+				# P0-B: RFC 9420 §12.4 EncryptWithLabel("Welcome", encrypted_group_info)
+				# Symmetric with add_member() seal — uses RFC info, matches IETF vectors
+				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=_egs_info(welcome.encrypted_group_info))
 				egs_match = candidate
 				break
 			except Exception:

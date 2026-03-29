@@ -28,17 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Analysis (B760 Re-Audit — Findings Investigated, Not Patched)
 
-- **[P0-B] `decrypt_group_secrets()` info string — auditor finding CLARIFIED** (`group.py`):
-  Auditor claimed `decrypt_group_secrets()` was broken because its HPKE info differed from
-  `add_member()`/`join()`. Investigation against IETF `passive-client-welcome` vectors confirms:
-  `decrypt_group_secrets()` uses the RFC 9420 §12.4 `EncryptWithLabel("Welcome", egi)` format
-  — which IS correct and matches OpenMLS wire format (8/8 IETF vectors decrypt successfully).
-  The actual inconsistency is that `add_member()` seals with `b"MLS 1.0 EncryptedGroupSecrets"`
-  (pure-mls internal convention) instead of the RFC `EncryptWithLabel` format.
-  This means `join()` + `add_member()` form a self-consistent non-RFC pair, while
-  `decrypt_group_secrets()` is the RFC-compliant public API for OpenMLS interoperability.
-  **No code change applied** — fix would require aligning `add_member()` seal to RFC format,
-  which is a larger interop migration tracked under P1-A scope.
+- **[P0-B] `add_member()`/`join()` aligned to RFC §12.4 EncryptWithLabel — FIXED** (`group.py`):
+  Previous analysis (Round 1) correctly identified that `decrypt_group_secrets()` was RFC-compliant
+  while `add_member()` used `b"MLS 1.0 EncryptedGroupSecrets"` (pure-mls internal convention).
+  **Round 2 fix:** Migrated `add_member()` and `join()` to use RFC §12.4
+  `EncryptWithLabel("Welcome", encrypted_group_info)` info string, matching `decrypt_group_secrets()`
+  and OpenMLS wire format. All three call sites now use the same `_egs_info(egi)` helper.
+  Ordering was refactored: GroupInfo is now signed BEFORE the EGI is encrypted and BEFORE
+  GroupSecrets are sealed, so the info string contains the final, signed EGI bytes.
+  **Breaking wire change:** Groups created with pure-mls < 3.0.0.9 require all peers
+  to update simultaneously (EGS HPKE info mismatch causes decryption failure on join).
 
 - **[P0-A] HPKE info `transcript_hash=b""` in legacy commit seal/open — auditor finding CLARIFIED** (`group.py`):
   Auditor claimed `add_member()` seals with `transcript_hash=b""` in `group_ctx_pre` (line ~1116)
