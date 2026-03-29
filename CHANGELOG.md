@@ -39,19 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Breaking wire change:** Groups created with pure-mls < 3.0.0.9 require all peers
   to update simultaneously (EGS HPKE info mismatch causes decryption failure on join).
 
-- **[P0-A] HPKE info `transcript_hash=b""` in legacy commit seal/open — auditor finding CLARIFIED** (`group.py`):
-  Auditor claimed `add_member()` seals with `transcript_hash=b""` in `group_ctx_pre` (line ~1116)
-  while `process_update()` should use `group_ctx_verify` (with real transcript_hash) in fallback.
-  Analysis reveals a structural circular dependency: `group_ctx_pre` is needed for PASS 3 (sealing
-  path secrets + commit_secret), but `transcript_hash` is only computable AFTER `encrypted_secrets`
-  exists (the output of PASS 3). It is physically impossible to use the commit's own transcript_hash
-  as HPKE info for the ciphertexts that are inputs to that very transcript_hash.
-  The seal/open pair is internally consistent: both sides use `group_ctx` with `b""` for the
-  legacy `encrypted_commit_secrets` path. `group_ctx_verify` (with real transcript_hash) is
-  correctly used for `advance_epoch()` key derivation (P0-01, already fixed).
-  An RFC-compliant fix would require using the previous epoch's `confirmed_transcript_hash`
-  as the HPKE info seed — a more significant refactor tracked separately.
-  **No code change applied** — seal/open pair is self-consistent (no decryption failure risk).
+- **[P0-A] `confirmed_transcript_hash` threaded through MLSGroup — PARTIAL** (`group.py`):
+  Round 1 analysis: using `self.confirmed_transcript_hash` as `group_ctx_pre` HPKE info
+  causes a seal/open mismatch when peers diverge (joiner via `join()` has no committer hash).
+  **Round 2 change:** `confirmed_transcript_hash: bytes = b""` added to `MLSGroup.__init__`
+  and propagated through every `add_member()` and `process_update()` transition.
+  This is **infrastructure** for the P1-A two-pass transcript hash refactor.
+  The `group_ctx_pre` HPKE info retains `b""` to preserve seal/open symmetry across all
+  peer types. **Full RFC compliance requires P1-A** to eliminate divergence.
 
 - **[P1-A] `_transcript_hash()` RFC 9420 §8.2 two-pass structure — analysis** (`group.py`):
   Auditor correctly identifies that `_transcript_hash()` is a single-pass bespoke SHA-256 rather

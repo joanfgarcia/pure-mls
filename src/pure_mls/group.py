@@ -969,12 +969,24 @@ class MLSGroup:
 	Manages the current EpochState and transitions.
 	"""
 
-	def __init__(self, state: EpochState, my_index: int, my_sig_key: SignatureKey, my_kem_key: KemKey):
+	def __init__(
+		self,
+		state: EpochState,
+		my_index: int,
+		my_sig_key: SignatureKey,
+		my_kem_key: KemKey,
+		confirmed_transcript_hash: bytes = b"",
+	):
 		self.state = state
 		self.my_index = my_index
 		self.my_sig_key = my_sig_key
 		self.my_kem_key = my_kem_key
 		self._secret_tree: SecretTree | None = None
+		# P0-A: prior epoch confirmed_transcript_hash used as HPKE info domain separator
+		# in group_ctx_pre (add_member) and group_ctx (process_update).
+		# Initialized to b"" for genesis (epoch 0) and propagated through each epoch transition.
+		# NOT serialized in EpochState.to_bytes() — lives only in the running MLSGroup instance.
+		self.confirmed_transcript_hash: bytes = confirmed_transcript_hash
 
 	@property
 	def group_id(self) -> bytes:
@@ -1032,7 +1044,8 @@ class MLSGroup:
 		# to avoid circular import: epoch.py ↛ group.py.
 		genesis_ctx = _make_group_context(group_id, 0, tree, b"")
 		state = EpochState.genesis(group_id, tree, group_context_bytes=genesis_ctx.to_bytes())
-		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key)
+		# P0-A: genesis confirmed_transcript_hash = b"" (epoch 0 has no prior commit)
+		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key, confirmed_transcript_hash=b"")
 
 	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", WelcomeInfo, GroupUpdate]:
 		"""
@@ -1129,6 +1142,11 @@ class MLSGroup:
 			new_tree.set_parent(dp_idx, ParentNode(public_key=_new_pub, parent_hash=_ph))
 
 		# PASS 2: Now that new_tree has the new Leaf AND new ParentNodes, compute context
+		# P0-A infrastructure: group_ctx_pre uses b"" for the transcript_hash field.
+		# RATIONALE: using self.confirmed_transcript_hash here would cause a seal/open mismatch
+		# when different peers (committer vs. joiner-via-join()) have different transcript_hash state.
+		# The confirmed_transcript_hash IS threaded through MLSGroup (see __init__) for use
+		# in the two-pass transcript hash (P1-A) and future RFC §12.4 compliance work.
 		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, b"")
 
 		# PASS 3: Encrypt path secrets using the fully updated group_ctx_pre
@@ -1263,7 +1281,8 @@ class MLSGroup:
 		)
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
-		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem)
+		# P0-A: propagate confirmed_transcript_hash to new epoch for next commit's HPKE info
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, confirmed_transcript_hash=transcript_hash)
 		return new_group, welcome, update
 
 	@classmethod
@@ -1409,7 +1428,9 @@ class MLSGroup:
 		my_kp = self.state.tree.get_node(self.my_index)
 		if not isinstance(my_kp, LeafNode):
 			raise ValueError("My leaf node not found in tree")
-		# HPKE info = GroupContext of the verifying epoch for CRIT-01
+		# HPKE info = GroupContext of the verifying epoch.
+		# P0-A infrastructure: uses b"" for transcript_hash — symmetric with add_member() seal.
+		# A non-b"" value here would cause InvalidTag if peers have diverged transcript_hash state.
 		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, b"")
 		my_kp_ref = _make_kp_ref(my_kp.key_package)
 
@@ -1458,7 +1479,8 @@ class MLSGroup:
 				raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
-		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key)
+		# P0-A: return new MLSGroup with transcript_hash propagated for next commit
+		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, confirmed_transcript_hash=transcript_hash)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
 		"""RFC 9420 §9: Encrypt an application message using SecretTree (per-leaf, per-generation).
