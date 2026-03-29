@@ -9,7 +9,7 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from pure_mls.tls import (
 	read_opaque,
@@ -184,7 +184,7 @@ class LeafNode:
 			tbs += tls_opaque(group_id) + tls_u32(leaf_index)
 		return tbs
 
-	def sign(self, sign_fn, group_id: bytes = b"", leaf_index: int = 0) -> "LeafNode":
+	def sign(self, sign_fn: Callable[[bytes], bytes], group_id: bytes = b"", leaf_index: int = 0) -> "LeafNode":
 		"""Return a signed copy of this LeafNode."""
 		from dataclasses import replace
 
@@ -246,7 +246,7 @@ class LeafNode:
 		), offset
 
 	@classmethod
-	def create(cls, encryption_key: bytes, signature_key: bytes, identity: bytes, sign_fn) -> "LeafNode":
+	def create(cls, encryption_key: bytes, signature_key: bytes, identity: bytes, sign_fn: Callable[[bytes], bytes]) -> "LeafNode":
 		"""Factory: create and sign a LeafNode for a new member."""
 		node = cls(
 			encryption_key=encryption_key,
@@ -342,7 +342,9 @@ class KeyPackage:
 		), offset
 
 	@classmethod
-	def create(cls, encryption_key: bytes, init_key_pub: bytes, signature_key: bytes, identity: bytes, sign_fn) -> "KeyPackage":
+	def create(
+		cls, encryption_key: bytes, init_key_pub: bytes, signature_key: bytes, identity: bytes, sign_fn: Callable[[bytes], bytes]
+	) -> "KeyPackage":
 		"""Factory: build and sign a complete KeyPackage.
 
 		sign_fn(tbs_bytes) -> signature_bytes

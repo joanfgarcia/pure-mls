@@ -4,6 +4,7 @@ import os
 import struct
 import warnings as _warnings
 from dataclasses import dataclass
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -253,7 +254,7 @@ class Welcome:
 
 	def decrypt_group_secrets(
 		self,
-		init_key: "KemKey",  # type: ignore[name-defined]  # noqa: F821
+		init_key: "KemKey",
 	) -> "GroupSecrets | None":
 		"""Decrypt GroupSecrets for the joiner matching init_key.
 
@@ -285,7 +286,7 @@ class Welcome:
 		return None
 
 
-def WelcomeInfo(*args, **kwargs) -> "Welcome":
+def WelcomeInfo(*args: Any, **kwargs: Any) -> "Welcome":
 	"""Deprecated factory. Use Welcome directly."""
 	_warnings.warn("WelcomeInfo is deprecated; use Welcome directly.", DeprecationWarning, stacklevel=2)
 	return Welcome(*args, **kwargs)
