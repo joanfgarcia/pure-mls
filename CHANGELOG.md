@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **No code change applied** — fix would require aligning `add_member()` seal to RFC format,
   which is a larger interop migration tracked under P1-A scope.
 
+- **[P0-A] HPKE info `transcript_hash=b""` in legacy commit seal/open — auditor finding CLARIFIED** (`group.py`):
+  Auditor claimed `add_member()` seals with `transcript_hash=b""` in `group_ctx_pre` (line ~1116)
+  while `process_update()` should use `group_ctx_verify` (with real transcript_hash) in fallback.
+  Analysis reveals a structural circular dependency: `group_ctx_pre` is needed for PASS 3 (sealing
+  path secrets + commit_secret), but `transcript_hash` is only computable AFTER `encrypted_secrets`
+  exists (the output of PASS 3). It is physically impossible to use the commit's own transcript_hash
+  as HPKE info for the ciphertexts that are inputs to that very transcript_hash.
+  The seal/open pair is internally consistent: both sides use `group_ctx` with `b""` for the
+  legacy `encrypted_commit_secrets` path. `group_ctx_verify` (with real transcript_hash) is
+  correctly used for `advance_epoch()` key derivation (P0-01, already fixed).
+  An RFC-compliant fix would require using the previous epoch's `confirmed_transcript_hash`
+  as the HPKE info seed — a more significant refactor tracked separately.
+  **No code change applied** — seal/open pair is self-consistent (no decryption failure risk).
+
 ## [3.0.0.8] - 2026-03-29
 
 ### Documentation (B760 Residual Cleanup)
