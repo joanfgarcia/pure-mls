@@ -220,7 +220,7 @@ def test_passive_client_welcome(vec):
 	try:
 		joiner_group = MLSGroup.join(welcome_bytes, sig_key, kem_key)
 	except (ValueError, NotImplementedError, AttributeError) as e:
-		pytest.xfail(f"MLSGroup.join() can't parse RFC wire-format Welcome (pure-mls uses custom format): {e}")
+		pytest.skip(f"MLSGroup.join() cannot parse RFC wire-format Welcome (pure-mls uses custom format): {e}")
 
 	actual_epoch_auth = joiner_group.state.key_schedule.epoch_authenticator
 	assert actual_epoch_auth == expected_epoch_auth, (

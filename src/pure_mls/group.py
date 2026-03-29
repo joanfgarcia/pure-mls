@@ -522,6 +522,37 @@ def _egs_info(encrypted_group_info: bytes) -> bytes:
 	return varint_encode(len(label)) + label + varint_encode(len(encrypted_group_info)) + encrypted_group_info
 
 
+def _compute_interim_transcript_hash(
+	confirmed_transcript_hash: bytes,
+	framed_content_bytes: bytes,
+) -> bytes:
+	"""RFC 9420 §8.2 step 1: interim_transcript_hash.
+
+	interim = SHA-256(confirmed_transcript_hash || AuthenticatedContent.content)
+
+	Where AuthenticatedContent.content is the wire-encoded FramedContent for
+	the commit (includes group_id, epoch, sender, content body).
+	This binds the new epoch's transcript to the full history of the group.
+	"""
+	return hashlib.sha256(confirmed_transcript_hash + framed_content_bytes).digest()
+
+
+def _compute_confirmed_transcript_hash(
+	interim_transcript_hash: bytes,
+	confirmation_tag: bytes,
+) -> bytes:
+	"""RFC 9420 §8.2 step 2: confirmed_transcript_hash.
+
+	confirmed = SHA-256(interim_transcript_hash || confirmation_tag)
+
+	confirmation_tag = HMAC(confirmation_key, interim_transcript_hash)
+	This binds the confirmed hash to the actual key material of the new epoch,
+	making it impossible to forge a valid confirmed_transcript_hash without
+	knowing the confirmation_key.
+	"""
+	return hashlib.sha256(interim_transcript_hash + confirmation_tag).digest()
+
+
 def _transcript_hash(
 	group_id: bytes,
 	epoch_id: int,
@@ -531,10 +562,20 @@ def _transcript_hash(
 	sender_index: int,
 	prior_confirmed_transcript_hash: bytes = b"",
 ) -> bytes:
-	"""RFC 9420 §8.2: GroupInfo transcript hash = SHA-256(GroupContext || GroupInfo fields).
+	"""Legacy single-pass transcript hash (pure-mls internal convention).
 
-	The GroupContext is built from the *new* epoch state after the commit.
-	The hash is signed by the committer (STATE-02 fix).
+	Kept for backward compatibility with test_group_errors.py and test_state_findings.py
+	which import and call this function directly to construct forged commits.
+
+	P1-A STATUS: The two-pass RFC §8.2 helpers are implemented as
+	`_compute_interim_transcript_hash()` and `_compute_confirmed_transcript_hash()`.
+	`add_member()` and `process_update()` use the two-pass chain when
+	`framed_content_bytes` is available.  This legacy wrapper is used only
+	where the FramedContent bytes are not readily available (legacy path).
+
+	RFC §8.2 compliant call:
+		interim = _compute_interim_transcript_hash(prior_confirmed, framed_bytes)
+		confirmed = _compute_confirmed_transcript_hash(interim, conf_tag)
 	"""
 	# GroupContext encodes the new epoch state
 	ctx = _make_group_context(group_id, epoch_id, tree, prior_confirmed_transcript_hash)
@@ -1175,29 +1216,11 @@ class MLSGroup:
 				kp_ref = _make_kp_ref(node.key_package)
 				encrypted_secrets[kp_ref] = enc + ct
 
-		# 3. Advance the epoch
+		# 3. Advance the epoch — RFC §8.2 two-pass transcript hash (P1-A)
 		# STATE-02: deterministic canonical ordering by KP ref for transcript stability
-		ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_secrets.items()))
-		transcript_hash = _transcript_hash(
-			self.group_id,
-			new_epoch_id,
-			new_tree,
-			self.state.key_schedule.confirmation_key,
-			ciphertexts_bytes,
-			sender_index=self.my_index,
-		)
-		# RFC 9420 §6.2: GroupContext for new epoch (group_id, new_epoch_id, new_tree, transcript_hash)
-		# Computed BEFORE advance_epoch so epoch secrets are bound to the correct context (P0-01 fix)
-		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
-		next_state = self.state.advance_epoch(
-			commit_secret,
-			new_tree,
-			transcript_hash=transcript_hash,
-			group_context=new_ctx_signed.to_bytes(),  # P0-01: bind epoch secrets to GroupContext
-		)
 
-		# RFC 9420 §6.2: sign FramedContentTBS (not raw transcript_hash)
-		# Build an unsigned GroupUpdate body to construct the FramedContent for TBS
+		# P1-A: Build FramedContent BEFORE computing the transcript hash.
+		# The unsigned body and FramedContent only depend on epoch/tree/secrets — not on transcript_hash.
 		_unsigned_body = (
 			tls_u64(new_epoch_id)
 			+ tls_opaque32(new_tree.to_bytes())
@@ -1206,7 +1229,36 @@ class MLSGroup:
 			+ tls_u32(self.my_index)
 		)
 		_framed_for_tbs = FramedContent(
-			group_id=new_ctx_signed.group_id,
+			group_id=self.group_id,
+			epoch=new_epoch_id,
+			sender_leaf_index=self.my_index,
+			authenticated_data=b"",
+			content=_unsigned_body,
+		)
+		framed_content_bytes = _framed_for_tbs.to_bytes()
+
+		# P1-A RFC §8.2 two-pass chain:
+		#   step 1: interim  = SHA-256(prior_confirmed_transcript_hash || framed_content)
+		#   step 2: conf_tag = HMAC(confirmation_key, interim)
+		#   step 3: confirmed = SHA-256(interim || conf_tag)
+		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
+		# conf_tag computed from interim (not the legacy single-pass hash) per RFC §8.2
+		_conf_tag_p1a = hmac.new(self.state.key_schedule.confirmation_key, interim_hash, "sha256").digest()
+		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag_p1a)
+
+		# RFC 9420 §6.2: GroupContext for new epoch with RFC-compliant confirmed_transcript_hash
+		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		next_state = self.state.advance_epoch(
+			commit_secret,
+			new_tree,
+			transcript_hash=transcript_hash,
+			group_context=new_ctx_signed.to_bytes(),  # P0-01: bind epoch secrets to GroupContext
+		)
+
+		# RFC 9420 §6.2: sign FramedContentTBS
+		# Reuse _framed_for_tbs from P1-A two-pass block above; rebind group_id to ctx for TBS.
+		_framed_for_tbs = FramedContent(
+			group_id=new_ctx_signed.group_id,  # same bytes as self.group_id — explicit for TBS spec
 			epoch=new_epoch_id,
 			sender_leaf_index=self.my_index,
 			authenticated_data=b"",
@@ -1368,7 +1420,18 @@ class MLSGroup:
 			tree=tree,
 			key_schedule=ks,
 		)
-		return cls(state, my_index=my_index, my_sig_key=my_sig_key, my_kem_key=my_kem_key)
+		# P1-A: seed confirmed_transcript_hash from GroupInfo's GroupContext.
+		# gi_ctx.confirmed_transcript_hash is the transcript hash of the epoch the joiner
+		# is joining — exactly what all existing members have as their prior hash.
+		# Without this, join() would return a group with b"" and process_update() would
+		# compute a different interim_hash than the committer → signature mismatch.
+		return cls(
+			state,
+			my_index=my_index,
+			my_sig_key=my_sig_key,
+			my_kem_key=my_kem_key,
+			confirmed_transcript_hash=gi_ctx.confirmed_transcript_hash,
+		)
 
 	def process_update(self, update: GroupUpdate) -> "MLSGroup":
 		"""
@@ -1385,23 +1448,13 @@ class MLSGroup:
 			raise ValueError("Invalid committer index")
 
 		# 1. Verify Signature FIRST to prevent padding oracles
-		# STATE-02: recompute full GroupInfo transcript hash
-		ciphertexts_bytes = b"".join(k + v for k, v in sorted(update.encrypted_commit_secrets.items()))
+		# STATE-02 / P1-A: recompute transcript hash using RFC §8.2 two-pass chain
 		try:
 			# Access signature_key via leaf_node (RFC 9420 §7.2)
 			sig_key_bytes = committer_node.signature_key
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
-			transcript_hash = _transcript_hash(
-				self.group_id,
-				update.epoch_id,
-				update.tree,
-				self.state.key_schedule.confirmation_key,
-				ciphertexts_bytes,
-				sender_index=update.committer_index,
-			)
-			# RFC 9420 §6.2: signature covers FramedContentTBS, not raw transcript_hash
-			group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
-			# Reconstruct unsigned body for FramedContent
+
+			# P1-A: Build FramedContent first (does NOT depend on transcript_hash)
 			_unsigned_body_v = (
 				tls_u64(update.epoch_id)
 				+ tls_opaque32(update.tree.to_bytes())
@@ -1410,13 +1463,30 @@ class MLSGroup:
 				+ tls_u32(update.committer_index)
 			)
 			_framed_v = FramedContent(
+				group_id=self.group_id,
+				epoch=update.epoch_id,
+				sender_leaf_index=update.committer_index,
+				authenticated_data=b"",
+				content=_unsigned_body_v,
+			)
+			framed_content_bytes_v = _framed_v.to_bytes()
+
+			# P1-A RFC §8.2 two-pass: use self.confirmed_transcript_hash (prior epoch)
+			# This matches what add_member() used on the committer side.
+			interim_hash_v = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes_v)
+			_conf_tag_p1a_v = hmac.new(self.state.key_schedule.confirmation_key, interim_hash_v, "sha256").digest()
+			transcript_hash = _compute_confirmed_transcript_hash(interim_hash_v, _conf_tag_p1a_v)
+
+			# RFC 9420 §6.2: signature covers FramedContentTBS including GroupContext
+			group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
+			_framed_v_signed = FramedContent(
 				group_id=group_ctx_verify.group_id,
 				epoch=update.epoch_id,
 				sender_leaf_index=update.committer_index,
 				authenticated_data=b"",
 				content=_unsigned_body_v,
 			)
-			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v)
+			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v_signed)
 			public_key.verify(update.signature, tbs)
 		except InvalidSignature:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")

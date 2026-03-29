@@ -48,19 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The `group_ctx_pre` HPKE info retains `b""` to preserve seal/open symmetry across all
   peer types. **Full RFC compliance requires P1-A** to eliminate divergence.
 
-- **[P1-A] `_transcript_hash()` RFC 9420 §8.2 two-pass structure — analysis** (`group.py`):
-  Auditor correctly identifies that `_transcript_hash()` is a single-pass bespoke SHA-256 rather
-  than the RFC §8.2 two-pass `interim_transcript_hash`→`confirmed_transcript_hash` chain.
-  Investigation of the 50 xfails reveals they are caused by:
-  - 8 × `test_passive_client_welcome`: `MLSGroup.join()` fails on RFC Welcome wire format
-    (pure-mls uses a custom format); `pytest.xfail()` inside try/except triggers an
-    `UnboundLocalError` — a test infrastructure issue, not a transcript_hash issue.
-  - 41 × `test_secret_tree_key_nonce`: SecretTree ratchet O(N²) re-derivation (P1-B scope).
-  Implementing RFC §8.2 correctly requires: `_compute_interim_transcript_hash(prior_confirmed,
-  commit_content_bytes)` and `_compute_confirmed_transcript_hash(interim, confirmation_tag)`.
-  This is a P1 scope change — both sides (add_member + process_update) must be updated
-  simultaneously, and existing test vectors depend on the current hash. Tracked separately.
-  **No code change applied** — xfails are not caused by _transcript_hash structure.
+- **[P1-A] RFC 9420 §8.2 two-pass transcript hash — IMPLEMENTED** (`group.py`, `test_ietf_vectors.py`):
+  **Round 2 implementation:**
+  1. Added `_compute_interim_transcript_hash(prior_confirmed, framed_content_bytes)` and
+     `_compute_confirmed_transcript_hash(interim, confirmation_tag)` RFC §8.2 compliant helpers.
+  2. Refactored `add_member()` to build `FramedContent` BEFORE computing transcript_hash,
+     enabling the two-pass chain: `interim = SHA-256(prior_confirmed || framed_bytes)`,
+     `confirmed = SHA-256(interim || confirmation_tag)`.
+  3. Refactored `process_update()` symmetrically.
+  4. `join()` now seeds `confirmed_transcript_hash` from `gi_ctx.confirmed_transcript_hash`
+     so new members have the correct prior hash for the next commit verification.
+  5. **Test infrastructure fix:** `pytest.xfail()` inside `try/except` in
+     `test_passive_client_welcome` changed to `pytest.skip()` (xfail raises an internal
+     exception caught by the outer except block → UnboundLocalError).
+  The legacy `_transcript_hash()` is kept as backward-compat wrapper for tests that
+  import it directly to craft forged commits (test_group_errors, test_state_findings).
 
 ## [3.0.0.8] - 2026-03-29
 
