@@ -677,7 +677,7 @@ wheels = [
 
 [[package]]
 name = "pure-mls"
-version = "2.0.0"
+version = "3.0.0.8"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
