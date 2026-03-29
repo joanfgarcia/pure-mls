@@ -49,15 +49,33 @@ class EpochState:
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
 	@classmethod
-	def genesis(cls, group_id: bytes, creator_tree: RatchetTree) -> "EpochState":
+	def genesis(
+		cls,
+		group_id: bytes,
+		creator_tree: RatchetTree,
+		group_context_bytes: bytes = b"",
+	) -> "EpochState":
 		"""Bootstraps Epoch 0 for a brand new sovereign group.
+
 		RFC 9420 §8.1: epoch 0 init_secret is the all-zeros vector.
-		This ensures genesis derivations are deterministic and testable.
+
+		group_context_bytes MUST be the TLS-serialised GroupContext for epoch 0
+		(group_id, epoch=0, tree_hash, confirmed_transcript_hash=b\"\").
+		Passing b\"\" (default) skips domain separation — use only in tests that
+		explicitly target the genesis-only code path without a full group context.
+
+		The caller (group.py) constructs the GroupContext and passes it here to
+		avoid a circular import: epoch.py → group.py → epoch.py.
 		"""
 		genesis_init = b"\x00" * 32  # RFC 9420 §8.1: epoch 0 init_secret = zeros
 		blank_commit = b"\x00" * 32
 
-		return cls(group_id=group_id, epoch_id=0, tree=creator_tree, key_schedule=KeySchedule.derive(genesis_init, blank_commit))
+		return cls(
+			group_id=group_id,
+			epoch_id=0,
+			tree=creator_tree,
+			key_schedule=KeySchedule.derive(genesis_init, blank_commit, group_context=group_context_bytes),
+		)
 
 	def to_bytes(self) -> bytes:
 		"""Full EpochState binary dump for persistence."""

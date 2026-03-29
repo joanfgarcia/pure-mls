@@ -1003,7 +1003,12 @@ class MLSGroup:
 		)
 		tree.set_leaf(0, kp.leaf_node)
 
-		state = EpochState.genesis(group_id, tree)
+		# P0-C: RFC 9420 §8.1 — genesis epoch MUST bind KeySchedule to a GroupContext
+		# so that different groups at epoch 0 derive distinct secrets.
+		# _make_group_context is available here (group.py); passed to epoch.py via parameter
+		# to avoid circular import: epoch.py ↛ group.py.
+		genesis_ctx = _make_group_context(group_id, 0, tree, b"")
+		state = EpochState.genesis(group_id, tree, group_context_bytes=genesis_ctx.to_bytes())
 		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key)
 
 	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", WelcomeInfo, GroupUpdate]:

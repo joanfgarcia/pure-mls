@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0.9] - Unreleased
+
+### Fixed (B760 Re-Audit — Security Remediation, Round 2)
+
+- **[P0-C] `EpochState.genesis()` GroupContext domain separation** (`epoch.py`, `group.py`):
+  `genesis()` now accepts `group_context_bytes: bytes = b""` parameter. `MLSGroup.create()`
+  constructs the epoch-0 `GroupContext` via `_make_group_context(group_id, 0, tree, b"")`
+  and injects it — binding genesis `joiner_secret`, `epoch_secret`, and all derived secrets
+  to the specific `group_id` and `tree_hash` per RFC 9420 §8.1.
+  Previously all groups at epoch 0 shared identical key material regardless of `group_id`.
+  Circular-import avoided via parameter injection (epoch.py does not import group.py).
+
 ## [3.0.0.8] - 2026-03-29
 
 ### Documentation (B760 Residual Cleanup)
