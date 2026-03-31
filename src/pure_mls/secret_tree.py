@@ -9,8 +9,8 @@ RFC §9.3 Binary-Tree Derivation Path:
 	parent -> left  = ExpandWithLabel(parent, "left",  b"", NH)
 	parent -> right = ExpandWithLabel(parent, "right", b"", NH)
 	leaf_secret[leaf]  = ExpandWithLabel(leaf_node, "application", b"", NH)
-	leaf_secret per-generation is NOT further labeled in §9.3; generation
-	advancement uses ratcheting: next = ExpandWithLabel(current, "application", gen++, NH).
+	leaf_secret per-generation ratcheting adds the generation as context:
+	next = ExpandWithLabel(current, "application", I2OSP(gen, 4), NH).
 	key   = ExpandWithLabel(leaf_secret[gen], "key",   b"", KEY_LEN)
 	nonce = ExpandWithLabel(leaf_secret[gen], "nonce", b"", NONCE_LEN)
 
@@ -81,17 +81,15 @@ class SecretTree:
 	def _leaf_secret_for_gen(self, leaf_index: int, generation: int) -> bytes:
 		"""RFC §9.3: leaf_node_secret ratcheted to the given generation.
 
-		Generation 0: ExpandWithLabel(leaf_node_secret, "application", b"", NH)
-		Generation N: ExpandWithLabel(prev_gen_secret, "application", b"", NH)
-		(The generation is NOT used as context; ratcheting is purely sequential.)
+		gen_N_secret = ExpandWithLabel(gen_N-1_secret, "application", I2OSP(N, 4), NH)
 		"""
 		key = (leaf_index, generation)
 		if key in self._ratchet_cache:
 			return self._ratchet_cache.pop(key)
 		# Build from leaf_node_secret
 		secret = self._leaf_node_secret(leaf_index)
-		for _ in range(generation + 1):
-			secret = expand_with_label(secret, "application", b"", _NH)
+		for gen in range(generation + 1):
+			secret = expand_with_label(secret, "application", gen.to_bytes(4, "big"), _NH)
 		return secret
 
 	def get_key_and_nonce(self, leaf_index: int) -> tuple[bytes, bytes, int]:

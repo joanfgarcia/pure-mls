@@ -82,9 +82,8 @@ class GroupContext:
 		)
 
 	@classmethod
-	def from_bytes(cls, data: bytes) -> "GroupContext":
-		"""Decode a TLS-encoded GroupContext (RFC 9420 §8.1)."""
-		offset = 0
+	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["GroupContext", int]:
+		"""Decode a TLS-encoded GroupContext from a stream (RFC 9420 §8.1)."""
 		version, offset = read_u16(data, offset)
 		if version != cls._VERSION:
 			raise ValueError(f"Unsupported GroupContext version: {version:#06x}")
@@ -109,7 +108,13 @@ class GroupContext:
 			epoch=epoch,
 			tree_hash=tree_hash,
 			confirmed_transcript_hash=confirmed_transcript_hash,
-		)
+		), offset
+
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "GroupContext":
+		"""Decode a TLS-encoded GroupContext (RFC 9420 §8.1)."""
+		gc, _ = cls.from_bytes_at(data, 0)
+		return gc
 
 
 # Welcome / GroupSecrets / EncryptedGroupSecrets (RFC 9420 §12.1.2)
@@ -277,12 +282,14 @@ class Welcome:
 		label = b"MLS 1.0 Welcome"
 		info = varint_encode(len(label)) + label + varint_encode(len(self.encrypted_group_info)) + self.encrypted_group_info
 
+		from cryptography.exceptions import InvalidTag
+
 		for egs in self.encrypted_group_secrets:
 			try:
 				gs_bytes = HPKE.open(init_key, egs.kem_output, egs.ciphertext, info=info)
-				return GroupSecrets.from_bytes(gs_bytes)
-			except Exception:
+			except InvalidTag:
 				continue
+			return GroupSecrets.from_bytes(gs_bytes)
 		return None
 
 
@@ -340,9 +347,7 @@ class GroupInfo:
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupInfo":
-		offset = 0
-		group_context = GroupContext.from_bytes(data)
-		offset = len(group_context.to_bytes())
+		group_context, offset = GroupContext.from_bytes_at(data, 0)
 		ext_len = int.from_bytes(data[offset : offset + 4], "big")
 		offset += 4
 		extensions_bytes = data[offset : offset + ext_len]
@@ -578,6 +583,7 @@ def _transcript_hash(
 		interim = _compute_interim_transcript_hash(prior_confirmed, framed_bytes)
 		confirmed = _compute_confirmed_transcript_hash(interim, conf_tag)
 	"""
+	_warnings.warn("_transcript_hash is deprecated, use the two-pass RFC §8.2 helpers", DeprecationWarning, stacklevel=2)
 	# GroupContext encodes the new epoch state
 	ctx = _make_group_context(group_id, epoch_id, tree, prior_confirmed_transcript_hash)
 	ctx_bytes = ctx.to_bytes()
@@ -1158,7 +1164,7 @@ class MLSGroup:
 		_parent_hashes: list[bytes] = []
 		_node_pubs: list[bytes] = []
 
-		# PASS 1: Derive keys and update tree structure BEFORE computing group_ctx
+		# Derive keys and update tree structure BEFORE computing group_ctx
 		for node_i, (dp_idx, cop_idx, ps) in enumerate(zip(direct, cop, _path_secrets)):
 			# Derive new HPKE public key for this tree node
 			_node_secret = _derive_path_node_key(ps)
@@ -1183,7 +1189,7 @@ class MLSGroup:
 			# Update tree node (sets public key + parent_hash in place)
 			new_tree.set_parent(dp_idx, ParentNode(public_key=_new_pub, parent_hash=_ph))
 
-		# PASS 2: Now that new_tree has the new Leaf AND new ParentNodes, compute context
+		# Now that new_tree has the new Leaf AND new ParentNodes, compute context
 		# P0-A infrastructure: group_ctx_pre uses b"" for the transcript_hash field.
 		# RATIONALE: using self.confirmed_transcript_hash here would cause a seal/open mismatch
 		# when different peers (committer vs. joiner-via-join()) have different transcript_hash state.
@@ -1191,7 +1197,7 @@ class MLSGroup:
 		# in the two-pass transcript hash (P1-A) and future RFC §12.4 compliance work.
 		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, b"")
 
-		# PASS 3: Encrypt path secrets using the fully updated group_ctx_pre
+		# Encrypt path secrets using the fully updated group_ctx_pre
 		update_path_nodes: list[UpdatePathNode] = []
 		for (dp_idx, cop_idx, ps), _new_pub in zip(zip(direct, cop, _path_secrets), _node_pubs):
 			resolved = new_tree.resolution(cop_idx)
@@ -1544,10 +1550,11 @@ class MLSGroup:
 
 		# P0-02: Verify confirmation_tag — RFC 9420 §8.3: every member MUST verify
 		# HMAC(confirmation_key, confirmed_transcript_hash) before accepting the epoch.
-		if update._confirmation_tag is not None:
-			expected_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-			if not hmac.compare_digest(expected_tag, update._confirmation_tag):
-				raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
+		if update._confirmation_tag is None:
+			raise ValueError("Confirmation tag absent — refusing to advance epoch (RFC §8.3 mandatory)")
+		expected_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		if not hmac.compare_digest(expected_tag, update._confirmation_tag):
+			raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
 		# P0-A: return new MLSGroup with transcript_hash propagated for next commit
@@ -1625,12 +1632,15 @@ class MLSGroup:
 	def to_bytes(self) -> bytes:
 		"""Serializes the full state + my private keys (Danger Zone)."""
 		state_bytes = self.state.to_bytes()
+		cth = self.confirmed_transcript_hash
 		return (
 			self.my_index.to_bytes(4, "big")
 			+ self.my_sig_key.private_bytes()
 			+ self.my_kem_key.private_bytes()
 			+ len(state_bytes).to_bytes(4, "big")
 			+ state_bytes
+			+ len(cth).to_bytes(2, "big")
+			+ cth
 		)
 
 	@classmethod
@@ -1645,4 +1655,11 @@ class MLSGroup:
 		s_len = int.from_bytes(data[offset : offset + 4], "big")
 		offset += 4
 		state = EpochState.from_bytes(data[offset : offset + s_len])
-		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key)
+		offset += s_len
+		cth = b""
+		if offset < len(data):  # backward-compat guard
+			cth_len = int.from_bytes(data[offset : offset + 2], "big")
+			offset += 2
+			cth = data[offset : offset + cth_len]
+			offset += cth_len
+		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, confirmed_transcript_hash=cth)

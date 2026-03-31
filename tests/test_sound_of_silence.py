@@ -63,7 +63,7 @@ def test_markdown_links_compliance():
 			candidate_files.append(root_f)
 	for file_path in candidate_files:
 		content = file_path.read_text(encoding="utf-8")
-		links = re.findall("\\[.+?\\]\\((?!http|mailto|file|/|~)([^)#\\s]+)(?:#[^\\)]*)?\\)", content)
+		links = re.findall(r"\[.+?\]\((?!http|mailto|file|/|~)([^)#\s]+)(?:#[^\)]*)?\)", content)
 		for link in links:
 			target_path = (file_path.parent / link).resolve()
 			if not target_path.exists():

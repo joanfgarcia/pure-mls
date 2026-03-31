@@ -40,7 +40,7 @@ def test_key_schedule_epoch_0_suite_1():
 	assert ks.epoch_authenticator == expected_auth_secret, f"epoch_authenticator mismatch: {ks.epoch_authenticator.hex()}"
 	assert ks.confirmation_key == expected_confirmation_key, f"confirmation_key mismatch: {ks.confirmation_key.hex()}"
 	assert ks.sender_data_secret == expected_sender_data_secret, f"sender_data_secret mismatch: {ks.sender_data_secret.hex()}"
-	assert ks.next_init_secret == expected_init_secret, f"next_init_secret mismatch: {ks.next_init_secret.hex()}"
+	assert ks.init_secret == expected_init_secret, f"init_secret mismatch: {ks.init_secret.hex()}"
 
 	# Membership key check — RFC 9420 §8.1: derived from epoch_secret (confirmed by IETF test vectors)
 	m_key = KeySchedule.derive_membership_key(ks.epoch_secret)

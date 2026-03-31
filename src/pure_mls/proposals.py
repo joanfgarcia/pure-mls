@@ -176,7 +176,7 @@ class ProposalOrRef:
 		if self.value is not None:
 			return b"\x01" + _opaque_varint(self.value)
 		elif self.reference is not None:
-			return b"\x02" + self.reference  # 32B, fixed-length (SHA-256 output)
+			return b"\x02" + _opaque_varint(self.reference)  # P1-5: opaque<V> varint prefix
 		raise ValueError("ProposalOrRef must have value or reference")
 
 	@classmethod
@@ -187,6 +187,6 @@ class ProposalOrRef:
 			value, offset = read_opaque_varint(data, offset)
 			return cls(value=value), offset
 		elif kind == 0x02:
-			reference = data[offset : offset + 32]
-			return cls(reference=reference), offset + 32
+			reference, offset = read_opaque_varint(data, offset)
+			return cls(reference=reference), offset
 		raise ValueError(f"Unknown ProposalOrRef kind: {kind:#04x}")

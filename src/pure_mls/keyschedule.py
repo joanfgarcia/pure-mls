@@ -1,30 +1,4 @@
-"""RFC 9420 §8 Key Schedule — full compliant implementation.
-
-Derivation chain (confirmed against IETF key-schedule IETF test vectors
-and validated against OpenMLS Rust source):
-
-raw           = HKDF-Extract(salt=init_secret, IKM=commit_secret)
-joiner_secret = ExpandWithLabel(raw, "joiner", GroupContext, Nh)
-intermediate  = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
-welcome_secret = DeriveSecret(intermediate, "welcome")
-welcome_key   = EWL(welcome_secret, "key",   b"", Nk)   # ← AES-128 key
-welcome_nonce = EWL(welcome_secret, "nonce", b"", Nn)   # ← AES-128-GCM nonce
-epoch_secret  = ExpandWithLabel(intermediate, "epoch", GroupContext, Nh)
-
-From epoch_secret (all via DeriveSecret = EWL(..., b"", Nh)):
-sender_data_secret    = DeriveSecret(epoch_secret, "sender data")
-encryption_secret     = DeriveSecret(epoch_secret, "encryption")
-exporter_secret       = DeriveSecret(epoch_secret, "exporter")
-epoch_authenticator   = DeriveSecret(epoch_secret, "authentication")
-external_secret       = DeriveSecret(epoch_secret, "external")
-confirmation_key      = DeriveSecret(epoch_secret, "confirm")    ← label is 'confirm'
-membership_key        = DeriveSecret(epoch_secret, "membership")
-resumption_psk_secret = DeriveSecret(epoch_secret, "resumption")
-init_secret           = DeriveSecret(epoch_secret, "init")
-
-PSKSecret (RFC §8.4): HKDF-Extract chain over all PSK contributions.
-When no PSKs used: PSKSecret = b"\\x00" * NH (all-zero).
-"""
+"""RFC 9420 §8 Key Schedule — full compliant implementation."""
 
 from dataclasses import dataclass
 

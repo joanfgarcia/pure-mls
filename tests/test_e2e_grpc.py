@@ -110,7 +110,9 @@ async def test_mls_grpc_e2e():
 		bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)
 
 		# Verify consensus
-		assert alice_next.application_key == bob_group.application_key
+		msg = b"grpc-epoch-verified"
+		ct = alice_next.encrypt_application_message(msg)
+		assert bob_group.decrypt_application_message(ct) == msg
 		assert alice_next.epoch_id == 1
 		assert bob_group.epoch_id == 1
 

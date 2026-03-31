@@ -32,15 +32,7 @@ class EpochState:
 		transcript_hash: bytes = b"epoch",
 		group_context: bytes = b"",
 	) -> "EpochState":
-		"""Transitions the group to the next cryptographic era.
-
-		RFC 9420 §8: KeySchedule.derive MUST receive the TLS-serialized GroupContext
-		for the new epoch so that epoch secrets are bound to group_id, epoch_id,
-		tree_hash, and confirmed_transcript_hash. Passing group_context=b"" produces
-		keys that are identical across different groups — a full domain collapse (P0-01).
-
-		Callers must construct group_context via _make_group_context() before calling.
-		"""
+		"""Transitions the group to the next cryptographic era."""
 		next_schedule = KeySchedule.derive(
 			init_secret=self.key_schedule.init_secret,
 			commit_secret=commit_secret,

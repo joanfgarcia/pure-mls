@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1.0] - Unreleased
+
+### Fixed (B760 Re-Audit — Security Remediation, Round 3)
+- **[P0-1] `decrypt_group_secrets()` oracle attack resolved** (`group.py`):
+  Replaced bare `except Exception` with `except InvalidTag`. Malformed ciphertext now propagates natively instead of being masked, resolving the decryption oracle ambiguity.
+- **[P0-2] `MLSGroup` serialization transcript synchronization** (`group.py`):
+  `confirmed_transcript_hash` is now serialized by `to_bytes()` and `from_bytes()`. A backward-compatible parser branch (`offset < len(data)`) ensures old GroupInfo/MLSGroup states lacking this field still deserialize to `b""`, preventing destructive DB wipes. 
+- **[P0-3] Confirmation Tag strictly verified** (`group.py`):
+  `process_update()` now enforces presence of the `_confirmation_tag` on incoming Commits per RFC 9420 §8.3, aborting if missing.
+- **[P1-1] Legacy `_transcript_hash` deprecated** (`group.py`):
+  Added `DeprecationWarning` to the legacy single-pass transcript hash.
+- **[P1-2] `SecretTree` ratcheting uses generation context** (`secret_tree.py`):
+  Ratchet loop now explicitly uses the epoch generation `I2OSP(gen, 4)` as the HKDF context, fixing IETF vector interoperability.
+- **[P1-3] Removed false-positive xfail mask** (`test_vector_keyschedule.py`):
+  Corrected stale `next_init_secret` attribute reference to `init_secret`.
+- **[P1-4] `GroupContext.from_bytes_at()` stream parser** (`group.py`):
+  Added correct offset tracking to `GroupInfo` parsing via new stream parser.
+- **[P1-5] `ProposalRef` varint compliance** (`proposals.py`):
+  `ProposalOrRef` reference branch now uses `opaque<V>` varint length encoding.
+- **[P1-6] E2E Tests use Application Messages** (`test_e2e_grpc.py`):
+  Test validation now uses explicit `encrypt/decrypt_application_message` roundtrips.
+- **[P1-7] Engineering Policy (Sound of Silence) fixes**:
+  Cleaned noisy docstrings in `keyschedule.py` and `epoch.py`, updated regex in `test_sound_of_silence.py`, removed `# PASS` markers in `group.py`, and de-duplicated `expand_with_label` in `test_rfc9420_vectors.py`.
+
 ## [3.0.0.9] - Unreleased
 
 ### Fixed (B760 Re-Audit — Security Remediation, Round 2)
