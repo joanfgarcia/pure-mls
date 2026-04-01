@@ -248,6 +248,8 @@ def test_hpke_open_rejects_wrong_aad() -> None:
 
 def test_hpke_different_receivers_cannot_decrypt() -> None:
 	"""Ciphertext sealed for receiver A must not be decryptable by receiver B."""
+	from cryptography.exceptions import InvalidTag
+
 	from pure_mls.keys import KemKey
 
 	receiver_a = KemKey()
@@ -255,9 +257,5 @@ def test_hpke_different_receivers_cannot_decrypt() -> None:
 
 	enc, ciphertext = HPKE.seal(receiver_a.public_bytes(), b"secret message", aad=b"")
 
-	# Decryption with wrong private key must either raise or return garbage
-	try:
-		result = HPKE.open(receiver_b.private_bytes(), enc, ciphertext, aad=b"")
-		assert result != b"secret message", "Wrong key must not recover the plaintext"
-	except Exception:
-		pass  # Any exception (InvalidTag, ValueError, etc.) is also acceptable
+	with pytest.raises((InvalidTag, ValueError)):
+		HPKE.open(receiver_b, enc, ciphertext, aad=b"")

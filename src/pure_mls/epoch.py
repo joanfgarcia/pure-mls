@@ -29,7 +29,7 @@ class EpochState:
 		self,
 		commit_secret: bytes,
 		next_tree: RatchetTree,
-		transcript_hash: bytes = b"epoch",
+		transcript_hash: bytes = b"",
 		group_context: bytes = b"",
 	) -> "EpochState":
 		"""Transitions the group to the next cryptographic era."""

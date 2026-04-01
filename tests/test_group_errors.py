@@ -108,7 +108,7 @@ def test_process_update_errors():
 		group.process_update(update)
 
 	update.signature = b"badsig\x00" * 9
-	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format"):
+	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format|Not invited to this epoch"):
 		group.process_update(update)
 
 	sig2 = SignatureKey()

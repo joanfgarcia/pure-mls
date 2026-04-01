@@ -1,6 +1,5 @@
 import asyncio
 import os
-from typing import Optional
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -55,7 +54,7 @@ class AsyncEncryptedStore:
 
 		await asyncio.to_thread(_write)
 
-	async def load_group(self, group_id: bytes) -> Optional[MLSGroup]:
+	async def load_group(self, group_id: bytes) -> MLSGroup | None:
 		"""
 		Load and decrypt an MLSGroup state from disk.
 		Returns None if the file does not exist.

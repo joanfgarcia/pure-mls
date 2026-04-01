@@ -614,4 +614,5 @@ class RatchetTree:
 		right = index + (1 << (lvl - 1))
 		if self.nodes[index] is None:
 			return self.resolution(left) + self.resolution(right)
-		return [index]
+		unmerged = node.unmerged_leaves if isinstance(node, ParentNode) else []
+		return [index] + list(unmerged)

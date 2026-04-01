@@ -73,6 +73,7 @@ class SecretTree:
 	n_leaves: int
 	_generations: dict[int, int] = field(default_factory=dict)
 	_ratchet_cache: dict[tuple[int, int], bytes] = field(default_factory=dict)
+	_leaf_tip: dict[int, tuple[int, bytes]] = field(default_factory=dict)
 
 	def _leaf_node_secret(self, leaf_index: int) -> bytes:
 		"""RFC §9.3: root -> binary-tree path -> leaf node secret."""
@@ -86,10 +87,14 @@ class SecretTree:
 		key = (leaf_index, generation)
 		if key in self._ratchet_cache:
 			return self._ratchet_cache.pop(key)
-		# Build from leaf_node_secret
-		secret = self._leaf_node_secret(leaf_index)
-		for gen in range(generation + 1):
+		tip_gen, tip_secret = self._leaf_tip.get(leaf_index, (-1, b""))
+		if tip_gen == generation:
+			return tip_secret
+		start_gen = tip_gen + 1 if tip_gen >= 0 else 0
+		secret = tip_secret if tip_gen >= 0 else self._leaf_node_secret(leaf_index)
+		for gen in range(start_gen, generation + 1):
 			secret = expand_with_label(secret, "application", gen.to_bytes(4, "big"), _NH)
+		self._leaf_tip[leaf_index] = (generation, secret)
 		return secret
 
 	def get_key_and_nonce(self, leaf_index: int) -> tuple[bytes, bytes, int]:
@@ -127,6 +132,7 @@ class SecretTree:
 		self.encryption_secret = b"\x00" * len(self.encryption_secret)
 		self._ratchet_cache.clear()
 		self._generations.clear()
+		self._leaf_tip.clear()
 
 
 def derive_sender_data_key(sender_data_secret: bytes, ciphertext_sample: bytes) -> bytes:

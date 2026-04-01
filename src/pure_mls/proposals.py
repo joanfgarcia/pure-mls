@@ -64,7 +64,8 @@ class AddProposal:
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["AddProposal", int]:
 		proposal_type, offset = read_u16(data, offset)
-		assert proposal_type == ProposalType.ADD, f"Expected ADD, got {proposal_type:#06x}"
+		if proposal_type != ProposalType.ADD:
+			raise ValueError(f"Expected ADD, got {proposal_type:#06x}")
 		kp_bytes, offset = read_opaque_varint(data, offset)
 		return cls(key_package_bytes=kp_bytes), offset
 
@@ -81,7 +82,8 @@ class UpdateProposal:
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdateProposal", int]:
 		proposal_type, offset = read_u16(data, offset)
-		assert proposal_type == ProposalType.UPDATE, f"Expected UPDATE, got {proposal_type:#06x}"
+		if proposal_type != ProposalType.UPDATE:
+			raise ValueError(f"Expected UPDATE, got {proposal_type:#06x}")
 		ln_bytes, offset = read_opaque_varint(data, offset)
 		return cls(leaf_node_bytes=ln_bytes), offset
 
@@ -98,7 +100,8 @@ class RemoveProposal:
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["RemoveProposal", int]:
 		proposal_type, offset = read_u16(data, offset)
-		assert proposal_type == ProposalType.REMOVE, f"Expected REMOVE, got {proposal_type:#06x}"
+		if proposal_type != ProposalType.REMOVE:
+			raise ValueError(f"Expected REMOVE, got {proposal_type:#06x}")
 		removed, offset = read_u32(data, offset)
 		return cls(removed=removed), offset
 
@@ -126,7 +129,8 @@ class PSKProposal:
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["PSKProposal", int]:
 		proposal_type, offset = read_u16(data, offset)
-		assert proposal_type == ProposalType.PRE_SHARED_KEY, f"Expected PSK, got {proposal_type:#06x}"
+		if proposal_type != ProposalType.PRE_SHARED_KEY:
+			raise ValueError(f"Expected PSK, got {proposal_type:#06x}")
 		psk_id_wire, offset = read_opaque_varint(data, offset)
 		inner = 0
 		_psk_type = psk_id_wire[inner]

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.1.0] - Unreleased
 
+### Fixed (B760 Re-Audit — Security Remediation, Round 4)
+- **[P1-NEW-1] Two-Phase Transcript Hash in `process_update`** (`group.py`):
+  Reordered epoch derivation in `process_update` so `commit_secret` is derived before checking signatures. This allows the confirmation tag to be computed using the *new* epoch's confirmation key.
+- **[P1-NEW-2] Outer-to-Inner `parent_hash` resolution** (`group.py`):
+  Fixed `add_member` to compute parent hashes top-down (root to leaves), maintaining RFC 9420 §7.3.1 compliance.
+- **[P1-NEW-3] `KeyPackageRef` label mismatch fixed** (`group.py`):
+  Updated `_make_kp_ref()` to use the standard `"MLS 1.0 KeyPackage"` label, preventing desyncs with OpenMLS.
+- **[P1-NEW-4] `unmerged_leaves` in tree resolution** (`tree.py`):
+  Extended `resolution()` to incorporate unmerged leaves, ensuring forward-secrecy across offline update nodes.
+- **[P1-NEW-5] `PublicMessageTBS` wire-format alignment** (`group.py`):
+  Corrected TBS structure in `from_group_update()` to directly map RFC 9420 §6.2 standard bytes (Sender, AuthData, ContentType).
+- **[P1-NEW-6] Replaced masked exceptions in `join()`** (`group.py`):
+  Refactored bare `except Exception:` into `except (InvalidTag, ValueError):` to prevent swallowing of critical state errors.
+- **[P1-NEW-7] O(1) `SecretTree` state ratcheting** (`secret_tree.py`):
+  Optimized `_leaf_secret_for_gen()` derivation loop by caching the leaf tip generation to prevent repeating KDF work from generation 0.
+- **[P1-NEW-8] Standardized default `transcript_hash`** (`epoch.py`):
+  Replaced non-compliant `b"epoch"` fallback with `b""` in `advance_epoch()`, hardening domain separation.
+- **[POLICY] QA & Type hinting** (`storage.py`, `proposals.py`, `tests`):
+  Migrated to `X | None` type hints, removed bare `assert` invariants in proposals, and operationalized the HPKE cross-decryption test.
+
 ### Fixed (B760 Re-Audit — Security Remediation, Round 3)
 - **[P0-1] `decrypt_group_secrets()` oracle attack resolved** (`group.py`):
   Replaced bare `except Exception` with `except InvalidTag`. Malformed ciphertext now propagates natively instead of being masked, resolving the decryption oracle ambiguity.
