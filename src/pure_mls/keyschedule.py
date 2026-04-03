@@ -1,5 +1,6 @@
 """RFC 9420 §8 Key Schedule — full compliant implementation."""
 
+import struct
 from dataclasses import dataclass
 
 from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract
@@ -8,28 +9,30 @@ _NH = 32  # SHA-256 hash length
 
 
 def _psk_secret(psk_list: list[tuple[bytes, bytes]] | None = None) -> bytes:
-	"""RFC 9420 §8.4: PSKSecret derivation.
+	"""RFC 9420 §8.4: PSK chain derivation.
 
 	psk_list: list of (psk_id, psk_value) tuples. When empty: PSKSecret = 0^Nh.
 
-	Multi-PSK chain (RFC §8.4 Figure 26):
-	pskExtracted_i = HKDF-Extract(salt="", IKM=psk_value_i)
-	pskInput(i+1) = XOR(pskInput(i), ExpandWithLabel(pskExtracted_i, "derived psk", psk_id_i, Nh))
-	PSKSecret = pskInput(n)
+	Chain structure (RFC §8.4):
+		psk_extracted_[i] = KDF.Extract(0, psk_[i])
+		psk_input_[i]     = ExpandWithLabel(psk_extracted_[i], "derived psk", PSKLabel_[i], Nh)
+		psk_secret_[0]    = 0^Nh
+		psk_secret_[i]    = KDF.Extract(psk_input_[i-1], psk_secret_[i-1])
+
+	PSKLabel = psk_id || uint16(index) || uint16(count)
 	"""
 	if not psk_list:
 		return b"\x00" * _NH
 
-	psk_input = b"\x00" * _NH
-	for psk_id, psk_value in psk_list:
-		# pskExtracted_i = HKDF-Extract(salt=b"", IKM=psk_value)
-		psk_extracted = hkdf_extract(b"", psk_value)
-		# contribution = ExpandWithLabel(pskExtracted_i, "derived psk", psk_id, Nh)
-		contribution = expand_with_label(psk_extracted, "derived psk", psk_id, _NH)
-		# pskInput(i+1) = pskInput(i) XOR contribution
-		psk_input = bytes(a ^ b for a, b in zip(psk_input, contribution))
+	n = len(psk_list)
+	psk_secret_acc = b"\x00" * _NH
+	for i, (psk_id, psk_value) in enumerate(psk_list):
+		psk_extracted = hkdf_extract(b"\x00" * _NH, psk_value)
+		psk_label = psk_id + struct.pack("!HH", i, n)
+		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, _NH)
+		psk_secret_acc = hkdf_extract(psk_input, psk_secret_acc)
 
-	return psk_input
+	return psk_secret_acc
 
 
 @dataclass
