@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2.0] - Unreleased
+
+### Fixed (B760 Re-Audit — Security Remediation, Round 5)
+- **[P0-KPR] KeyPackageRef label + RefHashInput encoding** (`group.py`):
+  Corrected `_make_kp_ref()` to use RFC §5.2 label `"MLS 1.0 KeyPackage Reference"` and VarInt-prefixed `RefHashInput` struct encoding.
+- **[P0-UP] UpdatePath HPKE info binding** (`group.py`):
+  Provisional `GroupContext` now uses the old epoch's `confirmed_transcript_hash` instead of `b""`, per RFC §12.4.1.
+- **[P0-PSK] PSK derivation rewritten** (`keyschedule.py`):
+  Replaced XOR chain with RFC §8.4 `KDF.Extract` chain. PSKLabel now includes `psk_id + uint16(index) + uint16(count)`. Salt changed from `b""` to `0^Nh`.
+- **[P1-GC] GroupContext VarInt migration** (`group.py`):
+  Migrated opaque fields from `uint8` to `VarInt` length prefixes per RFC §8.1. Parser uses `read_opaque_varint()`.
+- **[P1-DA] Double advance_epoch eliminated** (`group.py`, `keyschedule.py`, `epoch.py`):
+  Added `KeySchedule.derive_confirmation_key()` for lightweight confirmation key derivation. Removed wasteful provisional `advance_epoch()` calls. Threaded `psk_list` through `EpochState.advance_epoch()`.
+- **[P1-CT] SignatureKey.verify() hardened** (`keys.py`):
+  Moved `from_public_bytes()` inside try/except to catch `ValueError` from malformed Ed25519 keys (DoS vector).
+- **[POLICY-1] Dead params removed** (`keyschedule.py`, `group.py`):
+  Removed unused `context` parameter from `derive_welcome_key()` and `derive_welcome_nonce()`.
+- **[POLICY-2] Deprecated code deleted** (`group.py`, tests):
+  Deleted `_transcript_hash()`, `_CIPHER_SUITE`, `_EXTENSIONS_EMPTY`. Migrated all test callers to RFC §8.2 two-pass helpers.
+- **[POLICY-3] Inline imports hoisted** (`group.py`, `tree.py`, `epoch.py`):
+  All inline imports moved to module level per Sound of Silence conventions.
+- **[POLICY-4] Mutable placeholder replaced** (`group.py`):
+  `GroupInfo.build_and_sign()` uses `b""` instead of `b"\\x00"` for the immediately-overwritten signature placeholder.
+- **[POLICY-5] Ruff hardened + test_no_inline_imports** (`pyproject.toml`, `test_lint.py`):
+  Added `ARG` and `PLC` lint rules with per-file-ignores for test patterns. New `test_no_inline_imports()` statically enforces module-level imports in `src/`.
+
 ## [3.0.1.0] - Unreleased
 
 ### Fixed (B760 Re-Audit — Security Remediation, Round 4)
