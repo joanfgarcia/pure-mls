@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import expand_with_label, hkdf_extract
+from pure_mls.hkdf import expand_with_label, hkdf_extract, varint_encode
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
@@ -406,14 +406,18 @@ _CIPHER_SUITE: bytes = b"\x00\x01"
 _EXTENSIONS_EMPTY: bytes = b"\x00\x00\x00\x00"
 
 
-_KP_REF_LABEL = b"MLS 1.0 KeyPackage"
+_KP_REF_LABEL: bytes = b"MLS 1.0 KeyPackage Reference"
 
 
 def _make_kp_ref(kp: KeyPackage) -> bytes:
-	"""RFC 9420 §6.4: RefHash("MLS 1.0 KeyPackage", kp_bytes) = SHA-256(label || kp_bytes)."""
-	import hashlib
+	"""RFC 9420 §5.2: MakeKeyPackageRef = RefHash('MLS 1.0 KeyPackage Reference', kp).
 
-	return hashlib.sha256(_KP_REF_LABEL + kp.to_bytes()).digest()
+	RefHash(label, value) = Hash(RefHashInput) where:
+		struct { opaque label<V>; opaque value<V>; } RefHashInput;
+	"""
+	kp_bytes = kp.to_bytes()
+	ref_input = varint_encode(len(_KP_REF_LABEL)) + _KP_REF_LABEL + varint_encode(len(kp_bytes)) + kp_bytes
+	return hashlib.sha256(ref_input).digest()
 
 
 def _make_group_context(
