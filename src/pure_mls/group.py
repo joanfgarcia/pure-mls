@@ -370,7 +370,7 @@ class GroupInfo:
 			extensions_bytes=b"",
 			confirmation_tag=confirmation_tag,
 			signer=signer,
-			signature=b"\x00",  # placeholder
+			signature=b"",  # overwritten below after TBS computation
 		)
 		gi.signature = sig_key.sign(gi._tbs_bytes())
 		return gi
