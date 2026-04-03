@@ -31,6 +31,7 @@ from pure_mls.tls import (
 	tls_u16,
 	tls_u32,
 	tls_u64,
+	tls_varint,
 )
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
 
@@ -62,23 +63,23 @@ class GroupContext:
 		Wire format:
 			uint16  version (0x0001)
 			uint16  cipher_suite (0x0001)
-			uint8   len(group_id) + group_id bytes   [opaque<0..255>]
+			varint  len(group_id) + group_id bytes   [opaque<V>]
 			uint64  epoch
-			uint8   len(tree_hash) + tree_hash bytes [opaque<0..255>]
-			uint8   len(cth) + cth bytes             [opaque<0..255>]
-			uint8   0 (empty extensions vector)
+			varint  len(tree_hash) + tree_hash bytes [opaque<V>]
+			varint  len(cth) + cth bytes             [opaque<V>]
+			varint  0 (empty extensions vector)
 		"""
 		return (
 			tls_u16(self._VERSION)
 			+ tls_u16(self._CIPHER_SUITE)
-			+ tls_u8(len(self.group_id))
+			+ tls_varint(len(self.group_id))
 			+ self.group_id
 			+ tls_u64(self.epoch)
-			+ tls_u8(len(self.tree_hash))
+			+ tls_varint(len(self.tree_hash))
 			+ self.tree_hash
-			+ tls_u8(len(self.confirmed_transcript_hash))
+			+ tls_varint(len(self.confirmed_transcript_hash))
 			+ self.confirmed_transcript_hash
-			+ tls_u8(0)  # extensions<V> empty
+			+ tls_varint(0)  # extensions<V> empty
 		)
 
 	@classmethod
@@ -90,19 +91,14 @@ class GroupContext:
 		cipher_suite, offset = read_u16(data, offset)
 		if cipher_suite != cls._CIPHER_SUITE:
 			raise ValueError(f"Unsupported cipher suite: {cipher_suite:#06x}")
-		# opaque<0..255> fields use uint8 length prefix
-		gid_len, offset = read_u8(data, offset)
-		group_id, offset = data[offset : offset + gid_len], offset + gid_len
+		# opaque<V> fields use VarInt length prefix (RFC 9420 §8.1)
+		group_id, offset = read_opaque_varint(data, offset)
 		epoch, offset = read_u64(data, offset)
-		th_len, offset = read_u8(data, offset)
-		tree_hash, offset = data[offset : offset + th_len], offset + th_len
-		cth_len, offset = read_u8(data, offset)
-		confirmed_transcript_hash = data[offset : offset + cth_len]
-		offset += cth_len
-		# skip extensions (uint8 length prefix)
+		tree_hash, offset = read_opaque_varint(data, offset)
+		confirmed_transcript_hash, offset = read_opaque_varint(data, offset)
+		# skip extensions (VarInt length prefix)
 		if offset < len(data):
-			ext_len, offset = read_u8(data, offset)
-			offset += ext_len
+			ext_data, offset = read_opaque_varint(data, offset)
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
