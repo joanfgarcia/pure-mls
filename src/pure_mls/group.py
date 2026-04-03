@@ -1235,12 +1235,16 @@ class MLSGroup:
 		#   step 2: conf_tag = HMAC(confirmation_key, interim)
 		#   step 3: confirmed = SHA-256(interim || conf_tag)
 		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
-		# Phase 1: provisional advance to get next epoch's confirmation_key
+		# Phase 1: derive only confirmation_key for the new epoch (lightweight, no full schedule)
 		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, interim_hash)
-		_prov_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=interim_hash, group_context=_provisional_ctx.to_bytes())
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+		)
 
 		# Phase 2: compute confirmation_tag with NEW epoch key per RFC §8.3
-		_conf_tag = hmac.new(_prov_state.key_schedule.confirmation_key, interim_hash, "sha256").digest()
+		_conf_tag = hmac.new(_conf_key, interim_hash, "sha256").digest()
 		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag)
 
 		# RFC 9420 §6.2: GroupContext for new epoch with RFC-compliant confirmed_transcript_hash
@@ -1500,12 +1504,16 @@ class MLSGroup:
 		framed_content_bytes_v = _framed_v.to_bytes()
 
 		interim_hash_v = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes_v)
-		# Phase 1: provisional advance to get new epoch's confirmation_key
+		# Phase 1: derive only confirmation_key (no full provisional schedule)
 		_provisional_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, interim_hash_v)
-		_prov_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=interim_hash_v, group_context=_provisional_ctx.to_bytes())
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+		)
 
 		# Phase 2: Compute confirmation_tag with NEW epoch key
-		_conf_tag = hmac.new(_prov_state.key_schedule.confirmation_key, interim_hash_v, "sha256").digest()
+		_conf_tag = hmac.new(_conf_key, interim_hash_v, "sha256").digest()
 		transcript_hash = _compute_confirmed_transcript_hash(interim_hash_v, _conf_tag)
 		group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
 

@@ -96,6 +96,27 @@ class KeySchedule:
 		return cls._from_epoch_secret(epoch_secret, joiner_secret, intermediate)
 
 	@classmethod
+	def derive_confirmation_key(
+		cls,
+		init_secret: bytes,
+		commit_secret: bytes,
+		group_context: bytes = b"",
+		psk_list: list[tuple[bytes, bytes]] | None = None,
+	) -> bytes:
+		"""Derive only the confirmation_key without building the full schedule.
+
+		Used by the two-pass transcript hash (RFC §8.2) to compute the
+		confirmation_tag before the final epoch advance, avoiding a
+		wasteful provisional KeySchedule.derive() call.
+		"""
+		raw = hkdf_extract(init_secret, commit_secret)
+		joiner_secret = expand_with_label(raw, "joiner", group_context, _NH)
+		psk_secret = _psk_secret(psk_list)
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
+		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
+		return derive_secret(epoch_secret, "confirm")
+
+	@classmethod
 	def _from_epoch_secret(cls, epoch_secret: bytes, joiner_secret: bytes, intermediate: bytes | None = None) -> "KeySchedule":
 		"""Construct the full schedule from a known epoch_secret.
 

@@ -31,12 +31,14 @@ class EpochState:
 		next_tree: RatchetTree,
 		transcript_hash: bytes = b"",
 		group_context: bytes = b"",
+		psk_list: list[tuple[bytes, bytes]] | None = None,
 	) -> "EpochState":
 		"""Transitions the group to the next cryptographic era."""
 		next_schedule = KeySchedule.derive(
 			init_secret=self.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=group_context,
+			psk_list=psk_list,
 		)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
