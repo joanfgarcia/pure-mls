@@ -8,8 +8,10 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 §7.4   RatchetTree optional<Node> encoding
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
+
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.tls import (
 	read_opaque,
@@ -186,7 +188,6 @@ class LeafNode:
 
 	def sign(self, sign_fn: Callable[[bytes], bytes], group_id: bytes = b"", leaf_index: int = 0) -> "LeafNode":
 		"""Return a signed copy of this LeafNode."""
-		from dataclasses import replace
 
 		tbs = self._tbs_bytes(group_id, leaf_index)
 		return replace(self, signature=sign_fn(tbs))
@@ -199,7 +200,6 @@ class LeafNode:
 		- 0x02 update / 0x03 commit: TBS MUST include group_id and leaf_index.
 		Callers must supply group_id and leaf_index when verifying non-KeyPackage leaves.
 		"""
-		from cryptography.hazmat.primitives.asymmetric import ed25519
 
 		if not self.signature:
 			raise ValueError("LeafNode has no signature")

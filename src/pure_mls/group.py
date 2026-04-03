@@ -129,7 +129,6 @@ class GroupSecrets:
 	path_secret: bytes | None = None  # optional — RFC §12.1.2 optional<PathSecret>
 
 	def to_bytes(self) -> bytes:
-		from pure_mls.tls import tls_varint
 
 		actual_path = self.path_secret if self.path_secret else b""
 		present = bool(actual_path)
@@ -168,7 +167,6 @@ class EncryptedGroupSecrets:
 
 	def to_bytes(self) -> bytes:
 		"""Encode to varint-prefixed TLS wire format (RFC 9420 §12.1.2 + §5.1)."""
-		from pure_mls.tls import tls_varint
 
 		def vop(b: bytes) -> bytes:
 			return tls_varint(len(b)) + b
@@ -205,7 +203,6 @@ class Welcome:
 
 	def to_bytes(self) -> bytes:
 		"""Encode to MLS varint wire format (RFC 9420 §12.1.2)."""
-		from pure_mls.tls import tls_varint
 
 		secrets_bytes = b"".join(e.to_bytes() for e in self.encrypted_group_secrets)
 		return (
@@ -272,13 +269,8 @@ class Welcome:
 
 		Returns GroupSecrets on success, None if no matching entry found.
 		"""
-		from pure_mls.hkdf import varint_encode
-		from pure_mls.hpke import HPKE
-
 		label = b"MLS 1.0 Welcome"
 		info = varint_encode(len(label)) + label + varint_encode(len(self.encrypted_group_info)) + self.encrypted_group_info
-
-		from cryptography.exceptions import InvalidTag
 
 		for egs in self.encrypted_group_secrets:
 			try:
@@ -388,7 +380,6 @@ class GroupInfo:
 
 		Returns True if valid. Raises cryptography.exceptions.InvalidSignature on failure.
 		"""
-		from cryptography.hazmat.primitives.asymmetric import ed25519
 
 		pub = ed25519.Ed25519PublicKey.from_public_bytes(committer_sig_key_bytes)
 		pub.verify(self.signature, self._tbs_bytes())
@@ -516,7 +507,6 @@ def _egs_info(encrypted_group_info: bytes) -> bytes:
 	Used by both add_member() (seal) and join() (open) to maintain symmetry.
 	Also used by Welcome.decrypt_group_secrets() which is the public RFC API.
 	"""
-	from pure_mls.hkdf import varint_encode
 
 	label = b"MLS 1.0 Welcome"
 	return varint_encode(len(label)) + label + varint_encode(len(encrypted_group_info)) + encrypted_group_info
@@ -1515,7 +1505,6 @@ class MLSGroup:
 			sender_data_ct (32B AES-GCM) | gen(4B) | content_ct (nonce_12 + AESGCM_ct)
 			where sender_data plaintext = leaf_index(4B)
 		"""
-		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 		st = self._get_secret_tree()
 		content_key, content_nonce, gen = st.get_key_and_nonce(self.my_index)
@@ -1536,7 +1525,6 @@ class MLSGroup:
 
 	def decrypt_application_message(self, payload: bytes) -> bytes:
 		"""RFC 9420 §9: Decrypt an application message using SecretTree."""
-		from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 		if len(payload) < 2:
 			raise ValueError("Application message payload too short")

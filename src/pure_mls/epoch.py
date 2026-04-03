@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 
 from pure_mls.keyschedule import KeySchedule
@@ -19,7 +20,6 @@ class EpochState:
 
 	def __post_init__(self) -> None:
 		# Prevent mutation of the RatchetTree through the immutable EpochState
-		import copy
 
 		cloned = copy.deepcopy(self.tree)
 		cloned.freeze()  # STATE-03: enforce immutability after deepcopy
