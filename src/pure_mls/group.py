@@ -397,11 +397,6 @@ class GroupInfo:
 
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
 
-# Deprecated constants (kept for test compatibility, removed in v1.0 final cleanup)
-_CIPHER_SUITE: bytes = b"\x00\x01"
-_EXTENSIONS_EMPTY: bytes = b"\x00\x00\x00\x00"
-
-
 _KP_REF_LABEL: bytes = b"MLS 1.0 KeyPackage Reference"
 
 
@@ -556,48 +551,6 @@ def _compute_confirmed_transcript_hash(
 	knowing the confirmation_key.
 	"""
 	return hashlib.sha256(interim_transcript_hash + confirmation_tag).digest()
-
-
-def _transcript_hash(
-	group_id: bytes,
-	epoch_id: int,
-	tree: RatchetTree,
-	confirmation_key: bytes,
-	ciphertexts_bytes: bytes,
-	sender_index: int,
-	prior_confirmed_transcript_hash: bytes = b"",
-) -> bytes:
-	"""Legacy single-pass transcript hash (pure-mls internal convention).
-
-	Kept for backward compatibility with test_group_errors.py and test_state_findings.py
-	which import and call this function directly to construct forged commits.
-
-	P1-A STATUS: The two-pass RFC §8.2 helpers are implemented as
-	`_compute_interim_transcript_hash()` and `_compute_confirmed_transcript_hash()`.
-	`add_member()` and `process_update()` use the two-pass chain when
-	`framed_content_bytes` is available.  This legacy wrapper is used only
-	where the FramedContent bytes are not readily available (legacy path).
-
-	RFC §8.2 compliant call:
-		interim = _compute_interim_transcript_hash(prior_confirmed, framed_bytes)
-		confirmed = _compute_confirmed_transcript_hash(interim, conf_tag)
-	"""
-	_warnings.warn("_transcript_hash is deprecated, use the two-pass RFC §8.2 helpers", DeprecationWarning, stacklevel=2)
-	# GroupContext encodes the new epoch state
-	ctx = _make_group_context(group_id, epoch_id, tree, prior_confirmed_transcript_hash)
-	ctx_bytes = ctx.to_bytes()
-
-	# Remaining GroupInfo fields not covered by GroupContext:
-	# confirmation_tag (HMAC over transcript), ciphertexts, extensions, Sender
-	return hashlib.sha256(
-		ctx_bytes
-		+ confirmation_key
-		+ ciphertexts_bytes
-		+ tls_u32(0)  # extensions: empty  (uint32-prefixed vec)
-		# RFC 9420 §8.2 Sender struct: SenderType(uint8=0x01 member) + leaf_index(uint32)
-		+ tls_u8(0x01)
-		+ tls_u32(sender_index)
-	).digest()
 
 
 @dataclass

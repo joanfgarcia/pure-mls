@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from pure_mls.group import (
@@ -8,7 +10,6 @@ from pure_mls.group import (
 	_make_group_context,
 	_make_kp_ref,
 )
-from pure_mls.group import _transcript_hash as _th
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
 
@@ -70,16 +71,8 @@ def test_process_update_errors():
 	epoch_id = 1
 	tree = group.state.tree
 	encrypted_commit_secrets: dict[bytes, bytes] = {}
-	ciphertexts_bytes = b"".join(k + v for k, v in sorted(encrypted_commit_secrets.items()))
-	transcript_hash = _th(
-		group.group_id,
-		epoch_id,
-		tree,
-		group.state.key_schedule.confirmation_key,
-		ciphertexts_bytes,
-		sender_index=0,
-		prior_confirmed_transcript_hash=group.state.key_schedule.joiner_secret,
-	)
+	# Forge a dummy transcript hash for the fake commit body
+	transcript_hash = hashlib.sha256(b"forged-commit-" + group.group_id).digest()
 	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
 	from pure_mls.tls import tls_opaque, tls_opaque32, tls_u32, tls_u64
 
@@ -134,16 +127,8 @@ def test_process_update_errors():
 	assert isinstance(my_leaf, LeafNode)
 	my_kp_ref = _make_kp_ref(my_leaf.key_package)
 	bad_secrets: dict[bytes, bytes] = {my_kp_ref: b"bad_ciphertext" * 5}
-	bad_ciphertexts_bytes = b"".join(k + v for k, v in sorted(bad_secrets.items()))
-	bad_transcript_hash = _th(
-		group.group_id,
-		1,
-		real_update.tree,
-		group.state.key_schedule.confirmation_key,
-		bad_ciphertexts_bytes,
-		sender_index=0,
-		prior_confirmed_transcript_hash=group.state.key_schedule.joiner_secret,
-	)
+	# Forge a dummy transcript hash for the bad commit
+	bad_transcript_hash = hashlib.sha256(b"forged-bad-commit").digest()
 	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
 	_n2 = len(bad_secrets)
 	_body2 = (

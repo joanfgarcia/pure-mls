@@ -12,10 +12,9 @@ stable when a member rotates their KEM key between epochs.
 
 import pytest
 
-from pure_mls.group import MLSGroup, _make_kp_ref
-from pure_mls.group import _transcript_hash as _th
+from pure_mls.group import FramedContent, MLSGroup, _compute_interim_transcript_hash, _make_kp_ref
 from pure_mls.keys import KemKey, SignatureKey
-from pure_mls.tree import KeyPackage, LeafNode, RatchetTree
+from pure_mls.tree import KeyPackage, LeafNode
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,19 +50,43 @@ def _add_member_scenario():
 
 def test_transcript_hash_includes_group_id():
 	"""STATE-02: two groups with different group_ids produce different transcript hashes."""
-	tree = RatchetTree(1)
-	ck = b"\x00" * 32
-	h1 = _th(b"group-alpha", 1, tree, ck, b"", sender_index=0)
-	h2 = _th(b"group-beta", 1, tree, ck, b"", sender_index=0)
+	framed_alpha = FramedContent(
+		group_id=b"group-alpha",
+		epoch=1,
+		sender_leaf_index=0,
+		authenticated_data=b"",
+		content=b"dummy-commit",
+	)
+	framed_beta = FramedContent(
+		group_id=b"group-beta",
+		epoch=1,
+		sender_leaf_index=0,
+		authenticated_data=b"",
+		content=b"dummy-commit",
+	)
+	h1 = _compute_interim_transcript_hash(b"", framed_alpha.to_bytes())
+	h2 = _compute_interim_transcript_hash(b"", framed_beta.to_bytes())
 	assert h1 != h2, "Different group_ids must produce different transcript hashes (STATE-02)"
 
 
 def test_transcript_hash_includes_sender():
 	"""STATE-02: different senders produce different transcript hashes."""
-	tree = RatchetTree(1)
-	ck = b"\x00" * 32
-	h1 = _th(b"g", 1, tree, ck, b"", sender_index=0)
-	h2 = _th(b"g", 1, tree, ck, b"", sender_index=1)
+	framed_s0 = FramedContent(
+		group_id=b"g",
+		epoch=1,
+		sender_leaf_index=0,
+		authenticated_data=b"",
+		content=b"dummy-commit",
+	)
+	framed_s1 = FramedContent(
+		group_id=b"g",
+		epoch=1,
+		sender_leaf_index=1,
+		authenticated_data=b"",
+		content=b"dummy-commit",
+	)
+	h1 = _compute_interim_transcript_hash(b"", framed_s0.to_bytes())
+	h2 = _compute_interim_transcript_hash(b"", framed_s1.to_bytes())
 	assert h1 != h2, "Different sender indices must produce different transcript hashes (STATE-02)"
 
 
