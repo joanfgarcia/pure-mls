@@ -1,6 +1,8 @@
+import os
+
 import pytest
 
-from pure_mls.keyschedule import KeySchedule, _psk_secret
+from pure_mls.keyschedule import PSK_TYPE_EXTERNAL, KeySchedule, PreSharedKeyID, _psk_secret
 
 
 @pytest.mark.xfail(
@@ -52,13 +54,20 @@ if __name__ == "__main__":
 	print("ALL TESTS PASSED")
 
 
+def _make_external_psk_id(psk_id: bytes, psk_nonce: bytes | None = None) -> PreSharedKeyID:
+	"""Helper to create an external PreSharedKeyID with optional random nonce."""
+	if psk_nonce is None:
+		psk_nonce = os.urandom(32)
+	return PreSharedKeyID(psk_type=PSK_TYPE_EXTERNAL, psk_id=psk_id, psk_nonce=psk_nonce)
+
+
 def test_psk_injection_multi_key():
-	"""RFC 9420 §8.4: functional verification of multi-PSK XOR accumulation.
+	"""RFC 9420 §8.4: functional verification of multi-PSK Extract chain.
 
 	Validates:
 	- Empty psk_list → PSKSecret = 0^32 (no-PSK identity)
 	- Single PSK → deterministic non-zero result
-	- Two PSKs → order-dependent XOR chain, different from single
+	- Two PSKs → order-dependent chain, different from single
 	- Integration: KeySchedule.derive() accepts psk_list without error
 	"""
 	# Identity: no PSKs → 0^32
@@ -66,17 +75,19 @@ def test_psk_injection_multi_key():
 	assert _psk_secret([]) == b"\x00" * 32
 
 	# Single PSK: deterministic and non-zero
-	psk1_id = b"psk-alice"
+	nonce1 = b"\x01" * 32
+	psk1_key_id = _make_external_psk_id(b"psk-alice", nonce1)
 	psk1_val = b"\xab" * 32
-	result1 = _psk_secret([(psk1_id, psk1_val)])
+	result1 = _psk_secret([(psk1_key_id, psk1_val)])
 	assert len(result1) == 32
 	assert result1 != b"\x00" * 32
-	assert result1 == _psk_secret([(psk1_id, psk1_val)])  # deterministic
+	assert result1 == _psk_secret([(psk1_key_id, psk1_val)])  # deterministic
 
 	# Second PSK: result differs from single and from no-PSK
-	psk2_id = b"psk-bob"
+	nonce2 = b"\x02" * 32
+	psk2_key_id = _make_external_psk_id(b"psk-bob", nonce2)
 	psk2_val = b"\xcd" * 32
-	result2 = _psk_secret([(psk1_id, psk1_val), (psk2_id, psk2_val)])
+	result2 = _psk_secret([(psk1_key_id, psk1_val), (psk2_key_id, psk2_val)])
 	assert len(result2) == 32
 	assert result2 != result1
 	assert result2 != b"\x00" * 32
@@ -85,7 +96,7 @@ def test_psk_injection_multi_key():
 	init_secret = b"\x00" * 32
 	commit_secret = b"\x11" * 32
 	ks_no_psk = KeySchedule.derive(init_secret, commit_secret)
-	ks_with_psk = KeySchedule.derive(init_secret, commit_secret, psk_list=[(psk1_id, psk1_val)])
+	ks_with_psk = KeySchedule.derive(init_secret, commit_secret, psk_list=[(psk1_key_id, psk1_val)])
 	# PSK changes the epoch secrets
 	assert ks_with_psk.epoch_secret != ks_no_psk.epoch_secret
 	assert ks_with_psk.encryption_secret != ks_no_psk.encryption_secret

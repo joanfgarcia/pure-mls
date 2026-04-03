@@ -1,7 +1,7 @@
 import copy
 from dataclasses import dataclass
 
-from pure_mls.keyschedule import KeySchedule
+from pure_mls.keyschedule import KeySchedule, PreSharedKeyID
 from pure_mls.tree import RatchetTree
 
 
@@ -30,7 +30,7 @@ class EpochState:
 		commit_secret: bytes,
 		next_tree: RatchetTree,
 		group_context: bytes = b"",
-		psk_list: list[tuple[bytes, bytes]] | None = None,
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
 	) -> "EpochState":
 		"""Transitions the group to the next cryptographic era."""
 		next_schedule = KeySchedule.derive(

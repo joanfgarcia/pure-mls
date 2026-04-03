@@ -3,15 +3,60 @@
 import struct
 from dataclasses import dataclass
 
-from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract
+from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract, varint_encode
 
 _NH = 32  # SHA-256 hash length
 
+# PSK type constants (RFC 9420 §8.4)
+PSK_TYPE_EXTERNAL: int = 1
+PSK_TYPE_RESUMPTION: int = 2
 
-def _psk_secret(psk_list: list[tuple[bytes, bytes]] | None = None) -> bytes:
+
+@dataclass(frozen=True)
+class PreSharedKeyID:
+	"""RFC 9420 §8.4: Pre-Shared Key Identifier.
+
+	TLS wire format:
+		uint8     psktype          (1=external, 2=resumption)
+		case external:
+			opaque  psk_id<V>
+		case resumption:
+			uint8   usage           (1=application, 2=reinit, 3=branch)
+			opaque  psk_group_id<V>
+			uint64  psk_epoch
+		opaque  psk_nonce<V>       (random, KDF.Nh bytes)
+	"""
+
+	psk_type: int
+	psk_id: bytes
+	psk_nonce: bytes
+	# Resumption-only fields (unused for external PSKs)
+	usage: int = 0
+	psk_group_id: bytes = b""
+	psk_epoch: int = 0
+
+	def to_bytes(self) -> bytes:
+		"""TLS-serialize this PreSharedKeyID for use in PSKLabel."""
+		if self.psk_type == PSK_TYPE_EXTERNAL:
+			return (
+				struct.pack("B", self.psk_type) + varint_encode(len(self.psk_id)) + self.psk_id + varint_encode(len(self.psk_nonce)) + self.psk_nonce
+			)
+		# resumption
+		return (
+			struct.pack("B", self.psk_type)
+			+ struct.pack("B", self.usage)
+			+ varint_encode(len(self.psk_group_id))
+			+ self.psk_group_id
+			+ struct.pack("!Q", self.psk_epoch)
+			+ varint_encode(len(self.psk_nonce))
+			+ self.psk_nonce
+		)
+
+
+def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> bytes:
 	"""RFC 9420 §8.4: PSK chain derivation.
 
-	psk_list: list of (psk_id, psk_value) tuples. When empty: PSKSecret = 0^Nh.
+	psk_list: list of (PreSharedKeyID, psk_value) tuples. When empty: PSKSecret = 0^Nh.
 
 	Chain structure (RFC §8.4):
 		psk_extracted_[i] = KDF.Extract(0, psk_[i])
@@ -19,16 +64,16 @@ def _psk_secret(psk_list: list[tuple[bytes, bytes]] | None = None) -> bytes:
 		psk_secret_[0]    = 0^Nh
 		psk_secret_[i]    = KDF.Extract(psk_input_[i-1], psk_secret_[i-1])
 
-	PSKLabel = psk_id || uint16(index) || uint16(count)
+	PSKLabel = struct { PreSharedKeyID id; uint16 index; uint16 count; }
 	"""
 	if not psk_list:
 		return b"\x00" * _NH
 
 	n = len(psk_list)
 	psk_secret_acc = b"\x00" * _NH
-	for i, (psk_id, psk_value) in enumerate(psk_list):
+	for i, (psk_key_id, psk_value) in enumerate(psk_list):
 		psk_extracted = hkdf_extract(b"\x00" * _NH, psk_value)
-		psk_label = psk_id + struct.pack("!HH", i, n)
+		psk_label = psk_key_id.to_bytes() + struct.pack("!HH", i, n)
 		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, _NH)
 		psk_secret_acc = hkdf_extract(psk_input, psk_secret_acc)
 
@@ -62,7 +107,7 @@ class KeySchedule:
 		init_secret: bytes,
 		commit_secret: bytes,
 		group_context: bytes = b"",
-		psk_list: list[tuple[bytes, bytes]] | None = None,
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
 	) -> "KeySchedule":
 		"""RFC 9420 §8: Derive all epoch secrets from previous init_secret + commit_secret.
 
@@ -77,7 +122,7 @@ class KeySchedule:
 					use initial_init_secret from setup for epoch 0).
 			commit_secret:  TreeKEM root path secret after Commit.
 			group_context:  TLS-encoded GroupContext for current epoch.
-			psk_list:       Optional list of PSK contributions [(psk_id, psk_value)].
+			psk_list:       Optional list of PSK contributions [(PreSharedKeyID, psk_value)].
 		"""
 		# Step 1: joiner_secret
 		# raw = HKDF-Extract(salt=init_secret, IKM=commit_secret)
@@ -101,7 +146,7 @@ class KeySchedule:
 		init_secret: bytes,
 		commit_secret: bytes,
 		group_context: bytes = b"",
-		psk_list: list[tuple[bytes, bytes]] | None = None,
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
 	) -> bytes:
 		"""Derive only the confirmation_key without building the full schedule.
 
