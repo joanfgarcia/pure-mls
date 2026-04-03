@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import expand_with_label, hkdf_expand, hkdf_extract
+from pure_mls.hkdf import expand_with_label, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule
@@ -406,15 +406,14 @@ _CIPHER_SUITE: bytes = b"\x00\x01"
 _EXTENSIONS_EMPTY: bytes = b"\x00\x00\x00\x00"
 
 
-def _make_kp_ref(kp: KeyPackage) -> bytes:
-	"""RFC 9420 §10.2: MakeKeyPackageRef(kp) = RefHash("MLS 1.0 KeyPackageRef", kp).
+_KP_REF_LABEL = b"MLS 1.0 KeyPackage"
 
-	RefHash(label, value) = HKDF-Expand(HKDF-Extract(b"", value), ASCII(label), Nh=32).
-	"""
+
+def _make_kp_ref(kp: KeyPackage) -> bytes:
+	"""RFC 9420 §6.4: RefHash("MLS 1.0 KeyPackage", kp_bytes) = SHA-256(label || kp_bytes)."""
 	import hashlib
 
-	prk = hkdf_extract(b"", kp.to_bytes(), hashlib.sha256)
-	return hkdf_expand(prk, b"MLS 1.0 KeyPackageRef", 32, hashlib.sha256)
+	return hashlib.sha256(_KP_REF_LABEL + kp.to_bytes()).digest()
 
 
 def _make_group_context(
@@ -996,12 +995,16 @@ class PublicMessage:
 
 		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
 		membership_key = expand_with_label(epoch_authenticator, "membership", b"", 32)
-		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + FramedContent
+		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + Sender + AuthData + ContentType + content
+		_sender = tls_u8(0x01) + tls_u32(update.committer_index)
 		public_msg_tbs = (
 			tls_u16(0x0001)  # version
 			+ tls_u16(0x0002)  # wire_format = mls_public_message
 			+ group_ctx.to_bytes()
-			+ framed.to_bytes()
+			+ _sender
+			+ tls_opaque(b"")  # authenticated_data
+			+ tls_u8(FramedContent.CONTENT_TYPE_COMMIT)
+			+ commit_body
 		)
 		mem_tag = hmac.new(membership_key, public_msg_tbs, "sha256").digest()
 
@@ -1161,33 +1164,20 @@ class MLSGroup:
 		# parent_hash(node) depends on parent_hash(parent(node)), so we compute
 		# outer → inner and then build nodes inner → outer.
 		# Strategy: compute all hashes first (root has ph=b""), then fill nodes.
-		_parent_hashes: list[bytes] = []
+		_parent_hashes: list[bytes] = [b""] * len(direct)
 		_node_pubs: list[bytes] = []
 
-		# Derive keys and update tree structure BEFORE computing group_ctx
-		for node_i, (dp_idx, cop_idx, ps) in enumerate(zip(direct, cop, _path_secrets)):
-			# Derive new HPKE public key for this tree node
+		for ps in _path_secrets:
 			_node_secret = _derive_path_node_key(ps)
 			_kem_node = KemKey.from_secret(_node_secret)
-			_new_pub = _kem_node.public_bytes()
-			_node_pubs.append(_new_pub)
+			_node_pubs.append(_kem_node.public_bytes())
 
-			# RFC 9420 §7.9: parent_hash of the parent node (b"" if we are at root)
-			_root_idx = new_tree._root()
-			_par_of_dp = new_tree._parent(dp_idx) if dp_idx != _root_idx else None
-			if _par_of_dp is not None and new_tree.get_node(_par_of_dp) is not None:
-				_pn = new_tree.get_node(_par_of_dp)
-				_ph_of_parent = getattr(_pn, "parent_hash", b"")
-			else:
-				_ph_of_parent = b""
-
-			# original_sibling_tree_hash: hash of the sibling subtree BEFORE the commit
-			_sib_hash = _subtree_hash(new_tree, cop_idx)
-			_ph = _compute_parent_hash(_new_pub, _ph_of_parent, _sib_hash)
-			_parent_hashes.append(_ph)
-
-			# Update tree node (sets public key + parent_hash in place)
-			new_tree.set_parent(dp_idx, ParentNode(public_key=_new_pub, parent_hash=_ph))
+		for node_i in range(len(direct) - 1, -1, -1):
+			dp_idx, cop_idx = direct[node_i], cop[node_i]
+			ph_above = _parent_hashes[node_i + 1] if node_i + 1 < len(direct) else b""
+			_ph = _compute_parent_hash(_node_pubs[node_i], ph_above, _subtree_hash(new_tree, cop_idx))
+			_parent_hashes[node_i] = _ph
+			new_tree.set_parent(dp_idx, ParentNode(public_key=_node_pubs[node_i], parent_hash=_ph))
 
 		# Now that new_tree has the new Leaf AND new ParentNodes, compute context
 		# P0-A infrastructure: group_ctx_pre uses b"" for the transcript_hash field.
@@ -1249,9 +1239,13 @@ class MLSGroup:
 		#   step 2: conf_tag = HMAC(confirmation_key, interim)
 		#   step 3: confirmed = SHA-256(interim || conf_tag)
 		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
-		# conf_tag computed from interim (not the legacy single-pass hash) per RFC §8.2
-		_conf_tag_p1a = hmac.new(self.state.key_schedule.confirmation_key, interim_hash, "sha256").digest()
-		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag_p1a)
+		# Phase 1: provisional advance to get next epoch's confirmation_key
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, interim_hash)
+		_prov_state = self.state.advance_epoch(commit_secret, new_tree, transcript_hash=interim_hash, group_context=_provisional_ctx.to_bytes())
+
+		# Phase 2: compute confirmation_tag with NEW epoch key per RFC §8.3
+		_conf_tag = hmac.new(_prov_state.key_schedule.confirmation_key, interim_hash, "sha256").digest()
+		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag)
 
 		# RFC 9420 §6.2: GroupContext for new epoch with RFC-compliant confirmed_transcript_hash
 		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
@@ -1369,7 +1363,7 @@ class MLSGroup:
 				gs_bytes_raw = HPKE.open(my_kem_key, candidate.kem_output, candidate.ciphertext, info=_egs_info(welcome.encrypted_group_info))
 				egs_match = candidate
 				break
-			except Exception:
+			except (InvalidTag, ValueError):
 				continue
 		if gs_bytes_raw is None or egs_match is None:
 			raise ValueError("No EncryptedGroupSecrets could be decrypted with the provided KEM key")
@@ -1454,60 +1448,10 @@ class MLSGroup:
 		if not isinstance(committer_node, LeafNode):
 			raise ValueError("Invalid committer index")
 
-		# 1. Verify Signature FIRST to prevent padding oracles
-		# STATE-02 / P1-A: recompute transcript hash using RFC §8.2 two-pass chain
-		try:
-			# Access signature_key via leaf_node (RFC 9420 §7.2)
-			sig_key_bytes = committer_node.signature_key
-			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
-
-			# P1-A: Build FramedContent first (does NOT depend on transcript_hash)
-			_unsigned_body_v = (
-				tls_u64(update.epoch_id)
-				+ tls_opaque32(update.tree.to_bytes())
-				+ tls_u32(len(update.encrypted_commit_secrets))
-				+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(update.encrypted_commit_secrets.items()))
-				+ tls_u32(update.committer_index)
-			)
-			_framed_v = FramedContent(
-				group_id=self.group_id,
-				epoch=update.epoch_id,
-				sender_leaf_index=update.committer_index,
-				authenticated_data=b"",
-				content=_unsigned_body_v,
-			)
-			framed_content_bytes_v = _framed_v.to_bytes()
-
-			# P1-A RFC §8.2 two-pass: use self.confirmed_transcript_hash (prior epoch)
-			# This matches what add_member() used on the committer side.
-			interim_hash_v = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes_v)
-			_conf_tag_p1a_v = hmac.new(self.state.key_schedule.confirmation_key, interim_hash_v, "sha256").digest()
-			transcript_hash = _compute_confirmed_transcript_hash(interim_hash_v, _conf_tag_p1a_v)
-
-			# RFC 9420 §6.2: signature covers FramedContentTBS including GroupContext
-			group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
-			_framed_v_signed = FramedContent(
-				group_id=group_ctx_verify.group_id,
-				epoch=update.epoch_id,
-				sender_leaf_index=update.committer_index,
-				authenticated_data=b"",
-				content=_unsigned_body_v,
-			)
-			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v_signed)
-			public_key.verify(update.signature, tbs)
-		except InvalidSignature:
-			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
-		except (ValueError, TypeError) as exc:
-			# SEC-HIGH-02: only catch malformed data errors, not all exceptions
-			raise ValueError(f"Malformed update signature: {exc}") from exc
-
-		# 2. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
+		# 1. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
 		my_kp = self.state.tree.get_node(self.my_index)
 		if not isinstance(my_kp, LeafNode):
 			raise ValueError("My leaf node not found in tree")
-		# HPKE info = GroupContext of the verifying epoch.
-		# P0-A infrastructure: uses b"" for transcript_hash — symmetric with add_member() seal.
-		# A non-b"" value here would cause InvalidTag if peers have diverged transcript_hash state.
 		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, b"")
 		my_kp_ref = _make_kp_ref(my_kp.key_package)
 
@@ -1541,11 +1485,57 @@ class MLSGroup:
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
 
+		# 2. Recompute transcript hash using RFC §8.2 two-pass chain (P1-NEW-1)
+		_unsigned_body_v = (
+			tls_u64(update.epoch_id)
+			+ tls_opaque32(update.tree.to_bytes())
+			+ tls_u32(len(update.encrypted_commit_secrets))
+			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(update.encrypted_commit_secrets.items()))
+			+ tls_u32(update.committer_index)
+		)
+		_framed_v = FramedContent(
+			group_id=self.group_id,
+			epoch=update.epoch_id,
+			sender_leaf_index=update.committer_index,
+			authenticated_data=b"",
+			content=_unsigned_body_v,
+		)
+		framed_content_bytes_v = _framed_v.to_bytes()
+
+		interim_hash_v = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes_v)
+		# Phase 1: provisional advance to get new epoch's confirmation_key
+		_provisional_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, interim_hash_v)
+		_prov_state = self.state.advance_epoch(commit_secret, update.tree, transcript_hash=interim_hash_v, group_context=_provisional_ctx.to_bytes())
+
+		# Phase 2: Compute confirmation_tag with NEW epoch key
+		_conf_tag = hmac.new(_prov_state.key_schedule.confirmation_key, interim_hash_v, "sha256").digest()
+		transcript_hash = _compute_confirmed_transcript_hash(interim_hash_v, _conf_tag)
+		group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
+
+		# 3. Verify Signature
+		try:
+			sig_key_bytes = committer_node.signature_key
+			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
+			_framed_v_signed = FramedContent(
+				group_id=group_ctx_verify.group_id,
+				epoch=update.epoch_id,
+				sender_leaf_index=update.committer_index,
+				authenticated_data=b"",
+				content=_unsigned_body_v,
+			)
+			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v_signed)
+			public_key.verify(update.signature, tbs)
+		except InvalidSignature:
+			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
+		except (ValueError, TypeError) as exc:
+			raise ValueError(f"Malformed update signature: {exc}") from exc
+
+		# 4. Final epoch advance
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			update.tree,
 			transcript_hash=transcript_hash,
-			group_context=group_ctx_verify.to_bytes(),  # P0-01 fix: bind epoch to GroupContext
+			group_context=group_ctx_verify.to_bytes(),
 		)
 
 		# P0-02: Verify confirmation_tag — RFC 9420 §8.3: every member MUST verify
