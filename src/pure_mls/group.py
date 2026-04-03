@@ -1183,13 +1183,9 @@ class MLSGroup:
 			_parent_hashes[node_i] = _ph
 			new_tree.set_parent(dp_idx, ParentNode(public_key=_node_pubs[node_i], parent_hash=_ph))
 
-		# Now that new_tree has the new Leaf AND new ParentNodes, compute context
-		# P0-A infrastructure: group_ctx_pre uses b"" for the transcript_hash field.
-		# RATIONALE: using self.confirmed_transcript_hash here would cause a seal/open mismatch
-		# when different peers (committer vs. joiner-via-join()) have different transcript_hash state.
-		# The confirmed_transcript_hash IS threaded through MLSGroup (see __init__) for use
-		# in the two-pass transcript hash (P1-A) and future RFC §12.4 compliance work.
-		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, b"")
+		# RFC 9420 §12.4.1: provisional GroupContext uses the OLD confirmed_transcript_hash.
+		# This is identical on all peers at the start of a commit.
+		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.confirmed_transcript_hash)
 
 		# Encrypt path secrets using the fully updated group_ctx_pre
 		update_path_nodes: list[UpdatePathNode] = []
@@ -1456,7 +1452,8 @@ class MLSGroup:
 		my_kp = self.state.tree.get_node(self.my_index)
 		if not isinstance(my_kp, LeafNode):
 			raise ValueError("My leaf node not found in tree")
-		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, b"")
+		# RFC 9420 §12.4.1: provisional GroupContext uses OLD confirmed_transcript_hash for HPKE
+		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, self.confirmed_transcript_hash)
 		my_kp_ref = _make_kp_ref(my_kp.key_package)
 
 		commit_secret: bytes | None = None
