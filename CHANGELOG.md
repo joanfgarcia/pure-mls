@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[POLICY-5] Ruff hardened + test_no_inline_imports** (`pyproject.toml`, `test_lint.py`):
   Added `ARG` and `PLC` lint rules with per-file-ignores for test patterns. New `test_no_inline_imports()` statically enforces module-level imports in `src/`.
 
+### Added (Phase 4 — Perfect Forward Secrecy)
+- **[PCS-1] `RatchetTree.remove_leaf()`** (`tree.py`):
+  RFC 9420 §7.7 compliant leaf removal: blanks the target leaf and all direct path ancestors, then truncates trailing blank leaves to keep the tree minimal. Returns a new tree (immutability-safe).
+- **[PCS-2] `MLSGroup.remove_member()`** (`group.py`):
+  Full Remove proposal implementation: blanks the target leaf, generates fresh commit_secret, encrypts for remaining members, computes two-pass transcript hash, signs the Commit, and returns `(new_group, update)`.
+- **[PCS-3] `tests/test_remove_member.py`** (tests):
+  5 tests covering basic removal, self-removal guard, odd-index validation, tree blanking verification, and three-party remove scenario.
+
 ## [3.0.1.0] - Unreleased
 
 ### Fixed (B760 Re-Audit — Security Remediation, Round 4)

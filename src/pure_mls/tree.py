@@ -8,6 +8,7 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 §7.4   RatchetTree optional<Node> encoding
 """
 
+import copy
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
@@ -467,6 +468,52 @@ class RatchetTree:
 		if index < 0 or index >= len(self.nodes):
 			return None
 		return self.nodes[index]
+
+	def remove_leaf(self, leaf_index: int) -> "RatchetTree":
+		"""RFC 9420 §7.7: Remove a member by blanking their leaf + direct path.
+
+		1. Blank the leaf node at leaf_index (must be even).
+		2. Blank all ancestors on the direct path to the root.
+		3. Truncate trailing blank leaves to keep the tree minimal.
+
+		Returns a new RatchetTree (does not mutate self if frozen).
+		"""
+		if leaf_index % 2 != 0:
+			raise ValueError("leaf_index must be even (leaf node)")
+		if leaf_index >= len(self.nodes):
+			raise ValueError(f"leaf_index {leaf_index} out of bounds (tree has {len(self.nodes)} nodes)")
+
+		# Work on a mutable copy
+		tree = copy.deepcopy(self)
+		if isinstance(tree.nodes, tuple):
+			tree.nodes = list(tree.nodes)
+
+		# Step 1: blank the leaf
+		tree.nodes[leaf_index] = None
+
+		# Step 2: blank all ancestors
+		for ancestor in tree.direct_path(leaf_index):
+			tree.nodes[ancestor] = None
+
+		# Step 3: truncate trailing blank leaves
+		# Find the rightmost non-blank leaf
+		rightmost = -1
+		for i in range(0, len(tree.nodes), 2):  # even indices = leaves
+			if tree.nodes[i] is not None:
+				rightmost = i
+
+		if rightmost < 0:
+			# All leaves blank — empty tree
+			tree.num_leaves = 0
+			tree.nodes = []
+		else:
+			# Tree size = 2 * num_leaves - 1
+			new_num_leaves = (rightmost // 2) + 1
+			new_size = 2 * new_num_leaves - 1
+			tree.nodes = tree.nodes[:new_size]
+			tree.num_leaves = new_num_leaves
+
+		return tree
 
 	def to_bytes(self) -> bytes:
 		"""RFC 9420 §7.4: ratchet_tree as optional<Node>[] (uint32-prefixed vector).

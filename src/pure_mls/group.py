@@ -1280,6 +1280,116 @@ class MLSGroup:
 		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, confirmed_transcript_hash=transcript_hash)
 		return new_group, welcome, update
 
+	def remove_member(self, target_leaf_index: int) -> tuple["MLSGroup", "GroupUpdate"]:
+		"""RFC 9420 §12.1.1: Remove a member from the group.
+
+		1. Blank the target leaf and its direct path (RatchetTree.remove_leaf).
+		2. Generate fresh commit_secret (TreeKEM path secret for new epoch).
+		3. Encrypt commit_secret for all remaining members.
+		4. Two-pass transcript hash to produce confirmation_tag.
+		5. Sign the commit and return (new_group, update).
+
+		Args:
+			target_leaf_index: The *node array* index (must be even) of the leaf to remove.
+
+		Returns:
+			(new_group, update) where new_group is the committer's post-remove state
+			and update is the GroupUpdate for distribution to remaining members.
+		"""
+		if target_leaf_index == self.my_index:
+			raise ValueError("Cannot remove yourself — use leave() or let another member remove you")
+		if target_leaf_index % 2 != 0:
+			raise ValueError("target_leaf_index must be even (leaf node)")
+
+		# Step 1: Remove leaf from tree
+		new_tree = self.state.tree.remove_leaf(target_leaf_index)
+		new_epoch_id = self.epoch_id + 1
+
+		# Step 2: Fresh commit secret for the new epoch
+		commit_secret = os.urandom(32)
+
+		# Step 3: Encrypt commit_secret for remaining members
+		encrypted_commit_secrets: dict[bytes, bytes] = {}
+		for leaf_idx in range(0, len(new_tree.nodes), 2):
+			node = new_tree.get_node(leaf_idx)
+			if node is None or leaf_idx == self.my_index:
+				continue  # skip blank leaves and self
+			if not isinstance(node, LeafNode):
+				continue
+			kp_ref = _make_kp_ref(node.key_package)
+			enc, ct = HPKE.seal(node.public_key, commit_secret, info=b"MLS 1.0 EncryptedGroupSecrets")
+			encrypted_commit_secrets[kp_ref] = enc + ct
+
+		# Step 4: Build unsigned commit body for FramedContent
+		_n = len(encrypted_commit_secrets)
+		unsigned_body = (
+			tls_u64(new_epoch_id)
+			+ tls_opaque32(new_tree.to_bytes())
+			+ tls_u32(_n)
+			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_commit_secrets.items()))
+			+ tls_u32(self.my_index)
+		)
+
+		framed_content = FramedContent(
+			group_id=self.group_id,
+			epoch=new_epoch_id,
+			sender_leaf_index=self.my_index,
+			authenticated_data=b"",
+			content=unsigned_body,
+		)
+		framed_content_bytes = framed_content.to_bytes()
+
+		# Two-pass transcript hash (RFC §8.2)
+		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
+
+		# Phase 1: derive confirmation_key
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, interim_hash)
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+		)
+
+		# Phase 2: compute confirmation_tag
+		_conf_tag = hmac.new(_conf_key, interim_hash, "sha256").digest()
+		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag)
+
+		# Final GroupContext + epoch advance
+		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		next_state = self.state.advance_epoch(
+			commit_secret,
+			new_tree,
+			group_context=new_ctx.to_bytes(),
+		)
+
+		# Sign the commit
+		_framed_for_tbs = FramedContent(
+			group_id=new_ctx.group_id,
+			epoch=new_epoch_id,
+			sender_leaf_index=self.my_index,
+			authenticated_data=b"",
+			content=unsigned_body,
+		)
+		tbs = _make_framed_content_tbs(new_ctx, _framed_for_tbs)
+		signature = self.my_sig_key.sign(tbs)
+
+		update = GroupUpdate(
+			epoch_id=new_epoch_id,
+			tree=new_tree,
+			encrypted_commit_secrets=encrypted_commit_secrets,
+			committer_index=self.my_index,
+			signature=signature,
+			group_id=self.group_id,
+			_group_ctx=new_ctx,
+			_confirmation_key=next_state.key_schedule.confirmation_key,
+			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
+			_transcript_hash=transcript_hash,
+			_confirmation_tag=_conf_tag,
+		)
+
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, confirmed_transcript_hash=transcript_hash)
+		return new_group, update
+
 	@classmethod
 	def join(cls, welcome: "Welcome | bytes", my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
 		"""
