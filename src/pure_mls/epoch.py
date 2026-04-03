@@ -29,7 +29,6 @@ class EpochState:
 		self,
 		commit_secret: bytes,
 		next_tree: RatchetTree,
-		transcript_hash: bytes = b"",
 		group_context: bytes = b"",
 		psk_list: list[tuple[bytes, bytes]] | None = None,
 	) -> "EpochState":

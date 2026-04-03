@@ -1195,7 +1195,6 @@ class MLSGroup:
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			new_tree,
-			transcript_hash=transcript_hash,
 			group_context=new_ctx_signed.to_bytes(),  # P0-01: bind epoch secrets to GroupContext
 		)
 
@@ -1482,7 +1481,6 @@ class MLSGroup:
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			update.tree,
-			transcript_hash=transcript_hash,
 			group_context=group_ctx_verify.to_bytes(),
 		)
 

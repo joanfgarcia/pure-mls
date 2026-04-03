@@ -36,12 +36,16 @@ line-length = 150
 exclude = ["tests/protos/*", ".venv/*"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "ARG", "PLC"]
 ignore = [
     "W191", # Allow tabs (Sound of Silence protocol)
     "E501", # Allow long lines
     "E265", # Allow some comment variants
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLC0415", "ARG001", "ARG002"]  # inline imports + fixtures are valid pytest patterns
+"src/pure_mls/keyschedule.py" = ["ARG003"]  # intermediate kept for PSK audit trail
 
 [tool.ruff.format]
 indent-style = "tab"
