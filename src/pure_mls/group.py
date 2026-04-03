@@ -1291,7 +1291,7 @@ class MLSGroup:
 
 		# 4b. Encrypt GroupInfo → encrypted_group_info (egi)
 		joiner_secret = next_state.key_schedule.joiner_secret
-		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, b"")
+		welcome_key = KeySchedule.derive_welcome_key(joiner_secret)
 		welcome_nonce_enc = os.urandom(12)
 		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
@@ -1370,7 +1370,7 @@ class MLSGroup:
 		gs = GroupSecrets.from_bytes(gs_bytes_raw)
 
 		# 2. Derive welcome_key from joiner_secret and decrypt GroupInfo (AES-GCM)
-		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret, b"")
+		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret)
 		gi_payload_raw = welcome.encrypted_group_info
 		if len(gi_payload_raw) < 12:
 			raise ValueError("encrypted_group_info too short")

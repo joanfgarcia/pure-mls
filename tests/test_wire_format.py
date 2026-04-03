@@ -343,10 +343,10 @@ def test_welcome_key_derivation_determinism():
 	from pure_mls.keyschedule import KeySchedule
 
 	secret = b"\\x42" * 32
-	k1 = KeySchedule.derive_welcome_key(secret, b"")
-	k2 = KeySchedule.derive_welcome_key(secret, b"")
-	n1 = KeySchedule.derive_welcome_nonce(secret, b"")
-	n2 = KeySchedule.derive_welcome_nonce(secret, b"")
+	k1 = KeySchedule.derive_welcome_key(secret)
+	k2 = KeySchedule.derive_welcome_key(secret)
+	n1 = KeySchedule.derive_welcome_nonce(secret)
+	n2 = KeySchedule.derive_welcome_nonce(secret)
 
 	assert k1 == k2
 	assert n1 == n2
@@ -359,6 +359,6 @@ def test_welcome_key_changes_with_secret():
 	"""Different joiner_secrets produce different welcome keys."""
 	from pure_mls.keyschedule import KeySchedule
 
-	k1 = KeySchedule.derive_welcome_key(b"\\xAA" * 32, b"")
-	k2 = KeySchedule.derive_welcome_key(b"\\xBB" * 32, b"")
+	k1 = KeySchedule.derive_welcome_key(b"\\xAA" * 32)
+	k2 = KeySchedule.derive_welcome_key(b"\\xBB" * 32)
 	assert k1 != k2

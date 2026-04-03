@@ -144,7 +144,7 @@ class KeySchedule:
 	# -------------------------------------------------------------------------
 
 	@staticmethod
-	def derive_welcome_key(joiner_secret: bytes, context: bytes = b"") -> bytes:
+	def derive_welcome_key(joiner_secret: bytes) -> bytes:
 		"""RFC 9420 §12.4: welcome_key from intermediate_secret.
 
 		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret=0^32)
@@ -158,7 +158,7 @@ class KeySchedule:
 		return expand_with_label(welcome_s, "key", b"", 16)
 
 	@staticmethod
-	def derive_welcome_nonce(joiner_secret: bytes, context: bytes = b"") -> bytes:
+	def derive_welcome_nonce(joiner_secret: bytes) -> bytes:
 		"""RFC 9420 §12.4: welcome_nonce from intermediate_secret.
 
 		Nn = 12 bytes (AES-128-GCM nonce length).
