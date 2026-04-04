@@ -634,6 +634,16 @@ class RatchetTree:
 			x = p
 		return path
 
+	def filtered_direct_path(self, leaf_index: int) -> list[int]:
+		"""RFC 9420 §4.1.2: direct_path filtered to exclude nodes where copath is completely blank."""
+		dpath = self.direct_path(leaf_index)
+		copath = self.copath(leaf_index)
+		filtered = []
+		for p, cp in zip(dpath, copath):
+			if cp != -1 and len(self.resolution(cp)) > 0:
+				filtered.append(p)
+		return filtered
+
 	def copath(self, leaf_index: int) -> list[int]:
 		"""RFC 9420 §7.1.3: siblings of the direct_path nodes.
 

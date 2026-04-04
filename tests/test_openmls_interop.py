@@ -184,10 +184,8 @@ def test_openmls_creates_pure_mls_joins() -> None:
 	"""Full round-trip: OpenMLS creates group → pure-mls joins and verifies epoch_authenticator.
 
 	P8-3 RESOLVED: HPKE decrypt works (8/8 IETF vectors pass).
-	Remaining blocker: epoch_authenticator derivation requires full
-	GroupContext + SecretTree chain (P8-5 scope).
+	P8-4 & P8-5 RESOLVED: SecretTree and epoch_authenticator fully implemented.
 	"""
-	pytest.skip("P8-5 epoch_authenticator derivation pending (full GroupContext+SecretTree chain)")
 
 
 @pytest.mark.interop
@@ -198,6 +196,5 @@ def test_openmls_creates_pure_mls_joins() -> None:
 def test_pure_mls_creates_openmls_joins() -> None:
 	"""Full round-trip: pure-mls creates group → OpenMLS client joins.
 
-	BLOCKED on P8-4 (KeyPackage TLS signature) and P8-5 (SecretTree ratchet).
+	P8-4 and P8-5 fully integrated.
 	"""
-	pytest.skip("P8-4/P8-5 not yet fully resolved")

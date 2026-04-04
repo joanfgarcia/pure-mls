@@ -13,10 +13,6 @@ proposal_type (uint16 ProposalType) | body...
 ProposalRef = Hash(Proposal wire bytes) — used by Commit.proposals[].
 A Commit embeds a vector of ProposalOrRef items, each prefixed by a
 type byte (0x01=by_value, 0x02=by_reference).
-
-P1-E fix: all opaque<V> fields now use MLS VarInt length prefix per
-RFC 9420 §5.1 (previously used uint32, causing OpenMLS deserialization
-failures for AddProposal.key_package_bytes and similar fields).
 """
 
 from __future__ import annotations

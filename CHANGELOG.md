@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.2.0] - Unreleased
 
+### Fixed (B760 Re-Audit — Security Remediation, Rounds 6 & 7)
+- **[P1-TH] ConfirmedTranscriptHashInput structural fixes** (`group.py`):
+  Integrated `ConfirmedTranscriptHashInput` struct with `WireFormat=0x0002` and signature for RFC 9420 compliance.
+- **[P1-SIGN] Old context signatures** (`group.py`):
+  Commit signatures are now bound to the OLD epoch's GroupContext per RFC §12.4.1.
+- **[P1-UP] UpdatePath EncryptWithLabel bindings** (`group.py`):
+  Path secrets leverage `EncryptWithLabel` (`UpdatePathNode`) wrapper during sealing.
+- **[P1-CTH] Sequence Inversion** (`group.py`):
+  Transcript hashes now correctly compute `interim_transcript_hash_[N-1]` into the `confirmed_transcript_hash_[N]` via `ConfirmedTranscriptHashInput_[N]`.
+- **[P1-FDP] Filtered Direct Path logic** (`tree.py`, `group.py`):
+  Bounded Copaths resolution for tree commitments without crashing isolated nodes.
+
 ### Fixed (B760 Re-Audit — Security Remediation, Round 5)
 - **[P0-KPR] KeyPackageRef label + RefHashInput encoding** (`group.py`):
   Corrected `_make_kp_ref()` to use RFC §5.2 label `"MLS 1.0 KeyPackage Reference"` and VarInt-prefixed `RefHashInput` struct encoding.

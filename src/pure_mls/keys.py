@@ -34,12 +34,11 @@ class SignatureKey:
 	@classmethod
 	def verify(cls, public_bytes: bytes, signature: bytes, message: bytes) -> bool:
 		"""Verifies a signature given raw public bytes."""
+		pub = ed25519.Ed25519PublicKey.from_public_bytes(public_bytes)
 		try:
-			pub = ed25519.Ed25519PublicKey.from_public_bytes(public_bytes)
 			pub.verify(signature, message)
 			return True
-		except (InvalidSignature, ValueError):
-			# SEC-HIGH-01: swallow genuine signature failures AND malformed key errors
+		except InvalidSignature:
 			return False
 
 

@@ -98,7 +98,7 @@ class GroupContext:
 		confirmed_transcript_hash, offset = read_opaque_varint(data, offset)
 		# skip extensions (VarInt length prefix)
 		if offset < len(data):
-			ext_data, offset = read_opaque_varint(data, offset)
+			_, offset = read_opaque_varint(data, offset)
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
@@ -476,11 +476,7 @@ def _compute_parent_hash(
 	"""
 	label = b"MLS 1.0 parent hash"
 	return hashlib.sha256(
-		len(label).to_bytes(1, "big")
-		+ label
-		+ tls_opaque(new_public_key)
-		+ tls_opaque(parent_hash_of_parent)
-		+ tls_opaque(original_sibling_tree_hash)
+		tls_opaque(label) + tls_opaque(new_public_key) + tls_opaque(parent_hash_of_parent) + tls_opaque(original_sibling_tree_hash)
 	).digest()
 
 
@@ -512,35 +508,40 @@ def _egs_info(encrypted_group_info: bytes) -> bytes:
 	return varint_encode(len(label)) + label + varint_encode(len(encrypted_group_info)) + encrypted_group_info
 
 
-def _compute_interim_transcript_hash(
-	confirmed_transcript_hash: bytes,
+def _compute_confirmed_transcript_hash_input(
 	framed_content_bytes: bytes,
+	signature: bytes,
 ) -> bytes:
-	"""RFC 9420 §8.2 step 1: interim_transcript_hash.
-
-	interim = SHA-256(confirmed_transcript_hash || AuthenticatedContent.content)
-
-	Where AuthenticatedContent.content is the wire-encoded FramedContent for
-	the commit (includes group_id, epoch, sender, content body).
-	This binds the new epoch's transcript to the full history of the group.
-	"""
-	return hashlib.sha256(confirmed_transcript_hash + framed_content_bytes).digest()
+	"""RFC 9420 §8.2 ConfirmedTranscriptHashInput struct.\n	WireFormat (2 bytes for mls_public_message = 0x0002) + FramedContent + signature.\n"""
+	return tls_u16(0x0002) + framed_content_bytes + tls_opaque(signature)
 
 
 def _compute_confirmed_transcript_hash(
 	interim_transcript_hash: bytes,
+	confirmed_input: bytes,
+) -> bytes:
+	"""RFC 9420 §8.2 step 1: confirmed_transcript_hash.
+
+	confirmed = SHA-256(interim_transcript_hash_[N-1] || ConfirmedTranscriptHashInput_[N])
+	"""
+	return hashlib.sha256(interim_transcript_hash + confirmed_input).digest()
+
+
+def _compute_interim_transcript_hash(
+	confirmed_transcript_hash: bytes,
 	confirmation_tag: bytes,
 ) -> bytes:
-	"""RFC 9420 §8.2 step 2: confirmed_transcript_hash.
+	"""RFC 9420 §8.2 step 2: interim_transcript_hash.
 
-	confirmed = SHA-256(interim_transcript_hash || confirmation_tag)
-
-	confirmation_tag = HMAC(confirmation_key, interim_transcript_hash)
-	This binds the confirmed hash to the actual key material of the new epoch,
-	making it impossible to forge a valid confirmed_transcript_hash without
-	knowing the confirmation_key.
+	interim = SHA-256(confirmed_transcript_hash_[N] || confirmation_tag_[N])
 	"""
-	return hashlib.sha256(interim_transcript_hash + confirmation_tag).digest()
+	return hashlib.sha256(confirmed_transcript_hash + confirmation_tag).digest()
+
+
+def _up_info(group_context_bytes: bytes) -> bytes:
+	"""RFC 9420 §5.1.3: EncryptContext label wrapper for UpdatePathNode."""
+	label = b"MLS 1.0 UpdatePathNode"
+	return tls_varint(len(label)) + label + tls_varint(len(group_context_bytes)) + group_context_bytes
 
 
 @dataclass
@@ -793,12 +794,10 @@ class UpdatePath:
 	def to_bytes(self) -> bytes:
 		kp_bytes = self.leaf_key_package.to_bytes()
 		nodes_bytes = b"".join(n.to_bytes() for n in self.nodes)
-		# SEC-CRIT-01: length-prefix the KeyPackage (uint16 via tls_opaque) so from_bytes can read it dynamically
 		return tls_opaque(kp_bytes) + tls_u32(len(self.nodes)) + nodes_bytes
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["UpdatePath", int]:
-		# SEC-CRIT-01: read KeyPackage size dynamically using tls_opaque uint16 length prefix, not hardcoded 128 bytes
 		kp_bytes, offset = read_opaque(data, offset)
 		kp = KeyPackage.from_bytes(kp_bytes)
 		n, offset = read_u32(data, offset)
@@ -938,17 +937,8 @@ class PublicMessage:
 
 		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
 		membership_key = expand_with_label(epoch_authenticator, "membership", b"", 32)
-		# PublicMessageTBS = version(u16) + wire_format(u16) + GroupContext + Sender + AuthData + ContentType + content
-		_sender = tls_u8(0x01) + tls_u32(update.committer_index)
-		public_msg_tbs = (
-			tls_u16(0x0001)  # version
-			+ tls_u16(0x0002)  # wire_format = mls_public_message
-			+ group_ctx.to_bytes()
-			+ _sender
-			+ tls_opaque(b"")  # authenticated_data
-			+ tls_u8(FramedContent.CONTENT_TYPE_COMMIT)
-			+ commit_body
-		)
+		# PublicMessageTBS must match _make_framed_content_tbs
+		public_msg_tbs = _make_framed_content_tbs(group_ctx, framed)
 		mem_tag = hmac.new(membership_key, public_msg_tbs, "sha256").digest()
 
 		return cls(content=framed, auth=auth, membership_tag=mem_tag)
@@ -969,7 +959,7 @@ class MLSGroup:
 		my_index: int,
 		my_sig_key: SignatureKey,
 		my_kem_key: KemKey,
-		confirmed_transcript_hash: bytes = b"",
+		interim_transcript_hash: bytes = b"",
 	):
 		self.state = state
 		self.my_index = my_index
@@ -980,7 +970,7 @@ class MLSGroup:
 		# in group_ctx_pre (add_member) and group_ctx (process_update).
 		# Initialized to b"" for genesis (epoch 0) and propagated through each epoch transition.
 		# NOT serialized in EpochState.to_bytes() — lives only in the running MLSGroup instance.
-		self.confirmed_transcript_hash: bytes = confirmed_transcript_hash
+		self.interim_transcript_hash: bytes = interim_transcript_hash
 
 	@property
 	def group_id(self) -> bytes:
@@ -1025,7 +1015,7 @@ class MLSGroup:
 		tree = RatchetTree(num_leaves=1)
 		kp = KeyPackage.create(
 			encryption_key=creator_kem_key.public_bytes(),
-			init_key_pub=creator_kem_key.public_bytes(),
+			init_key_pub=KemKey().public_bytes(),
 			signature_key=creator_sig_key.public_bytes(),
 			identity=creator_sig_key.public_bytes(),
 			sign_fn=creator_sig_key.sign,
@@ -1038,8 +1028,8 @@ class MLSGroup:
 		# to avoid circular import: epoch.py ↛ group.py.
 		genesis_ctx = _make_group_context(group_id, 0, tree, b"")
 		state = EpochState.genesis(group_id, tree, group_context_bytes=genesis_ctx.to_bytes())
-		# P0-A: genesis confirmed_transcript_hash = b"" (epoch 0 has no prior commit)
-		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key, confirmed_transcript_hash=b"")
+		# P0-A: genesis interim_transcript_hash = b"" (epoch 0 has no prior commit)
+		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key, interim_transcript_hash=b"")
 
 	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", Welcome, GroupUpdate]:
 		"""
@@ -1093,7 +1083,7 @@ class MLSGroup:
 		new_committer_kem = KemKey()
 		new_committer_kp = KeyPackage.create(
 			encryption_key=new_committer_kem.public_bytes(),
-			init_key_pub=new_committer_kem.public_bytes(),
+			init_key_pub=KemKey().public_bytes(),
 			signature_key=self.my_sig_key.public_bytes(),
 			identity=self.my_sig_key.public_bytes(),
 			sign_fn=self.my_sig_key.sign,
@@ -1124,7 +1114,7 @@ class MLSGroup:
 
 		# RFC 9420 §12.4.1: provisional GroupContext uses the OLD confirmed_transcript_hash.
 		# This is identical on all peers at the start of a commit.
-		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.confirmed_transcript_hash)
+		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.interim_transcript_hash)
 
 		# Encrypt path secrets using the fully updated group_ctx_pre
 		update_path_nodes: list[UpdatePathNode] = []
@@ -1136,7 +1126,7 @@ class MLSGroup:
 				if res_node is None:
 					continue
 				recipient_pk = res_node.public_key
-				enc, ct = HPKE.seal(recipient_pk, ps, info=group_ctx_pre.to_bytes())
+				enc, ct = HPKE.seal(recipient_pk, ps, info=_up_info(group_ctx_pre.to_bytes()))
 				ctexts.append(HPKECiphertext(kem_output=enc, ciphertext=ct))
 			update_path_nodes.append(UpdatePathNode(new_public_key=_new_pub, encrypted_path_secret=ctexts))
 
@@ -1148,7 +1138,7 @@ class MLSGroup:
 		for i, node in enumerate(new_tree.nodes):
 			if isinstance(node, LeafNode) and i != self.my_index:
 				pk = node.public_key
-				enc, ct = HPKE.seal(pk, commit_secret, info=group_ctx_pre.to_bytes())
+				enc, ct = HPKE.seal(pk, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
 				kp_ref = _make_kp_ref(node.key_package)
 				encrypted_secrets[kp_ref] = enc + ct
 
@@ -1173,42 +1163,36 @@ class MLSGroup:
 		)
 		framed_content_bytes = _framed_for_tbs.to_bytes()
 
-		# P1-A RFC §8.2 two-pass chain:
-		#   step 1: interim  = SHA-256(prior_confirmed_transcript_hash || framed_content)
-		#   step 2: conf_tag = HMAC(confirmation_key, interim)
-		#   step 3: confirmed = SHA-256(interim || conf_tag)
-		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
-		# Phase 1: derive only confirmation_key for the new epoch (lightweight, no full schedule)
-		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, interim_hash)
+		# P1-SIGN: Sign TBS with OLD GroupContext
+		old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
+		tbs = _make_framed_content_tbs(old_ctx, _framed_for_tbs)
+		signature = self.my_sig_key.sign(tbs)
+
+		# P1-TH & P1-CTH: Transcript Hash Sequence
+		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
+		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
+
+		# Phase 1: derive confirmation_key with provisional ctx
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		_conf_key = KeySchedule.derive_confirmation_key(
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=_provisional_ctx.to_bytes(),
 		)
 
-		# Phase 2: compute confirmation_tag with NEW epoch key per RFC §8.3
-		_conf_tag = hmac.new(_conf_key, interim_hash, "sha256").digest()
-		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag)
+		# Phase 2: compute confirmation_tag with NEW epoch key
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
 
-		# RFC 9420 §6.2: GroupContext for new epoch with RFC-compliant confirmed_transcript_hash
+		# Compute NEW interim_transcript_hash to store in state
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+
+		# Final epoch advance
 		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			new_tree,
-			group_context=new_ctx_signed.to_bytes(),  # P0-01: bind epoch secrets to GroupContext
+			group_context=new_ctx_signed.to_bytes(),
 		)
-
-		# RFC 9420 §6.2: sign FramedContentTBS
-		# Reuse _framed_for_tbs from P1-A two-pass block above; rebind group_id to ctx for TBS.
-		_framed_for_tbs = FramedContent(
-			group_id=new_ctx_signed.group_id,  # same bytes as self.group_id — explicit for TBS spec
-			epoch=new_epoch_id,
-			sender_leaf_index=self.my_index,
-			authenticated_data=b"",
-			content=_unsigned_body,
-		)
-		tbs = _make_framed_content_tbs(new_ctx_signed, _framed_for_tbs)
-		signature = self.my_sig_key.sign(tbs)
 
 		# 4. Build RFC-compliant Welcome  (P0-B: RFC §12.4 ordering)
 		#
@@ -1276,8 +1260,8 @@ class MLSGroup:
 		)
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
-		# P0-A: propagate confirmed_transcript_hash to new epoch for next commit's HPKE info
-		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, confirmed_transcript_hash=transcript_hash)
+		# P0-A: propagate interim_transcript_hash to new epoch for next commit's HPKE info
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, interim_transcript_hash=new_interim)
 		return new_group, welcome, update
 
 	def remove_member(self, target_leaf_index: int) -> tuple["MLSGroup", "GroupUpdate"]:
@@ -1309,6 +1293,8 @@ class MLSGroup:
 		commit_secret = os.urandom(32)
 
 		# Step 3: Encrypt commit_secret for remaining members
+		# RFC 9420 §12.4.1: provisional GroupContext uses the OLD confirmed_transcript_hash.
+		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.interim_transcript_hash)
 		encrypted_commit_secrets: dict[bytes, bytes] = {}
 		for leaf_idx in range(0, len(new_tree.nodes), 2):
 			node = new_tree.get_node(leaf_idx)
@@ -1317,7 +1303,7 @@ class MLSGroup:
 			if not isinstance(node, LeafNode):
 				continue
 			kp_ref = _make_kp_ref(node.key_package)
-			enc, ct = HPKE.seal(node.public_key, commit_secret, info=b"MLS 1.0 EncryptedGroupSecrets")
+			enc, ct = HPKE.seal(node.public_key, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
 			encrypted_commit_secrets[kp_ref] = enc + ct
 
 		# Step 4: Build unsigned commit body for FramedContent
@@ -1339,11 +1325,17 @@ class MLSGroup:
 		)
 		framed_content_bytes = framed_content.to_bytes()
 
-		# Two-pass transcript hash (RFC §8.2)
-		interim_hash = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes)
+		# P1-SIGN: Sign TBS with OLD GroupContext
+		old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
+		tbs = _make_framed_content_tbs(old_ctx, framed_content)
+		signature = self.my_sig_key.sign(tbs)
+
+		# P1-TH & P1-CTH: Transcript Hash Sequence
+		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
+		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
 		# Phase 1: derive confirmation_key
-		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, interim_hash)
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		_conf_key = KeySchedule.derive_confirmation_key(
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
@@ -1351,8 +1343,10 @@ class MLSGroup:
 		)
 
 		# Phase 2: compute confirmation_tag
-		_conf_tag = hmac.new(_conf_key, interim_hash, "sha256").digest()
-		transcript_hash = _compute_confirmed_transcript_hash(interim_hash, _conf_tag)
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
+
+		# Compute NEW interim_transcript_hash to store in MLSGroup
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
 
 		# Final GroupContext + epoch advance
 		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
@@ -1361,17 +1355,6 @@ class MLSGroup:
 			new_tree,
 			group_context=new_ctx.to_bytes(),
 		)
-
-		# Sign the commit
-		_framed_for_tbs = FramedContent(
-			group_id=new_ctx.group_id,
-			epoch=new_epoch_id,
-			sender_leaf_index=self.my_index,
-			authenticated_data=b"",
-			content=unsigned_body,
-		)
-		tbs = _make_framed_content_tbs(new_ctx, _framed_for_tbs)
-		signature = self.my_sig_key.sign(tbs)
 
 		update = GroupUpdate(
 			epoch_id=new_epoch_id,
@@ -1387,7 +1370,7 @@ class MLSGroup:
 			_confirmation_tag=_conf_tag,
 		)
 
-		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, confirmed_transcript_hash=transcript_hash)
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
 		return new_group, update
 
 	@classmethod
@@ -1473,17 +1456,14 @@ class MLSGroup:
 			tree=tree,
 			key_schedule=ks,
 		)
-		# P1-A: seed confirmed_transcript_hash from GroupInfo's GroupContext.
-		# gi_ctx.confirmed_transcript_hash is the transcript hash of the epoch the joiner
-		# is joining — exactly what all existing members have as their prior hash.
-		# Without this, join() would return a group with b"" and process_update() would
-		# compute a different interim_hash than the committer → signature mismatch.
+		# RFC 9420 §12.4.3: compute interim_transcript_hash using GroupInfo.confirmation_tag
+		new_interim = _compute_interim_transcript_hash(gi_ctx.confirmed_transcript_hash, gi.confirmation_tag)
 		return cls(
 			state,
 			my_index=my_index,
 			my_sig_key=my_sig_key,
 			my_kem_key=my_kem_key,
-			confirmed_transcript_hash=gi_ctx.confirmed_transcript_hash,
+			interim_transcript_hash=new_interim,
 		)
 
 	def process_update(self, update: GroupUpdate) -> "MLSGroup":
@@ -1505,7 +1485,7 @@ class MLSGroup:
 		if not isinstance(my_kp, LeafNode):
 			raise ValueError("My leaf node not found in tree")
 		# RFC 9420 §12.4.1: provisional GroupContext uses OLD confirmed_transcript_hash for HPKE
-		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, self.confirmed_transcript_hash)
+		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, self.interim_transcript_hash)
 		my_kp_ref = _make_kp_ref(my_kp.key_package)
 
 		commit_secret: bytes | None = None
@@ -1520,7 +1500,7 @@ class MLSGroup:
 					pos = resolved.index(self.my_index)
 					if pos < len(up_node.encrypted_path_secret):
 						ct = up_node.encrypted_path_secret[pos]
-						path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=group_ctx.to_bytes())
+						path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=_up_info(group_ctx.to_bytes()))
 						# Derive remaining path secrets to reach the root (commit_secret)
 						_ps = path_secret
 						for _ in range(len(direct) - node_i - 1):
@@ -1536,7 +1516,7 @@ class MLSGroup:
 				raise ValueError("Not invited to this epoch (KeyPackageRef not found in commit)")
 			enc_ct = update.encrypted_commit_secrets[my_kp_ref]
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
-			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=group_ctx.to_bytes())
+			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=_up_info(group_ctx.to_bytes()))
 
 		# 2. Recompute transcript hash using RFC §8.2 two-pass chain (P1-NEW-1)
 		_unsigned_body_v = (
@@ -1555,9 +1535,24 @@ class MLSGroup:
 		)
 		framed_content_bytes_v = _framed_v.to_bytes()
 
-		interim_hash_v = _compute_interim_transcript_hash(self.confirmed_transcript_hash, framed_content_bytes_v)
-		# Phase 1: derive only confirmation_key (no full provisional schedule)
-		_provisional_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, interim_hash_v)
+		# 3. Verify Signature
+		try:
+			old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
+			sig_key_bytes = committer_node.signature_key
+			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
+			tbs = _make_framed_content_tbs(old_ctx, _framed_v)
+			public_key.verify(update.signature, tbs)
+		except InvalidSignature:
+			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
+		except (ValueError, TypeError) as exc:
+			raise ValueError(f"Malformed update signature: {exc}") from exc
+
+		# P1-TH & P1-CTH: Transcript Hash Sequence
+		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes_v, update.signature)
+		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
+
+		# Phase 1: derive confirmation_key
+		_provisional_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
 		_conf_key = KeySchedule.derive_confirmation_key(
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
@@ -1565,27 +1560,11 @@ class MLSGroup:
 		)
 
 		# Phase 2: Compute confirmation_tag with NEW epoch key
-		_conf_tag = hmac.new(_conf_key, interim_hash_v, "sha256").digest()
-		transcript_hash = _compute_confirmed_transcript_hash(interim_hash_v, _conf_tag)
-		group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
 
-		# 3. Verify Signature
-		try:
-			sig_key_bytes = committer_node.signature_key
-			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
-			_framed_v_signed = FramedContent(
-				group_id=group_ctx_verify.group_id,
-				epoch=update.epoch_id,
-				sender_leaf_index=update.committer_index,
-				authenticated_data=b"",
-				content=_unsigned_body_v,
-			)
-			tbs = _make_framed_content_tbs(group_ctx_verify, _framed_v_signed)
-			public_key.verify(update.signature, tbs)
-		except InvalidSignature:
-			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
-		except (ValueError, TypeError) as exc:
-			raise ValueError(f"Malformed update signature: {exc}") from exc
+		# Compute NEW interim_transcript_hash to store in MLSGroup
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+		group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
 
 		# 4. Final epoch advance
 		next_state = self.state.advance_epoch(
@@ -1604,7 +1583,7 @@ class MLSGroup:
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
 		# P0-A: return new MLSGroup with transcript_hash propagated for next commit
-		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, confirmed_transcript_hash=transcript_hash)
+		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
 		"""RFC 9420 §9: Encrypt an application message using SecretTree (per-leaf, per-generation).
@@ -1676,7 +1655,7 @@ class MLSGroup:
 	def to_bytes(self) -> bytes:
 		"""Serializes the full state + my private keys (Danger Zone)."""
 		state_bytes = self.state.to_bytes()
-		cth = self.confirmed_transcript_hash
+		cth = self.interim_transcript_hash
 		return (
 			self.my_index.to_bytes(4, "big")
 			+ self.my_sig_key.private_bytes()
@@ -1706,4 +1685,4 @@ class MLSGroup:
 			offset += 2
 			cth = data[offset : offset + cth_len]
 			offset += cth_len
-		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, confirmed_transcript_hash=cth)
+		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=cth)
