@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from pure_mls.tls import (
 	read_opaque,
 	read_opaque32,
+	read_opaque_varint,
 	read_u8,
 	read_u16,
 	read_u32,
@@ -25,6 +26,7 @@ from pure_mls.tls import (
 	tls_u8,
 	tls_u16,
 	tls_u32,
+	tls_varint,
 )
 
 # §7.2 Credential
@@ -181,7 +183,7 @@ class LeafNode:
 			+ self.credential.to_bytes()
 			+ self.capabilities.to_bytes()
 			+ tls_u8(self.leaf_node_source)
-			+ (self.extensions or tls_u32(0))  # extensions<V> (empty = uint32 zero)
+			+ (tls_varint(len(self.extensions)) + self.extensions if self.extensions else tls_varint(0))  # extensions<V>
 		)
 		if self.leaf_node_source in (LEAF_NODE_SOURCE_UPDATE, LEAF_NODE_SOURCE_COMMIT):
 			tbs += tls_opaque(group_id) + tls_u32(leaf_index)
@@ -216,7 +218,7 @@ class LeafNode:
 			+ self.credential.to_bytes()  # Credential credential
 			+ self.capabilities.to_bytes()  # Capabilities capabilities
 			+ tls_u8(self.leaf_node_source)  # LeafNodeSource leaf_node_source
-			+ (self.extensions if self.extensions else tls_u32(0))  # extensions<V>
+			+ (tls_varint(len(self.extensions)) + self.extensions if self.extensions else tls_varint(0))  # extensions<V>
 			+ tls_opaque(self.signature)  # opaque signature<V>
 		)
 
@@ -233,8 +235,8 @@ class LeafNode:
 		credential, offset = Credential.from_bytes_at(data, offset)
 		capabilities, offset = Capabilities.from_bytes_at(data, offset)
 		leaf_node_source, offset = read_u8(data, offset)
-		# extensions<V> — read as raw bytes (uint32-prefixed)
-		ext_raw, offset = read_opaque32(data, offset)
+		# extensions<V> — read as raw bytes (varint-prefixed)
+		ext_raw, offset = read_opaque_varint(data, offset)
 		signature, offset = read_opaque(data, offset)
 		return cls(
 			encryption_key=encryption_key,

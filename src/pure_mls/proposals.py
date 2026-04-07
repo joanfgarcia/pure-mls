@@ -117,8 +117,7 @@ class PSKProposal:
 		psk_id_wire = (
 			b"\x01"  # psk_type = external
 			+ _opaque_varint(self.psk_id)
-			+ len(self.psk_nonce).to_bytes(1, "big")
-			+ self.psk_nonce
+			+ _opaque_varint(self.psk_nonce)
 		)
 		return tls_u16(ProposalType.PRE_SHARED_KEY) + _opaque_varint(psk_id_wire)
 
@@ -132,9 +131,7 @@ class PSKProposal:
 		_psk_type = psk_id_wire[inner]
 		inner += 1
 		psk_id, inner = read_opaque_varint(psk_id_wire, inner)
-		nonce_len = psk_id_wire[inner]
-		inner += 1
-		psk_nonce = psk_id_wire[inner : inner + nonce_len]
+		psk_nonce, inner = read_opaque_varint(psk_id_wire, inner)
 		return cls(psk_id=psk_id, psk_nonce=psk_nonce), offset
 
 

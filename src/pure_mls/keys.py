@@ -34,11 +34,11 @@ class SignatureKey:
 	@classmethod
 	def verify(cls, public_bytes: bytes, signature: bytes, message: bytes) -> bool:
 		"""Verifies a signature given raw public bytes."""
-		pub = ed25519.Ed25519PublicKey.from_public_bytes(public_bytes)
 		try:
+			pub = ed25519.Ed25519PublicKey.from_public_bytes(public_bytes)
 			pub.verify(signature, message)
 			return True
-		except InvalidSignature:
+		except (InvalidSignature, ValueError):
 			return False
 
 
@@ -79,5 +79,8 @@ class KemKey:
 		Diffie-Hellman Key Exchange.
 		Mixes local private key with peer's raw public key to derive the shared secret.
 		"""
-		peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_public_bytes)
-		return self._private_key.exchange(peer_pub)
+		try:
+			peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_public_bytes)
+			return self._private_key.exchange(peer_pub)
+		except ValueError as e:
+			raise InvalidSignature("Malformed KemKey bytes") from e

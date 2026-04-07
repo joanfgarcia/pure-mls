@@ -487,7 +487,7 @@ def _make_framed_content_tbs(group_ctx: GroupContext, framed: "FramedContent") -
 	"""
 	return (
 		tls_u16(0x0001)  # version = mls10
-		+ tls_u16(0x0002)  # wire_format = mls_public_message
+		+ tls_u16(0x0001)  # wire_format = mls_public_message
 		+ group_ctx.to_bytes()  # GroupContext (binds to epoch)
 		+ framed.to_bytes()  # FramedContent body
 	)
@@ -512,8 +512,8 @@ def _compute_confirmed_transcript_hash_input(
 	framed_content_bytes: bytes,
 	signature: bytes,
 ) -> bytes:
-	"""RFC 9420 §8.2 ConfirmedTranscriptHashInput struct.\n	WireFormat (2 bytes for mls_public_message = 0x0002) + FramedContent + signature.\n"""
-	return tls_u16(0x0002) + framed_content_bytes + tls_opaque(signature)
+	"""RFC 9420 §8.2 ConfirmedTranscriptHashInput struct."""
+	return tls_u16(0x0001) + framed_content_bytes + tls_opaque(signature)
 
 
 def _compute_confirmed_transcript_hash(
@@ -577,6 +577,7 @@ class GroupUpdate:
 	_group_ctx: "GroupContext | None" = None
 	_confirmation_key: bytes | None = None
 	_epoch_authenticator: bytes | None = None
+	_membership_key: bytes | None = None
 	_transcript_hash: bytes | None = None
 	# P0-02: confirmation_tag = HMAC(confirmation_key, transcript_hash) — set by add_member() for receiver-side verification
 	_confirmation_tag: bytes | None = None
@@ -684,6 +685,7 @@ class MLSMessage:
 			commit._group_ctx is not None
 			and commit._confirmation_key is not None
 			and commit._epoch_authenticator is not None
+			and commit._membership_key is not None
 			and commit._transcript_hash is not None
 		):
 			# Full RFC mode: proper confirmation_tag + membership_tag
@@ -691,7 +693,7 @@ class MLSMessage:
 				commit,
 				group_ctx=commit._group_ctx,
 				confirmation_key=commit._confirmation_key,
-				epoch_authenticator=commit._epoch_authenticator,
+				membership_key=commit._membership_key,
 				transcript_hash=commit._transcript_hash,
 			)
 		else:
@@ -707,7 +709,7 @@ class MLSMessage:
 				commit,
 				group_ctx=_dummy_ctx,
 				confirmation_key=b"\x00" * 32,
-				epoch_authenticator=b"\x00" * 32,
+				membership_key=b"\x00" * 32,
 				transcript_hash=b"\x00" * 32,
 			)
 		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
@@ -908,7 +910,7 @@ class PublicMessage:
 		update: "GroupUpdate",
 		group_ctx: "GroupContext",
 		confirmation_key: bytes,
-		epoch_authenticator: bytes,
+		membership_key: bytes,
 		transcript_hash: bytes,
 	) -> "PublicMessage":
 		"""Wrap a GroupUpdate as a RFC 9420 PublicMessage.
@@ -936,7 +938,7 @@ class PublicMessage:
 		)
 
 		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
-		membership_key = expand_with_label(epoch_authenticator, "membership", b"", 32)
+		# membership key from KeySchedule (P0-MK)
 		# PublicMessageTBS must match _make_framed_content_tbs
 		public_msg_tbs = _make_framed_content_tbs(group_ctx, framed)
 		mem_tag = hmac.new(membership_key, public_msg_tbs, "sha256").digest()
@@ -961,6 +963,7 @@ class MLSGroup:
 		my_kem_key: KemKey,
 		interim_transcript_hash: bytes = b"",
 	):
+		self._consumed_key_packages = set()
 		self.state = state
 		self.my_index = my_index
 		self.my_sig_key = my_sig_key
@@ -1037,6 +1040,13 @@ class MLSGroup:
 		Returns the updated Group, the Welcome for the joiner, and the Update for peers.
 		(Simplified: we just append to the tree, rebuild the direct path, and derive a new commit_secret).
 		"""
+		kp_ref = _make_kp_ref(key_package)
+		if not hasattr(self, "_consumed_key_packages"):
+			self._consumed_key_packages = set()
+		if kp_ref in self._consumed_key_packages:
+			raise ValueError("KeyPackage Replay: This KeyPackage has already been used in this instance.")
+		self._consumed_key_packages.add(kp_ref)
+
 		# 1. Expand tree by 1 leaf
 		new_num_leaves = self.state.tree.num_leaves + 1
 		new_tree = RatchetTree(num_leaves=new_num_leaves)
@@ -1178,6 +1188,7 @@ class MLSGroup:
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
 		)
 
 		# Phase 2: compute confirmation_tag with NEW epoch key
@@ -1255,6 +1266,7 @@ class MLSGroup:
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
+			_membership_key=next_state.key_schedule.membership_key,
 			_transcript_hash=transcript_hash,
 			_confirmation_tag=_conf_tag_sender,  # P0-02: carried for receiver-side verification
 		)
@@ -1340,6 +1352,7 @@ class MLSGroup:
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
 		)
 
 		# Phase 2: compute confirmation_tag
@@ -1366,6 +1379,7 @@ class MLSGroup:
 			_group_ctx=new_ctx,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
+			_membership_key=next_state.key_schedule.membership_key,
 			_transcript_hash=transcript_hash,
 			_confirmation_tag=_conf_tag,
 		)
@@ -1557,10 +1571,17 @@ class MLSGroup:
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
 		)
 
 		# Phase 2: Compute confirmation_tag with NEW epoch key
 		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
+
+		# P1-IH: Verify confirmation_tag BEFORE state mutation
+		if update._confirmation_tag is None:
+			raise ValueError("Confirmation tag absent — refusing to advance epoch (RFC §8.3 mandatory)")
+		if not hmac.compare_digest(_conf_tag, update._confirmation_tag):
+			raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
 
 		# Compute NEW interim_transcript_hash to store in MLSGroup
 		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
@@ -1572,14 +1593,6 @@ class MLSGroup:
 			update.tree,
 			group_context=group_ctx_verify.to_bytes(),
 		)
-
-		# P0-02: Verify confirmation_tag — RFC 9420 §8.3: every member MUST verify
-		# HMAC(confirmation_key, confirmed_transcript_hash) before accepting the epoch.
-		if update._confirmation_tag is None:
-			raise ValueError("Confirmation tag absent — refusing to advance epoch (RFC §8.3 mandatory)")
-		expected_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-		if not hmac.compare_digest(expected_tag, update._confirmation_tag):
-			raise ValueError("Confirmation tag mismatch — epoch desynchronization or replay attack (P0-02)")
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
 		# P0-A: return new MLSGroup with transcript_hash propagated for next commit

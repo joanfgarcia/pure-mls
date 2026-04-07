@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.2.0] - Unreleased
 
+### Fixed (B760 Re-Audit — Security Remediation, Final Round)
+- **[P0-WF] FramedContentTBS struct fix** (`group.py`):
+  Corrected `wire_format` mask from `0x0002` to `RFC 9420: 0x0001` (`MLS_PUBLIC_MESSAGE`).
+- **[P0-UP] LeafNode public key encapsulation** (`tree.py`):
+  Abstracted `LeafNode.public_key` to a `@property` explicitly mitigating TreeKEM HPKE parsing index bounds exceptions.
+- **[P0-VK] Cryptographic Validation** (`keys.py`):
+  All `from_public_bytes` signatures wrapped to translate unbounded PyCA `ValueError` exceptions into `InvalidSignature` mitigating DoS.
+- **[P0-MK] Direct membership_key threading** (`group.py`):
+  Abandoned out-of-spec `ExpandWithLabel(epoch_authenticator)`, strictly coupling `next_state.key_schedule.membership_key` directly into `GroupUpdate`.
+- **[P1-IH] Strict State Integrity validation** (`group.py`):
+  Confirmation Tag validation reordered to occur strictly *before* mutating epoch state via `advance_epoch()`.
+- **[P1-MW] Absolute Memory Zeroing** (`secret_tree.py`):
+  Deprecating GC limits, `SecretTree.wipe()` now zeroes secrets out of RAM using in-place `bytearray` slice mutations (`[:] = b"\\x00"`).
+- **[P1-KP] Prevent KeyPackage Replay** (`group.py`):
+  `add_member()` strictly checks local in-memory registry of consumed references to stop ephemeral collisions.
+- **[P1-PSK & P1-EXT] Standardizing VarInt Lengths** (`proposals.py`, `tree.py`):
+  `LeafNode` extensions and `PSKProposal` nonces now utilize TLS VarInt bindings for interoperability stringency.
+- **[P1-GD & POL] API Hygiene** (`epoch.py`, `group.py`, `tree.py`):
+  Deprecated insecure `group_context` initialization default. Stripped misleading structural comments favoring the standard *Sound of Silence* protocol.
+
 ### Fixed (B760 Re-Audit — Security Remediation, Rounds 6 & 7)
 - **[P1-TH] ConfirmedTranscriptHashInput structural fixes** (`group.py`):
   Integrated `ConfirmedTranscriptHashInput` struct with `WireFormat=0x0002` and signature for RFC 9420 compliance.

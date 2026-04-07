@@ -129,7 +129,8 @@ class SecretTree:
 
 	def wipe(self) -> None:
 		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy)."""
-		self.encryption_secret = b"\x00" * len(self.encryption_secret)
+		self.encryption_secret = bytearray(self.encryption_secret)
+		self.encryption_secret[:] = b"\x00" * len(self.encryption_secret)
 		self._ratchet_cache.clear()
 		self._generations.clear()
 		self._leaf_tip.clear()
