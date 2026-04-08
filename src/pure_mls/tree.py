@@ -690,6 +690,7 @@ class RatchetTree:
 	def _node_hash(self, index: int) -> bytes:
 		"""Internal recursive helper for tree_hash."""
 		node = self.nodes[index]
+		w = len(self.nodes)
 
 		if index % 2 == 0:  # Leaf
 			# TreeHashInput (type=1) + optional<LeafNode>
@@ -704,6 +705,12 @@ class RatchetTree:
 			lvl = self.level(index)
 			left_idx = index - (1 << (lvl - 1))
 			right_idx = index + (1 << (lvl - 1))
+
+			# LBBT: If right child is out of bounds, ratchet down the left path
+			# of the right subtree until we hit a node that exists.
+			while right_idx >= w:
+				lvl_r = self.level(right_idx)
+				right_idx = right_idx - (1 << (lvl_r - 1))
 
 			left_h = self._node_hash(left_idx)
 			right_h = self._node_hash(right_idx)
