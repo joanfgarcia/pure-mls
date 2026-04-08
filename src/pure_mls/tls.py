@@ -47,6 +47,11 @@ def tls_opaque32(data: bytes) -> bytes:
 	return struct.pack(">I", len(data)) + data
 
 
+def tls_opaque_varint(data: bytes) -> bytes:
+	"""Encode bytes as opaque<V> with MLS VarInt length prefix."""
+	return tls_varint(len(data)) + data
+
+
 # Decoding: Reader helpers
 # All return (value, new_offset)
 

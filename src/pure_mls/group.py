@@ -409,7 +409,7 @@ def _make_group_context(
 	confirmed_transcript_hash: bytes,
 ) -> GroupContext:
 	"""Build GroupContext for the given group state."""
-	tree_hash = hashlib.sha256(tree.to_bytes()).digest()
+	tree_hash = tree.tree_hash()
 	return GroupContext(
 		group_id=group_id,
 		epoch=epoch_id,

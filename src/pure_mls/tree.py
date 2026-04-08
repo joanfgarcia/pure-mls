@@ -9,6 +9,7 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 """
 
 import copy
+import hashlib
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
@@ -23,6 +24,7 @@ from pure_mls.tls import (
 	read_u32,
 	tls_opaque,
 	tls_opaque32,
+	tls_opaque_varint,
 	tls_u8,
 	tls_u16,
 	tls_u32,
@@ -675,3 +677,44 @@ class RatchetTree:
 			return self.resolution(left) + self.resolution(right)
 		unmerged = node.unmerged_leaves if isinstance(node, ParentNode) else []
 		return [index] + list(unmerged)
+
+	def tree_hash(self) -> bytes:
+		"""RFC 9420 §7.8: Recursive hash of the tree structure.
+
+		Returns the SHA-256 hash of the root node.
+		"""
+		if not self.nodes:
+			return hashlib.sha256(b"").digest()
+		return self._node_hash(self._root())
+
+	def _node_hash(self, index: int) -> bytes:
+		"""Internal recursive helper for tree_hash."""
+		node = self.nodes[index]
+
+		if index % 2 == 0:  # Leaf
+			# TreeHashInput (type=1) + optional<LeafNode>
+			res = b"\x01"
+			if node is None:
+				res += b"\x00"
+			else:
+				res += b"\x01" + node.to_bytes()
+			return hashlib.sha256(res).digest()
+		else:  # Parent
+			# TreeHashInput (type=2) + optional<ParentNode> + left_hash<V> + right_hash<V>
+			lvl = self.level(index)
+			left_idx = index - (1 << (lvl - 1))
+			right_idx = index + (1 << (lvl - 1))
+
+			left_h = self._node_hash(left_idx)
+			right_h = self._node_hash(right_idx)
+
+			res = b"\x02"
+			if node is None:
+				res += b"\x00"
+			else:
+				res += b"\x01" + node.to_bytes()
+
+			# Opaque hashes use project-standard VarInt prefix
+			res += tls_opaque_varint(left_h)
+			res += tls_opaque_varint(right_h)
+			return hashlib.sha256(res).digest()
