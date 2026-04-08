@@ -581,6 +581,7 @@ class GroupUpdate:
 	_transcript_hash: bytes | None = None
 	# P0-02: confirmation_tag = HMAC(confirmation_key, transcript_hash) — set by add_member() for receiver-side verification
 	_confirmation_tag: bytes | None = None
+	_membership_tag: bytes | None = None
 
 	def _body_bytes(self) -> bytes:
 		"""The unsigned Commit body (epoch + tree + secrets + committer_index)."""
@@ -948,6 +949,7 @@ class PublicMessage:
 	def to_group_update(self) -> "GroupUpdate":
 		update = GroupUpdate.from_bytes(self.content.content)
 		update._confirmation_tag = self.auth.confirmation_tag
+		update._membership_tag = self.membership_tag
 		return update
 
 
@@ -1449,7 +1451,7 @@ class MLSGroup:
 		my_index: int | None = None
 		for i, node in enumerate(tree.nodes):
 			if i % 2 == 0 and isinstance(node, LeafNode):
-				if node.signature_key == my_sig_pub:
+				if hmac.compare_digest(node.signature_key, my_sig_pub):
 					my_index = i
 					break
 		if my_index is None:
@@ -1562,6 +1564,12 @@ class MLSGroup:
 			raise ValueError("Commit Forgery Detected: Invalid Signature in update")
 		except (ValueError, TypeError) as exc:
 			raise ValueError(f"Malformed update signature: {exc}") from exc
+
+		# P1-N2: Verify membership_tag — proves sender was a group member (RFC §6.2)
+		if update._membership_tag is not None:
+			expected_mem_tag = hmac.new(self.state.key_schedule.membership_key, tbs, "sha256").digest()
+			if not hmac.compare_digest(expected_mem_tag, update._membership_tag):
+				raise ValueError("Membership tag mismatch — sender is not a current group member (P1-N2)")
 
 		# P1-TH & P1-CTH: Transcript Hash Sequence
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes_v, update.signature)

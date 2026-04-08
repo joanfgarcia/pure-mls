@@ -54,9 +54,9 @@ def test_subtree_hash_recursive_structure() -> None:
 	parent_pub = kp_a.init_key_pub  # arbitrary 32 bytes for the parent key
 	tree.set_parent(1, ParentNode(public_key=parent_pub, parent_hash=b""))
 
-	# Manually compute expected value
-	h_leaf0 = hashlib.sha256(kp_a.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(kp_b.to_bytes()).digest()
+	# Manually compute expected value (using leaf_node.key_package shim, same as _subtree_hash)
+	h_leaf0 = hashlib.sha256(kp_a.leaf_node.key_package.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(kp_b.leaf_node.key_package.to_bytes()).digest()
 	expected = hashlib.sha256(parent_pub + h_leaf0 + h_leaf1).digest()
 
 	assert _subtree_hash(tree, 1) == expected, "Root subtree hash must bind public_key + both child hashes"
@@ -72,8 +72,8 @@ def test_subtree_hash_blank_parent_no_public_key() -> None:
 	tree.set_leaf(2, kp_b.leaf_node)
 	# Parent at index 1 remains None (blank)
 
-	h_leaf0 = hashlib.sha256(kp_a.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(kp_b.to_bytes()).digest()
+	h_leaf0 = hashlib.sha256(kp_a.leaf_node.key_package.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(kp_b.leaf_node.key_package.to_bytes()).digest()
 	expected = hashlib.sha256(h_leaf0 + h_leaf1).digest()
 
 	assert _subtree_hash(tree, 1) == expected, "Blank parent must hash children without public key contribution"

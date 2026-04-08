@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[P1-4] KeyPackageRef wire-format alignment** (`tree.py`):
   Corrected `KeyPackage.to_bytes()` to use the outer `leaf_node_signature` instead of duplicating the inner `LeafNode.signature`, ensuring compliance with RFC 9420 §10.1 and stable hashing.
 
+### Fixed (B760 Opus Deep Scan — New Findings)
+- **[P0-N2] Constant-time key comparison in `join()`** (`group.py`):
+  Replaced `==` with `hmac.compare_digest()` for signature key comparison during leaf discovery, eliminating a timing side-channel that could leak the joiner's position in the tree.
+- **[P1-N2] Membership tag verification in `process_update()`** (`group.py`):
+  `PublicMessage.to_group_update()` now propagates `membership_tag` into `GroupUpdate._membership_tag`. `process_update()` verifies it via `hmac.compare_digest` against the current epoch's `membership_key`, completing the RFC 9420 §6.2 authentication triad (signature + confirmation_tag + membership_tag).
+
+
 
 
 
