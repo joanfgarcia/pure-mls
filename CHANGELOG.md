@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Corrected `wire_format` mask from `0x0002` to `RFC 9420: 0x0001` (`MLS_PUBLIC_MESSAGE`).
 - **[P0-2] RFC 9420 Welcome Nonce derivation** (`group.py`):
   Modified `add_member()` to use `KeySchedule.derive_welcome_nonce(joiner_secret)` for deterministic nonce generation per RFC 9420 §12.4, ensuring interoperability with OpenMLS.
+- **[P0-3] FramedContent epoch alignment** (`group.py`):
+  Fixed `add_member()`, `remove_member()`, and `process_update()` to use the current epoch ID (pre-advance) in `FramedContent` per RFC 9420 §6.1, correcting transcript hash divergence.
+
 
 - **[P0-UP] LeafNode public key encapsulation** (`tree.py`):
   Abstracted `LeafNode.public_key` to a `@property` explicitly mitigating TreeKEM HPKE parsing index bounds exceptions.

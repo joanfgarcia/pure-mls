@@ -1166,7 +1166,7 @@ class MLSGroup:
 		)
 		_framed_for_tbs = FramedContent(
 			group_id=self.group_id,
-			epoch=new_epoch_id,
+			epoch=self.state.epoch_id,
 			sender_leaf_index=self.my_index,
 			authenticated_data=b"",
 			content=_unsigned_body,
@@ -1330,7 +1330,7 @@ class MLSGroup:
 
 		framed_content = FramedContent(
 			group_id=self.group_id,
-			epoch=new_epoch_id,
+			epoch=self.state.epoch_id,
 			sender_leaf_index=self.my_index,
 			authenticated_data=b"",
 			content=unsigned_body,
@@ -1542,7 +1542,7 @@ class MLSGroup:
 		)
 		_framed_v = FramedContent(
 			group_id=self.group_id,
-			epoch=update.epoch_id,
+			epoch=self.state.epoch_id,
 			sender_leaf_index=update.committer_index,
 			authenticated_data=b"",
 			content=_unsigned_body_v,
