@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3.0] - Unreleased
+
+### Fixed (B760 Final Remediation — All Findings Closed)
+
+- **[P0-1] KeyPackage replay protection reset on epoch advance** (`group.py`):
+  `add_member()` and `remove_member()` now propagate `_consumed_key_packages`
+  into the new `MLSGroup` instance after epoch transitions. Previously the
+  replay protection set was silently reset to `set()` in `__init__()`, allowing
+  a replayed KeyPackage from epoch N to be accepted in epoch N+1.
+
+- **[P0-2] Null-key fallback in `wrap_commit()`** (`group.py`):
+  Replaced the `else` branch that produced predictable `b"\x00"*32` HMAC keys
+  (confirmation_key, membership_key) with `raise ValueError(...)`. Deserialized
+  `GroupUpdate` objects carry no epoch context and cannot produce valid
+  authentication tags. The confused-deputy attack surface is eliminated.
+
+- **[P1-2] FramedContent VarInt encoding** (`group.py`):
+  `to_bytes()`/`from_bytes()` now use `tls_opaque_varint()` for `group_id`
+  and `authenticated_data` per RFC 9420 §6.1 (`opaque group_id<V>`,
+  `opaque authenticated_data<V>`). Previously used `tls_opaque()` (uint16
+  prefix) which diverges from the MLS VarInt convention.
+
+- **[P1-3] GroupInfo ratchet tree via extension vector** (`group.py`):
+  Ratchet tree now encoded as RFC 9420 §12.4.3 extension (`ExtensionType
+  0x0004`) with VarInt prefix, replacing the raw `tls_opaque()` append.
+  `join()` parses the extension vector and falls back to legacy format
+  for backward compatibility with pre-3.0.3 Welcome messages.
+
+- **[P1-5] SecretTree.wipe() byte zeroing** (`secret_tree.py`):
+  `wipe()` now zeros `_leaf_tip` and `_ratchet_cache` secret bytes via
+  `bytearray` slice mutation before calling `.clear()`. Best-effort
+  defense-in-depth against cold-boot / memory-dump secret recovery.
+
+- **[P2-1] HashFunction typing** (`hkdf.py`):
+  Replaced `Callable[[], Any]` type alias with a proper PEP 544 `Protocol`
+  class providing structural subtyping for hashlib hash objects.
+
+- **[P2-3] ConfirmedTranscriptHashInput signature encoding** (`group.py`):
+  Changed signature field encoding from `tls_opaque()` (uint16) to
+  `tls_opaque_varint()` per RFC 9420 §8.2 (`opaque signature<V>`).
+
+### Dismissed (Auditor False Positive)
+
+- **[P1-1] HkdfLabel VarInt vs uint32 context encoding** — **NOT A BUG**.
+  The auditor claimed `opaque context<0..2^32-1>` required a 4-byte uint32
+  length prefix per TLS presentation language (RFC 8446 §3.4). However,
+  RFC 9420 §8 defines `KDFLabel` as `opaque label<V> + opaque context<V>`,
+  where `<V>` denotes MLS VarInt encoding (§2.1.2, based on RFC 9000 §16).
+  The current `varint_encode()` is RFC-correct. Verified against
+  [rfc-editor.org source text](https://www.rfc-editor.org/rfc/rfc9420.html#section-8).
+
+### Accepted (Unchanged)
+
+- **[P1-6] PSK HKDF salt/IKM order**: Code is correct per RFC 9420 §8.4 but
+  lacks IETF test vector coverage for multi-PSK scenarios. Deferred to
+  Phase 7 when PSK test vectors become available.
+- **[P2-2] AsyncEncryptedStore nonce uniqueness**: Birthday bound acceptable
+  for current usage (≤2^32 operations per key). Deferred.
+
 ## [3.0.2.0] - Unreleased
 
 ### Fixed (B760 Re-Audit — Security Remediation, Final Round)
