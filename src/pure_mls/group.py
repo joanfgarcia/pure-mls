@@ -1474,6 +1474,12 @@ class MLSGroup:
 			tree=tree,
 			key_schedule=ks,
 		)
+
+		# P1-N4: RFC 9420 §12.4.3.1 — joiner MUST verify confirmation_tag in GroupInfo
+		_expected_conf_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, "sha256").digest()
+		if not hmac.compare_digest(_expected_conf_tag, gi.confirmation_tag):
+			raise ValueError("GroupInfo confirmation_tag verification failed — forged Welcome or epoch mismatch (P1-N4)")
+
 		# RFC 9420 §12.4.3: compute interim_transcript_hash using GroupInfo.confirmation_tag
 		new_interim = _compute_interim_transcript_hash(gi_ctx.confirmed_transcript_hash, gi.confirmation_tag)
 		return cls(

@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Replaced `==` with `hmac.compare_digest()` for signature key comparison during leaf discovery, eliminating a timing side-channel that could leak the joiner's position in the tree.
 - **[P1-N2] Membership tag verification in `process_update()`** (`group.py`):
   `PublicMessage.to_group_update()` now propagates `membership_tag` into `GroupUpdate._membership_tag`. `process_update()` verifies it via `hmac.compare_digest` against the current epoch's `membership_key`, completing the RFC 9420 §6.2 authentication triad (signature + confirmation_tag + membership_tag).
+- **[P1-N4] Joiner confirmation_tag verification in `join()`** (`group.py`):
+  `join()` now verifies `GroupInfo.confirmation_tag` against `HMAC(confirmation_key, confirmed_transcript_hash)` before accepting the epoch, per RFC 9420 §12.4.3.1. Previously the tag was consumed to compute `interim_transcript_hash` without verification, allowing a forged Welcome to silently poison the joiner's transcript state.
 
 ### Known/Accepted (B760 Opus Deep Scan)
 - **[P0-N1] HPKE AAD parameter unused in TreeKEM/Welcome seals** (`group.py`):
