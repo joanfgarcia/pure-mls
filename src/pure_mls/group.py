@@ -1671,6 +1671,9 @@ class MLSGroup:
 		"""Serializes the full state + my private keys (Danger Zone)."""
 		state_bytes = self.state.to_bytes()
 		cth = self.interim_transcript_hash
+		# P1-3: Serialize _consumed_key_packages to prevent replay attacks after restart
+		consumed_list = sorted(list(self._consumed_key_packages))
+		consumed_bytes = b"".join(tls_opaque(ref) for ref in consumed_list)
 		return (
 			self.my_index.to_bytes(4, "big")
 			+ self.my_sig_key.private_bytes()
@@ -1679,6 +1682,7 @@ class MLSGroup:
 			+ state_bytes
 			+ len(cth).to_bytes(2, "big")
 			+ cth
+			+ tls_opaque32(consumed_bytes)
 		)
 
 	@classmethod
@@ -1700,4 +1704,15 @@ class MLSGroup:
 			offset += 2
 			cth = data[offset : offset + cth_len]
 			offset += cth_len
-		return cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=cth)
+
+		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=cth)
+
+		# P1-3: Deserialize consumed key packages if present
+		if offset < len(data):
+			consumed_raw, offset = read_opaque32(data, offset)
+			c_offset = 0
+			while c_offset < len(consumed_raw):
+				ref, c_offset = read_opaque(consumed_raw, c_offset)
+				group._consumed_key_packages.add(ref)
+
+		return group

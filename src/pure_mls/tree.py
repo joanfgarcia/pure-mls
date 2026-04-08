@@ -317,7 +317,7 @@ class KeyPackage:
 			+ tls_opaque(self.init_key_pub)  # HPKEPublicKey init_key<V>
 			+ self.leaf_node.to_bytes()  # LeafNode leaf_node
 			+ tls_u32(0)  # extensions<V> empty
-			+ tls_opaque(self.leaf_node.signature)  # signature<V>
+			+ tls_opaque(self.leaf_node_signature)  # signature<V>
 		)
 
 	@classmethod

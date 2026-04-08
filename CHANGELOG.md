@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Modified `PublicMessage.to_group_update()` to extract and propagate the `confirmation_tag` from the wire framing into the `GroupUpdate` state, enabling receiver-side transcript verification.
 - **[P1-1] Recursive Tree Hash implementation** (`tree.py`, `group.py`, `tls.py`):
   Implemented RFC 9420 §7.8 recursive tree hashing in `RatchetTree.tree_hash()` and updated `_make_group_context()` to use it, replacing the non-compliant flat hash. Added `tls_opaque_varint()` helper.
+- **[P1-3] MLSGroup state persistence hardening** (`group.py`):
+  Now serializes `_consumed_key_packages` in `to_bytes()`/`from_bytes()`, ensuring replay attack protection persists across instance restarts.
+- **[P1-4] KeyPackageRef wire-format alignment** (`tree.py`):
+  Corrected `KeyPackage.to_bytes()` to use the outer `leaf_node_signature` instead of duplicating the inner `LeafNode.signature`, ensuring compliance with RFC 9420 §10.1 and stable hashing.
+
 
 
 
