@@ -1229,7 +1229,7 @@ class MLSGroup:
 		# 4b. Encrypt GroupInfo → encrypted_group_info (egi)
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret)
-		welcome_nonce_enc = os.urandom(12)
+		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret)  # RFC 9420 §12.4
 		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
 		egi = welcome_nonce_enc + gi_ct  # nonce(12) || ciphertext
