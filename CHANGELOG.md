@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PublicMessage.to_group_update()` now propagates `membership_tag` into `GroupUpdate._membership_tag`. `process_update()` verifies it via `hmac.compare_digest` against the current epoch's `membership_key`, completing the RFC 9420 §6.2 authentication triad (signature + confirmation_tag + membership_tag).
 - **[P1-N4] Joiner confirmation_tag verification in `join()`** (`group.py`):
   `join()` now verifies `GroupInfo.confirmation_tag` against `HMAC(confirmation_key, confirmed_transcript_hash)` before accepting the epoch, per RFC 9420 §12.4.3.1. Previously the tag was consumed to compute `interim_transcript_hash` without verification, allowing a forged Welcome to silently poison the joiner's transcript state.
+- **[P2-N1] Forward secrecy wipe on committer-side epoch transitions** (`group.py`):
+  `add_member()` and `remove_member()` now call `_wipe_secret_tree()` before constructing the new `MLSGroup`. Previously only `process_update()` wiped; committer-side transitions left old epoch `SecretTree` key material in memory until Python GC collected it.
 
 ### Known/Accepted (B760 Opus Deep Scan)
 - **[P0-N1] HPKE AAD parameter unused in TreeKEM/Welcome seals** (`group.py`):

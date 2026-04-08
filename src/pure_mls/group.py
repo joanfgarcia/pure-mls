@@ -1277,6 +1277,7 @@ class MLSGroup:
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
 		# P0-A: propagate interim_transcript_hash to new epoch for next commit's HPKE info
+		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
 		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, interim_transcript_hash=new_interim)
 		return new_group, welcome, update
 
@@ -1388,6 +1389,7 @@ class MLSGroup:
 			_confirmation_tag=_conf_tag,
 		)
 
+		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
 		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
 		return new_group, update
 
