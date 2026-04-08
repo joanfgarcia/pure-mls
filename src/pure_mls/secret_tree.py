@@ -128,9 +128,24 @@ class SecretTree:
 		return key, nonce
 
 	def wipe(self) -> None:
-		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy)."""
-		self.encryption_secret = bytearray(self.encryption_secret)
-		self.encryption_secret[:] = b"\x00" * len(self.encryption_secret)
+		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy).
+
+		Best-effort zeroing: CPython bytes are immutable, so we create
+		mutable bytearray copies and zero them.  The original bytes objects
+		survive until GC, but this reduces the window for cold-boot attacks.
+		"""
+		# Zero encryption_secret
+		_enc = bytearray(self.encryption_secret)
+		_enc[:] = b"\x00" * len(_enc)
+		self.encryption_secret = bytes(_enc)
+		# P1-5: zero each cached leaf-tip secret before discarding
+		for _gen, tip_secret in self._leaf_tip.values():
+			_s = bytearray(tip_secret)
+			_s[:] = b"\x00" * len(_s)
+		# P1-5: zero each ratchet-cache secret before discarding
+		for secret in self._ratchet_cache.values():
+			_s = bytearray(secret)
+			_s[:] = b"\x00" * len(_s)
 		self._ratchet_cache.clear()
 		self._generations.clear()
 		self._leaf_tip.clear()

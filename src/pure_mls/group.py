@@ -698,20 +698,13 @@ class MLSMessage:
 				transcript_hash=commit._transcript_hash,
 			)
 		else:
-			# Deserialized GroupUpdate (no context): use placeholder values
-			# (interop with peers that don't use pure-mls wrap_commit)
-			_dummy_ctx = GroupContext(
-				group_id=b"",
-				epoch=commit.epoch_id,
-				tree_hash=b"\x00" * 32,
-				confirmed_transcript_hash=b"\x00" * 32,
-			)
-			pm = PublicMessage.from_group_update(
-				commit,
-				group_ctx=_dummy_ctx,
-				confirmation_key=b"\x00" * 32,
-				membership_key=b"\x00" * 32,
-				transcript_hash=b"\x00" * 32,
+			# P0-2: Deserialized GroupUpdate carries no epoch context — cannot produce
+			# valid confirmation_tag or membership_tag. Raise rather than silently
+			# degrade to predictable b"\x00"*32 HMAC keys.
+			raise ValueError(
+				"wrap_commit() requires a GroupUpdate produced by add_member() or "
+				"remove_member(); deserialized GroupUpdate objects carry no epoch key "
+				"material and cannot be re-wrapped."
 			)
 		return cls(wire_format=WireFormat.MLS_PUBLIC_MESSAGE, body=pm.to_bytes())
 
@@ -1279,6 +1272,7 @@ class MLSGroup:
 		# P0-A: propagate interim_transcript_hash to new epoch for next commit's HPKE info
 		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
 		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, interim_transcript_hash=new_interim)
+		new_group._consumed_key_packages = set(self._consumed_key_packages)  # P0-1: propagate replay protection across epoch
 		return new_group, welcome, update
 
 	def remove_member(self, target_leaf_index: int) -> tuple["MLSGroup", "GroupUpdate"]:
@@ -1391,6 +1385,7 @@ class MLSGroup:
 
 		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
 		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
+		new_group._consumed_key_packages = set(self._consumed_key_packages)  # P0-1: propagate replay protection across epoch
 		return new_group, update
 
 	@classmethod
