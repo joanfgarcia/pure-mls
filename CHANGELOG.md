@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Modified `add_member()` to use `KeySchedule.derive_welcome_nonce(joiner_secret)` for deterministic nonce generation per RFC 9420 §12.4, ensuring interoperability with OpenMLS.
 - **[P0-3] FramedContent epoch alignment** (`group.py`):
   Fixed `add_member()`, `remove_member()`, and `process_update()` to use the current epoch ID (pre-advance) in `FramedContent` per RFC 9420 §6.1, correcting transcript hash divergence.
+- **[P0-1] Confirmation tag population** (`group.py`):
+  Modified `PublicMessage.to_group_update()` to extract and propagate the `confirmation_tag` from the wire framing into the `GroupUpdate` state, enabling receiver-side transcript verification.
+
 
 
 - **[P0-UP] LeafNode public key encapsulation** (`tree.py`):

@@ -946,7 +946,9 @@ class PublicMessage:
 		return cls(content=framed, auth=auth, membership_tag=mem_tag)
 
 	def to_group_update(self) -> "GroupUpdate":
-		return GroupUpdate.from_bytes(self.content.content)
+		update = GroupUpdate.from_bytes(self.content.content)
+		update._confirmation_tag = self.auth.confirmation_tag
+		return update
 
 
 class MLSGroup:
