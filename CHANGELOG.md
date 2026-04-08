@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known/Accepted (B760 Opus Deep Scan)
 - **[P0-N1] HPKE AAD parameter unused in TreeKEM/Welcome seals** (`group.py`):
   All `HPKE.seal/open` calls use empty AAD (`b""`). RFC 9420 uses the `info` parameter (not AAD) for domain separation in these operations. Adding AAD would break interoperability with OpenMLS and other RFC-conforming implementations. Accepted as defense-in-depth trade-off; deferred pending upstream adoption.
+- **[P1-N1] HPKE LabeledExtract salt alignment** (`hpke.py`):
+  Replaced `None` sentinel with `b""` (empty bytes) in all `_kem_extract` and `_labeled_extract` calls. RFC 9180 §4.1/§5.1 specifies empty-string salt; `None` mapped to `0^Nh` via HKDF fallback (functionally identical for HKDF-SHA256, but now matches spec text verbatim).
+- **[P1-N3] Welcome `encrypted_group_info` nonce coupling** (informational):
+  The AES-GCM nonce for GroupInfo encryption is prepended in cleartext within `egi`, which then flows into the HPKE `info` parameter for `EncryptedGroupSecrets`. This coupling is by-design (RFC 9420 §12.4 treats `encrypted_group_info` as opaque). The nonce-reuse risk is fully mitigated by P0-2 (deterministic `derive_welcome_nonce`). No code change required.
 
 
 

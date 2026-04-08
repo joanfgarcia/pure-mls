@@ -59,13 +59,13 @@ class HPKE:
 
 		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
 		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
-		prk_kem = HPKE._kem_extract(None, b"eae_prk", dh)
+		prk_kem = HPKE._kem_extract(b"", b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
@@ -88,13 +88,13 @@ class HPKE:
 
 		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
 		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
-		prk_kem = HPKE._kem_extract(None, b"eae_prk", dh)
+		prk_kem = HPKE._kem_extract(b"", b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
 		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
