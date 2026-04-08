@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[P1-N2] Membership tag verification in `process_update()`** (`group.py`):
   `PublicMessage.to_group_update()` now propagates `membership_tag` into `GroupUpdate._membership_tag`. `process_update()` verifies it via `hmac.compare_digest` against the current epoch's `membership_key`, completing the RFC 9420 §6.2 authentication triad (signature + confirmation_tag + membership_tag).
 
+### Known/Accepted (B760 Opus Deep Scan)
+- **[P0-N1] HPKE AAD parameter unused in TreeKEM/Welcome seals** (`group.py`):
+  All `HPKE.seal/open` calls use empty AAD (`b""`). RFC 9420 uses the `info` parameter (not AAD) for domain separation in these operations. Adding AAD would break interoperability with OpenMLS and other RFC-conforming implementations. Accepted as defense-in-depth trade-off; deferred pending upstream adoption.
+
 
 
 
