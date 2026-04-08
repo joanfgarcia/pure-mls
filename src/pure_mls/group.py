@@ -27,6 +27,7 @@ from pure_mls.tls import (
 	read_u64,
 	tls_opaque,
 	tls_opaque32,
+	tls_opaque_varint,
 	tls_u8,
 	tls_u16,
 	tls_u32,
@@ -512,8 +513,11 @@ def _compute_confirmed_transcript_hash_input(
 	framed_content_bytes: bytes,
 	signature: bytes,
 ) -> bytes:
-	"""RFC 9420 §8.2 ConfirmedTranscriptHashInput struct."""
-	return tls_u16(0x0001) + framed_content_bytes + tls_opaque(signature)
+	"""RFC 9420 §8.2 ConfirmedTranscriptHashInput struct.
+
+	wire_format(u16) + FramedContent + opaque signature<V>
+	"""
+	return tls_u16(0x0001) + framed_content_bytes + tls_opaque_varint(signature)
 
 
 def _compute_confirmed_transcript_hash(
@@ -824,12 +828,13 @@ class FramedContent:
 	CONTENT_TYPE_COMMIT = 0x03
 
 	def to_bytes(self) -> bytes:
+		# RFC 9420 §6.1: group_id<V> and authenticated_data<V> are VarInt-prefixed
 		return (
-			tls_opaque(self.group_id)
+			tls_opaque_varint(self.group_id)
 			+ tls_u64(self.epoch)
 			+ tls_u8(0x01)  # SenderType = member
 			+ tls_u32(self.sender_leaf_index)
-			+ tls_opaque(self.authenticated_data)
+			+ tls_opaque_varint(self.authenticated_data)
 			+ tls_u8(self.CONTENT_TYPE_COMMIT)
 			+ tls_opaque32(self.content)
 		)
@@ -837,13 +842,13 @@ class FramedContent:
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "FramedContent":
 		offset = 0
-		group_id, offset = read_opaque(data, offset)
+		group_id, offset = read_opaque_varint(data, offset)  # opaque group_id<V>
 		epoch, offset = read_u64(data, offset)
 		sender_type, offset = read_u8(data, offset)
 		if sender_type != 0x01:
 			raise ValueError(f"Unsupported SenderType: {sender_type:#04x}")
 		sender_leaf_index, offset = read_u32(data, offset)
-		authenticated_data, offset = read_opaque(data, offset)
+		authenticated_data, offset = read_opaque_varint(data, offset)  # opaque authenticated_data<V>
 		content_type, offset = read_u8(data, offset)
 		if content_type != cls.CONTENT_TYPE_COMMIT:
 			raise ValueError(f"Unsupported ContentType: {content_type:#04x}")
@@ -1227,7 +1232,13 @@ class MLSGroup:
 		joiner_secret = next_state.key_schedule.joiner_secret
 		welcome_key = KeySchedule.derive_welcome_key(joiner_secret)
 		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret)  # RFC 9420 §12.4
-		gi_plaintext = group_info.to_bytes() + tls_opaque(new_tree.to_bytes())
+		# P1-3: RFC 9420 §12.4.3 — ratchet tree delivered inside GroupInfo extensions
+		# as ExtensionType 0x0004, VarInt-prefixed
+		tree_raw = new_tree.to_bytes()
+		ext_data = tls_opaque_varint(tree_raw)  # extension data = opaque<V> tree
+		ext_entry = tls_u16(0x0004) + tls_opaque_varint(ext_data)  # type(u16) + data<V>
+		ext_vec = tls_opaque_varint(ext_entry)  # extensions<V>
+		gi_plaintext = group_info.to_bytes() + ext_vec
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
 		egi = welcome_nonce_enc + gi_ct  # nonce(12) || ciphertext
 
@@ -1427,12 +1438,27 @@ class MLSGroup:
 		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
 		gi_bytes = AESGCM(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
 
-		# 3. Parse signed GroupInfo and ratchet tree
+		# 3. Parse signed GroupInfo + ratchet_tree extension (P1-3: RFC §12.4.3)
 		gi = GroupInfo.from_bytes(gi_bytes)
 		gi_ctx = gi.group_context
 		gi_bytes_len = len(gi.to_bytes())
-		tree_bytes, _ = read_opaque(gi_bytes, gi_bytes_len)
-		tree = RatchetTree.from_bytes(tree_bytes)
+		# Parse extensions vector: opaque<V> containing Extension entries
+		tree: RatchetTree | None = None
+		ext_vec_data, ext_end = read_opaque_varint(gi_bytes, gi_bytes_len)
+		ext_offset = 0
+		while ext_offset < len(ext_vec_data):
+			ext_type, ext_offset = read_u16(ext_vec_data, ext_offset)
+			ext_body, ext_offset = read_opaque_varint(ext_vec_data, ext_offset)
+			if ext_type == 0x0004:  # ratchet_tree
+				tree_data, _ = read_opaque_varint(ext_body, 0)
+				tree = RatchetTree.from_bytes(tree_data)
+		if tree is None:
+			# Fallback: try legacy format (raw opaque append for backward compat)
+			try:
+				tree_bytes, _ = read_opaque(gi_bytes, gi_bytes_len)
+				tree = RatchetTree.from_bytes(tree_bytes)
+			except Exception:
+				raise ValueError("ratchet_tree extension absent from GroupInfo")
 
 		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
 		committer_node = tree.get_node(gi.signer)

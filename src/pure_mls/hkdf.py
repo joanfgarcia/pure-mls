@@ -1,8 +1,23 @@
 import hashlib
 import hmac
-from typing import Any, Callable
+from typing import Protocol
 
-HashFunction = Callable[[], Any]
+
+class _HashObj(Protocol):
+	"""Protocol for hashlib hash objects (PEP 544)."""
+
+	digest_size: int
+
+	def update(self, data: bytes, /) -> None: ...
+	def digest(self) -> bytes: ...
+	def copy(self) -> "_HashObj": ...
+
+
+class HashFunction(Protocol):
+	"""Callable that returns a fresh hashlib-compatible hash object."""
+
+	def __call__(self) -> _HashObj: ...
+
 
 # MLS suite identifier prefix (RFC 9420 §8)
 MLS_SUITE_ID = b"MLS 1.0 "
