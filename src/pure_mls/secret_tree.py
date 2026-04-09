@@ -75,7 +75,6 @@ class SecretTree:
 	encryption_secret: bytearray  # P2-1: mutable — allows in-place zeroing
 	n_leaves: int
 	_generations: dict[int, int] = field(default_factory=dict)
-	_ratchet_cache: dict[tuple[int, int], bytes] = field(default_factory=dict)
 	_leaf_tip: dict[int, tuple[int, bytearray]] = field(default_factory=dict)
 
 	def _leaf_node_secret(self, leaf_index: int) -> bytes:
@@ -87,9 +86,6 @@ class SecretTree:
 
 		gen_N_secret = ExpandWithLabel(gen_N-1_secret, "application", I2OSP(N, 4), NH)
 		"""
-		key = (leaf_index, generation)
-		if key in self._ratchet_cache:
-			return bytearray(self._ratchet_cache.pop(key))
 		tip_gen, tip_secret = self._leaf_tip.get(leaf_index, (-1, bytearray(b"")))
 		if tip_gen == generation:
 			return tip_secret
@@ -143,11 +139,6 @@ class SecretTree:
 		# Zero each cached leaf-tip secret in-place
 		for _gen, tip_secret in self._leaf_tip.values():
 			tip_secret[:] = b"\x00" * len(tip_secret)
-		# Zero each ratchet-cache secret (still bytes — create bytearray to zero)
-		for secret in self._ratchet_cache.values():
-			_s = bytearray(secret)
-			_s[:] = b"\x00" * len(_s)
-		self._ratchet_cache.clear()
 		self._generations.clear()
 		self._leaf_tip.clear()
 
