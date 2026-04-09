@@ -63,11 +63,7 @@ def test_subtree_hash_recursive_structure() -> None:
 	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
 	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
 	# Parent: SHA-256(0x02 || 0x01 || parent.to_bytes() || left<V> || right<V>)
-	expected = hashlib.sha256(
-		b"\x02\x01" + parent_node.to_bytes()
-		+ tls_opaque_varint(h_leaf0)
-		+ tls_opaque_varint(h_leaf1)
-	).digest()
+	expected = hashlib.sha256(b"\x02\x01" + parent_node.to_bytes() + tls_opaque_varint(h_leaf0) + tls_opaque_varint(h_leaf1)).digest()
 
 	assert _subtree_hash(tree, 1) == expected, "Root subtree hash must use RFC §7.8 TreeHashInput format"
 
@@ -88,11 +84,7 @@ def test_subtree_hash_blank_parent_no_public_key() -> None:
 	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
 	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
 	# Blank parent: SHA-256(0x02 || 0x00 || left<V> || right<V>)
-	expected = hashlib.sha256(
-		b"\x02\x00"
-		+ tls_opaque_varint(h_leaf0)
-		+ tls_opaque_varint(h_leaf1)
-	).digest()
+	expected = hashlib.sha256(b"\x02\x00" + tls_opaque_varint(h_leaf0) + tls_opaque_varint(h_leaf1)).digest()
 
 	assert _subtree_hash(tree, 1) == expected, "Blank parent must use RFC §7.8 TreeHashInput with absent marker"
 
