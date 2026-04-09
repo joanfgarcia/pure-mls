@@ -4,8 +4,7 @@ import os
 import struct
 import warnings as _warnings
 from dataclasses import dataclass, field
-from enum import IntEnum
-from typing import Any, List, Optional
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519

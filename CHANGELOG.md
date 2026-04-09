@@ -940,6 +940,9 @@ derivation than phase6 — clients must update together if migrating existing gr
 - **[SECURITY] SEC-MED-02** `decrypt_application_message` bare catch masked AES-GCM origin: catch narrowed to `cryptography.exceptions.InvalidTag`.
 
 ### Added
+- **RFC 9420 Didactic Guide**: Created `docs/02_THE_MLS_JOURNEY.md` explaining the "Ghost in the Shell" lore for MLS group phases.
+- **IETF Interoperability Suite**: Added `tests/test_ietf_vectors.py` with 53 passing vectors.
+- **MLS Extensions Support**: Initial framework in `src/pure_mls/extensions.py`.
 - **[QA] RFC 9420 Test Vectors**: `tests/test_rfc9420_vectors.py` — 5 canonical tests validating HKDF-Extract zero-vector, ExpandWithLabel idempotency, domain separation, pure-mls HKDF parity, and KeyPackageRef 32-byte length. Satisfies CONTRIBUTING.md mandatory requirement.
 
 ### Changed
