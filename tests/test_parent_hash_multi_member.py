@@ -36,14 +36,17 @@ def _make_member() -> tuple[SignatureKey, KemKey, KeyPackage]:
 
 
 def test_subtree_hash_recursive_structure() -> None:
-	"""_subtree_hash for a non-blank parent must combine public_key + children hashes.
+	"""_subtree_hash for a non-blank parent must use RFC §7.8 TreeHashInput format.
 
 	Tree layout (2-leaf LBBT):
 		Nodes: [Leaf0(idx=0), Parent(idx=1), Leaf1(idx=2)]
 		Root  = node 1
 
-	Expected root hash = SHA-256(parent.public_key + h(leaf0_kp) + h(leaf1_kp))
+	P1-2 audit fix: _subtree_hash now delegates to tree._node_hash() which
+	implements RFC §7.8 TreeHashInput (typed prefix + optional<Node> + VarInt child hashes).
 	"""
+	from pure_mls.tls import tls_opaque_varint
+
 	tree = RatchetTree(num_leaves=2)
 	_, kem_a, kp_a = _make_member()
 	_, kem_b, kp_b = _make_member()
@@ -52,18 +55,27 @@ def test_subtree_hash_recursive_structure() -> None:
 	tree.set_leaf(2, kp_b.leaf_node)
 
 	parent_pub = kp_a.init_key_pub  # arbitrary 32 bytes for the parent key
-	tree.set_parent(1, ParentNode(public_key=parent_pub, parent_hash=b""))
+	parent_node = ParentNode(public_key=parent_pub, parent_hash=b"")
+	tree.set_parent(1, parent_node)
 
-	# Manually compute expected value (using leaf_node.key_package shim, same as _subtree_hash)
-	h_leaf0 = hashlib.sha256(kp_a.leaf_node.key_package.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(kp_b.leaf_node.key_package.to_bytes()).digest()
-	expected = hashlib.sha256(parent_pub + h_leaf0 + h_leaf1).digest()
+	# RFC §7.8 TreeHashInput format:
+	# Leaf: SHA-256(0x01 || 0x01 || leaf.to_bytes())
+	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
+	# Parent: SHA-256(0x02 || 0x01 || parent.to_bytes() || left<V> || right<V>)
+	expected = hashlib.sha256(
+		b"\x02\x01" + parent_node.to_bytes()
+		+ tls_opaque_varint(h_leaf0)
+		+ tls_opaque_varint(h_leaf1)
+	).digest()
 
-	assert _subtree_hash(tree, 1) == expected, "Root subtree hash must bind public_key + both child hashes"
+	assert _subtree_hash(tree, 1) == expected, "Root subtree hash must use RFC §7.8 TreeHashInput format"
 
 
 def test_subtree_hash_blank_parent_no_public_key() -> None:
-	"""A blank (None) parent node contributes only its children hashes, no public key."""
+	"""A blank (None) parent node uses RFC §7.8 TreeHashInput with optional<Node>=0x00."""
+	from pure_mls.tls import tls_opaque_varint
+
 	tree = RatchetTree(num_leaves=2)
 	_, _, kp_a = _make_member()
 	_, _, kp_b = _make_member()
@@ -72,11 +84,17 @@ def test_subtree_hash_blank_parent_no_public_key() -> None:
 	tree.set_leaf(2, kp_b.leaf_node)
 	# Parent at index 1 remains None (blank)
 
-	h_leaf0 = hashlib.sha256(kp_a.leaf_node.key_package.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(kp_b.leaf_node.key_package.to_bytes()).digest()
-	expected = hashlib.sha256(h_leaf0 + h_leaf1).digest()
+	# RFC §7.8 TreeHashInput:
+	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
+	# Blank parent: SHA-256(0x02 || 0x00 || left<V> || right<V>)
+	expected = hashlib.sha256(
+		b"\x02\x00"
+		+ tls_opaque_varint(h_leaf0)
+		+ tls_opaque_varint(h_leaf1)
+	).digest()
 
-	assert _subtree_hash(tree, 1) == expected, "Blank parent must hash children without public key contribution"
+	assert _subtree_hash(tree, 1) == expected, "Blank parent must use RFC §7.8 TreeHashInput with absent marker"
 
 
 # ---------------------------------------------------------------------------

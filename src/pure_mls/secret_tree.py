@@ -67,35 +67,39 @@ class SecretTree:
 	Holds next-to-use generation for each leaf. Derives keys on demand
 	and advances the generation counter to enforce forward secrecy.
 	Uses RFC §9.3 binary-tree derivation for IETF vector compliance.
+
+	P2-1 audit: encryption_secret stored as mutable bytearray from creation,
+	enabling in-place zeroing in wipe() without the copy-and-discard pattern.
 	"""
 
-	encryption_secret: bytes
+	encryption_secret: bytearray  # P2-1: mutable — allows in-place zeroing
 	n_leaves: int
 	_generations: dict[int, int] = field(default_factory=dict)
 	_ratchet_cache: dict[tuple[int, int], bytes] = field(default_factory=dict)
-	_leaf_tip: dict[int, tuple[int, bytes]] = field(default_factory=dict)
+	_leaf_tip: dict[int, tuple[int, bytearray]] = field(default_factory=dict)
 
 	def _leaf_node_secret(self, leaf_index: int) -> bytes:
 		"""RFC §9.3: root -> binary-tree path -> leaf node secret."""
-		return _derive_leaf_node_secret(self.encryption_secret, leaf_index, self.n_leaves)
+		return _derive_leaf_node_secret(bytes(self.encryption_secret), leaf_index, self.n_leaves)
 
-	def _leaf_secret_for_gen(self, leaf_index: int, generation: int) -> bytes:
+	def _leaf_secret_for_gen(self, leaf_index: int, generation: int) -> bytearray:
 		"""RFC §9.3: leaf_node_secret ratcheted to the given generation.
 
 		gen_N_secret = ExpandWithLabel(gen_N-1_secret, "application", I2OSP(N, 4), NH)
 		"""
 		key = (leaf_index, generation)
 		if key in self._ratchet_cache:
-			return self._ratchet_cache.pop(key)
-		tip_gen, tip_secret = self._leaf_tip.get(leaf_index, (-1, b""))
+			return bytearray(self._ratchet_cache.pop(key))
+		tip_gen, tip_secret = self._leaf_tip.get(leaf_index, (-1, bytearray(b"")))
 		if tip_gen == generation:
 			return tip_secret
 		start_gen = tip_gen + 1 if tip_gen >= 0 else 0
-		secret = tip_secret if tip_gen >= 0 else self._leaf_node_secret(leaf_index)
+		secret = bytes(tip_secret) if tip_gen >= 0 else self._leaf_node_secret(leaf_index)
 		for gen in range(start_gen, generation + 1):
 			secret = expand_with_label(secret, "application", gen.to_bytes(4, "big"), _NH)
-		self._leaf_tip[leaf_index] = (generation, secret)
-		return secret
+		result = bytearray(secret)
+		self._leaf_tip[leaf_index] = (generation, result)
+		return result
 
 	def get_key_and_nonce(self, leaf_index: int) -> tuple[bytes, bytes, int]:
 		"""Derive (content_key, content_nonce, generation) for the next message from leaf_index.
@@ -106,8 +110,8 @@ class SecretTree:
 		"""
 		gen = self._generations.get(leaf_index, 0)
 		leaf_secret = self._leaf_secret_for_gen(leaf_index, gen)
-		key = expand_with_label(leaf_secret, "key", b"", _KEY_LEN)
-		nonce = expand_with_label(leaf_secret, "nonce", b"", _NONCE_LEN)
+		key = expand_with_label(bytes(leaf_secret), "key", b"", _KEY_LEN)
+		nonce = expand_with_label(bytes(leaf_secret), "nonce", b"", _NONCE_LEN)
 		self._generations[leaf_index] = gen + 1
 		return key, nonce, gen
 
@@ -123,26 +127,23 @@ class SecretTree:
 			)
 		leaf_secret = self._leaf_secret_for_gen(leaf_index, generation)
 		self._generations[leaf_index] = generation + 1
-		key = expand_with_label(leaf_secret, "key", b"", _KEY_LEN)
-		nonce = expand_with_label(leaf_secret, "nonce", b"", _NONCE_LEN)
+		key = expand_with_label(bytes(leaf_secret), "key", b"", _KEY_LEN)
+		nonce = expand_with_label(bytes(leaf_secret), "nonce", b"", _NONCE_LEN)
 		return key, nonce
 
 	def wipe(self) -> None:
 		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy).
 
-		Best-effort zeroing: CPython bytes are immutable, so we create
-		mutable bytearray copies and zero them.  The original bytes objects
-		survive until GC, but this reduces the window for cold-boot attacks.
+		P2-1 audit fix: encryption_secret and leaf-tip secrets are now stored
+		as bytearray from creation, enabling in-place zeroing of the live
+		allocation without the copy-and-discard pattern.
 		"""
-		# Zero encryption_secret
-		_enc = bytearray(self.encryption_secret)
-		_enc[:] = b"\x00" * len(_enc)
-		self.encryption_secret = bytes(_enc)
-		# P1-5: zero each cached leaf-tip secret before discarding
+		# Zero encryption_secret in-place (mutable bytearray)
+		self.encryption_secret[:] = b"\x00" * len(self.encryption_secret)
+		# Zero each cached leaf-tip secret in-place
 		for _gen, tip_secret in self._leaf_tip.values():
-			_s = bytearray(tip_secret)
-			_s[:] = b"\x00" * len(_s)
-		# P1-5: zero each ratchet-cache secret before discarding
+			tip_secret[:] = b"\x00" * len(tip_secret)
+		# Zero each ratchet-cache secret (still bytes — create bytearray to zero)
 		for secret in self._ratchet_cache.values():
 			_s = bytearray(secret)
 			_s[:] = b"\x00" * len(_s)

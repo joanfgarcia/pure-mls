@@ -283,7 +283,7 @@ def test_secret_tree_key_nonce(vec_i, leaf_i, n_leaves, encryption_secret, gener
 		expected_app_nonce = _h(gen_data["application_nonce"])
 
 		# Fresh SecretTree per generation (get_key_and_nonce_for_gen starts from base)
-		st = SecretTree(encryption_secret=encryption_secret, n_leaves=n_leaves)
+		st = SecretTree(encryption_secret=bytearray(encryption_secret), n_leaves=n_leaves)
 		try:
 			app_key, app_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen)
 		except (KeyError, IndexError) as e:

@@ -326,13 +326,13 @@ class GroupInfo:
 			self.group_context.to_bytes()
 			+ tls_u32(len(self.extensions_bytes))
 			+ self.extensions_bytes
-			+ tls_opaque(self.confirmation_tag)
+			+ tls_opaque_varint(self.confirmation_tag)  # P1-1: opaque<V> per RFC §12.1.2
 			+ tls_u32(self.signer)
 		)
 
 	def to_bytes(self) -> bytes:
 		"""Full wire encoding: TBS + signature<V>."""
-		return self._tbs_bytes() + tls_opaque(self.signature)
+		return self._tbs_bytes() + tls_opaque_varint(self.signature)  # P1-1: opaque<V> per RFC §6
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupInfo":
@@ -341,10 +341,10 @@ class GroupInfo:
 		offset += 4
 		extensions_bytes = data[offset : offset + ext_len]
 		offset += ext_len
-		confirmation_tag, offset = read_opaque(data, offset)
+		confirmation_tag, offset = read_opaque_varint(data, offset)  # P1-1: opaque<V>
 		signer = int.from_bytes(data[offset : offset + 4], "big")
 		offset += 4
-		signature, offset = read_opaque(data, offset)
+		signature, offset = read_opaque_varint(data, offset)  # P1-1: opaque<V>
 		return cls(
 			group_context=group_context,
 			extensions_bytes=extensions_bytes,
@@ -433,37 +433,20 @@ def _derive_next_path_secret(path_secret: bytes) -> bytes:
 
 
 def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
-	"""RFC 9420 §7.8: recursive subtree hash for parent_hash computation.
+	"""RFC 9420 §7.9: original_sibling_tree_hash = TreeHash(sibling) per §7.8.
 
-	- Blank node (None): SHA-256(b"")
-	- Leaf node:         SHA-256(KeyPackage.to_bytes())
-	- Parent node:       SHA-256(public_key + left_subtree_hash + right_subtree_hash)
+	Delegates to RatchetTree._node_hash() which implements the full
+	RFC 9420 §7.8 TreeHashInput algorithm (typed byte prefix 0x01/0x02,
+	optional<Node>, VarInt-prefixed child hashes).
 
-	index=-1 is the sentinel used by copath() for out-of-bounds siblings;
-	treated as a blank node (SHA-256(b"")).
-	Used as original_sibling_tree_hash in RFC 9420 §7.9 parent_hash computation.
+	P1-2 audit fix: previous implementation used ad-hoc SHA-256(kp.to_bytes())
+	and SHA-256(pk + left + right) which diverges from RFC §7.8 TreeHashInput.
 	"""
-	# Guard: index=-1 is the OOB sentinel from copath(); any invalid index = blank node
+	# Guard: index=-1 is the OOB sentinel from copath(); any invalid index = blank leaf
 	if index < 0 or index >= len(tree.nodes):
-		return hashlib.sha256(b"").digest()
-	node = tree.get_node(index)
-	if index % 2 == 0:  # leaf
-		if node is None:
-			return hashlib.sha256(b"").digest()
-		assert isinstance(node, LeafNode)
-		return hashlib.sha256(node.key_package.to_bytes()).digest()
-	# Internal (parent) node — recurse into children
-	lvl = tree.level(index)
-	left = index - (1 << (lvl - 1))
-	right = index + (1 << (lvl - 1))
-	left_hash = _subtree_hash(tree, left)
-	right_hash = _subtree_hash(tree, right)
-	if node is None:
-		# Blank parent: hash of children hashes (no public key contribution)
-		return hashlib.sha256(left_hash + right_hash).digest()
-	assert isinstance(node, ParentNode)
-	# Non-blank parent: public key binds to both subtrees
-	return hashlib.sha256(node.public_key + left_hash + right_hash).digest()
+		# RFC §7.8 blank leaf: SHA-256(0x01 || 0x00)
+		return hashlib.sha256(b"\x01\x00").digest()
+	return tree._node_hash(index)
 
 
 def _compute_parent_hash(
@@ -946,6 +929,7 @@ class PublicMessage:
 
 	def to_group_update(self) -> "GroupUpdate":
 		update = GroupUpdate.from_bytes(self.content.content)
+		update.group_id = self.content.group_id  # P0-2: propagate from FramedContent
 		update._confirmation_tag = self.auth.confirmation_tag
 		update._membership_tag = self.membership_tag
 		return update
@@ -1000,7 +984,7 @@ class MLSGroup:
 		if self._secret_tree is None:
 			n_leaves = (len(self.state.tree.nodes) + 1) // 2
 			self._secret_tree = SecretTree(
-				encryption_secret=self.state.key_schedule.encryption_secret,
+				encryption_secret=bytearray(self.state.key_schedule.encryption_secret),  # P2-1: mutable for in-place wipe
 				n_leaves=n_leaves,
 			)
 		return self._secret_tree
@@ -1184,28 +1168,20 @@ class MLSGroup:
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
 		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
-		# Phase 1: derive confirmation_key with provisional ctx
-		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
-		_conf_key = KeySchedule.derive_confirmation_key(
-			init_secret=self.state.key_schedule.init_secret,
-			commit_secret=commit_secret,
-			group_context=_provisional_ctx.to_bytes(),
-			psk_list=None,
-		)
-
-		# Phase 2: compute confirmation_tag with NEW epoch key
-		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
-
-		# Compute NEW interim_transcript_hash to store in state
-		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
-
-		# Final epoch advance
+		# P1-3 consolidated: advance epoch first, then derive conf_tag once
+		# (removes redundant provisional _conf_key + _conf_tag derivation)
 		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			new_tree,
 			group_context=new_ctx_signed.to_bytes(),
 		)
+
+		# Single conf_tag derivation from canonical next_state key
+		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+
+		# Compute NEW interim_transcript_hash to store in state
+		new_interim = _compute_interim_transcript_hash(transcript_hash, conf_tag)
 
 		# 4. Build RFC-compliant Welcome  (P0-B: RFC §12.4 ordering)
 		#
@@ -1219,7 +1195,6 @@ class MLSGroup:
 		# and get the same symmetric HPKE info, matching OpenMLS wire format.
 
 		# 4a. Build + sign GroupInfo
-		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		gi_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, transcript_hash)
 		group_info = GroupInfo.build_and_sign(
 			group_context=gi_group_ctx,
@@ -1262,7 +1237,6 @@ class MLSGroup:
 			encrypted_group_info=egi,
 		)
 
-		_conf_tag_sender = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		update = GroupUpdate(
 			epoch_id=next_state.epoch_id,
 			group_id=self.group_id,
@@ -1274,9 +1248,9 @@ class MLSGroup:
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
-			_membership_key=next_state.key_schedule.membership_key,
+			_membership_key=self.state.key_schedule.membership_key,  # P0-1: old-epoch key per RFC §6.2
 			_transcript_hash=transcript_hash,
-			_confirmation_tag=_conf_tag_sender,  # P0-02: carried for receiver-side verification
+			_confirmation_tag=conf_tag,  # P1-3: single derivation used for all
 		)
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
@@ -1356,28 +1330,19 @@ class MLSGroup:
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
 		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
-		# Phase 1: derive confirmation_key
-		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
-		_conf_key = KeySchedule.derive_confirmation_key(
-			init_secret=self.state.key_schedule.init_secret,
-			commit_secret=commit_secret,
-			group_context=_provisional_ctx.to_bytes(),
-			psk_list=None,
-		)
-
-		# Phase 2: compute confirmation_tag
-		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
-
-		# Compute NEW interim_transcript_hash to store in MLSGroup
-		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
-
-		# Final GroupContext + epoch advance
+		# P1-3 consolidated: advance epoch first, then derive conf_tag once
 		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			new_tree,
 			group_context=new_ctx.to_bytes(),
 		)
+
+		# Single conf_tag derivation from canonical next_state key
+		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+
+		# Compute NEW interim_transcript_hash to store in MLSGroup
+		new_interim = _compute_interim_transcript_hash(transcript_hash, conf_tag)
 
 		update = GroupUpdate(
 			epoch_id=new_epoch_id,
@@ -1389,9 +1354,9 @@ class MLSGroup:
 			_group_ctx=new_ctx,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
-			_membership_key=next_state.key_schedule.membership_key,
+			_membership_key=self.state.key_schedule.membership_key,  # P0-1: old-epoch key per RFC §6.2
 			_transcript_hash=transcript_hash,
-			_confirmation_tag=_conf_tag,
+			_confirmation_tag=conf_tag,  # P1-3: single derivation
 		)
 
 		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition

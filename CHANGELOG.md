@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4.0] - Unreleased
+
+### Fixed (B760 Second Audit — Wire-Path & Interop Remediation)
+
+- **[P0-1] membership_key epoch mismatch** (`group.py`):
+  `add_member()` and `remove_member()` now store the OLD epoch's
+  `membership_key` in `GroupUpdate._membership_key` per RFC 9420 §6.2.
+  Previously used the NEW epoch's key, causing HMAC verification to always
+  fail on the wire path (`PublicMessage → to_group_update() → process_update()`).
+
+- **[P0-2] group_id not propagated in `to_group_update()`** (`group.py`):
+  `PublicMessage.to_group_update()` now assigns `update.group_id` from
+  `self.content.group_id` (FramedContent). Previously `GroupUpdate.from_bytes()`
+  left `group_id = b""`, causing `process_update()` to reject every wire-format
+  commit with `"GroupUpdate group_id mismatch"`.
+
+- **[P1-1] GroupInfo uses `tls_opaque` instead of `tls_opaque_varint`** (`group.py`):
+  `_tbs_bytes()`, `to_bytes()`, and `from_bytes()` now use `tls_opaque_varint()`
+  for `confirmation_tag` and `signature` per RFC 9420 §12.1.2 / §6.
+  Previously used `tls_opaque()` (uint16 prefix) — OpenMLS couldn't verify
+  GroupInfo signed by pure-mls.
+
+- **[P1-2] `_subtree_hash()` diverges from RFC §7.8** (`group.py`):
+  Replaced ad-hoc `SHA-256(pk + left + right)` with delegation to
+  `RatchetTree._node_hash()` which implements the full RFC §7.8
+  `TreeHashInput` algorithm (typed byte prefix 0x01/0x02 + optional<Node>
+  + VarInt-prefixed child hashes).
+
+- **[P1-3] Triple confirmation_key derivation in `add_member()`/`remove_member()`** (`group.py`):
+  Eliminated redundant provisional `_conf_key`/`_conf_tag` derivation.
+  `advance_epoch()` is called first, then `conf_tag` is derived once from
+  `next_state.key_schedule.confirmation_key` and reused for `new_interim`,
+  `GroupInfo`, and `GroupUpdate._confirmation_tag`.
+
+- **[P2-1] `SecretTree.wipe()` bytearray from creation** (`secret_tree.py`):
+  `encryption_secret` changed from immutable `bytes` to mutable `bytearray`.
+  `wipe()` now zeros the live allocation in-place (`self.encryption_secret[:] =
+  b"\\x00" * len(...)`) instead of the copy-and-discard pattern. Leaf-tip
+  secrets also stored as `bytearray` for in-place zeroing.
+
 ## [3.0.3.0] - Unreleased
 
 ### Fixed (B760 Final Remediation — All Findings Closed)
