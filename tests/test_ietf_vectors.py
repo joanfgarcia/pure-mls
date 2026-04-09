@@ -217,10 +217,23 @@ def test_passive_client_welcome(vec):
 	except AttributeError:
 		pytest.skip("SignatureKey/KemKey.from_private_bytes not implemented — needed for IETF wire interop")
 
-	try:
-		joiner_group = MLSGroup.join(welcome_bytes, sig_key, kem_key)
-	except (ValueError, NotImplementedError, AttributeError) as e:
-		pytest.skip(f"MLSGroup.join() cannot parse RFC wire-format Welcome (pure-mls uses custom format): {e}")
+	# Resolve PSKs from vector to pass to join()
+	from pure_mls.group import PreSharedKeyID
+	from pure_mls.keyschedule import PSK_TYPE_EXTERNAL
+	psk_list = []
+	for psk_data in vec.get("external_psks", []):
+		psk_id = _h(psk_data["psk_id"])
+		psk_val = _h(psk_data["psk"])
+		# psk_nonce SHOULD be empty for external PSKs per RFC 9420 §8.4
+		psk_list.append((PreSharedKeyID(psk_type=PSK_TYPE_EXTERNAL, psk_id=psk_id, psk_nonce=b""), psk_val))
+	# Load ratchet_tree fallback if specificed in vector
+	from pure_mls.tree import RatchetTree
+	ratchet_tree = None
+	if vec.get("ratchet_tree"):
+		ratchet_tree = RatchetTree.from_bytes(_h(vec["ratchet_tree"]))
+
+	joiner_group = MLSGroup.join(welcome_bytes, sig_key, kem_key, psk_list=psk_list, ratchet_tree=ratchet_tree)
+	# For debugging, we can print the GI bytes if it failed (but it fails inside join)
 
 	actual_epoch_auth = joiner_group.state.key_schedule.epoch_authenticator
 	assert actual_epoch_auth == expected_epoch_auth, (
@@ -246,7 +259,7 @@ def _load_st_vectors() -> list[tuple[int, int, int, bytes, list]]:
 			continue
 		enc_secret = _h(vec["encryption_secret"])
 		all_leaves = vec.get("leaves", [])
-		n_leaves = max(len(all_leaves), 2)
+		n_leaves = len(all_leaves)
 		for leaf_i, gens in enumerate(all_leaves):
 			if gens:
 				result.append((vec_i, leaf_i, n_leaves, enc_secret, gens))
@@ -256,43 +269,40 @@ def _load_st_vectors() -> list[tuple[int, int, int, bytes, list]]:
 _ST_VECTORS = _load_st_vectors()
 
 
-@pytest.mark.xfail(
-	reason=(
-		"Known gap (Phase 7 backlog): SecretTree uses direct leaf derivation "
-		"ExpandWithLabel(enc_secret, 'tree', leaf_bytes) instead of RFC §9 full "
-		"binary-tree subdivision (ExpandWithLabel(parent, 'left'/'right')). "
-		"Self-consistency tests in test_treekem.py pass but IETF vector derivation differs."
-	),
-	strict=False,
-)
 @pytest.mark.parametrize(
 	"vec_i,leaf_i,n_leaves,encryption_secret,generations", _ST_VECTORS, ids=[f"st-vec{vec_i}-leaf{leaf_i}" for vec_i, leaf_i, _, _, _ in _ST_VECTORS]
 )
 def test_secret_tree_key_nonce(vec_i, leaf_i, n_leaves, encryption_secret, generations):
-	"""RFC 9420 §9: SecretTree IETF vector validation.
-
-	Known gap: our SecretTree derives leaf secrets with a simplified shortcut that
-	does NOT follow RFC §9's binary-tree path. IETF vector compliance requires
-	implementing the full left/right binary subdivision. See Phase 7 backlog.
-	"""
+	"""RFC 9420 §9: SecretTree IETF vector validation."""
 	from pure_mls.secret_tree import SecretTree
 
 	for gen_data in generations:
 		gen = gen_data["generation"]
+		
+		# Application Key/Nonce
 		expected_app_key = _h(gen_data["application_key"])
 		expected_app_nonce = _h(gen_data["application_nonce"])
+		
+		# Handshake Key/Nonce
+		expected_hand_key = _h(gen_data["handshake_key"])
+		expected_hand_nonce = _h(gen_data["handshake_nonce"])
 
 		# Fresh SecretTree per generation (get_key_and_nonce_for_gen starts from base)
 		st = SecretTree(encryption_secret=bytearray(encryption_secret), n_leaves=n_leaves)
-		try:
-			app_key, app_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen)
-		except (KeyError, IndexError) as e:
-			pytest.xfail(f"SecretTree gen={gen} leaf={leaf_i} failed: {e}")
-
+		
+		# Verify Application
+		app_key, app_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen, secret_type="application")
 		assert app_key == expected_app_key, (
 			f"vec {vec_i} leaf {leaf_i} gen {gen}: application_key mismatch\n  got:      {app_key.hex()}\n  expected: {expected_app_key.hex()}"
 		)
 		assert app_nonce == expected_app_nonce, f"vec {vec_i} leaf {leaf_i} gen {gen}: application_nonce mismatch"
+
+		# Verify Handshake
+		hand_key, hand_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen, secret_type="handshake")
+		assert hand_key == expected_hand_key, (
+			f"vec {vec_i} leaf {leaf_i} gen {gen}: handshake_key mismatch\n  got:      {hand_key.hex()}\n  expected: {expected_hand_key.hex()}"
+		)
+		assert hand_nonce == expected_hand_nonce, f"vec {vec_i} leaf {leaf_i} gen {gen}: handshake_nonce mismatch"
 
 
 # ---------------------------------------------------------------------------

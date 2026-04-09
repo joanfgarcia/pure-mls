@@ -17,23 +17,29 @@ from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule, PreSharedKeyID, _psk_secret
 from pure_mls.secret_tree import SecretTree, derive_sender_data_key, derive_sender_data_nonce
 from pure_mls.tls import (
+	ExtensionType,
 	_varint_decode,
 	read_fixed,
 	read_opaque,
+	read_opaque16,
 	read_opaque32,
-	read_opaque_varint,
 	read_u8,
 	read_u16,
 	read_u32,
 	read_u64,
+	read_extension,
+	read_extensions,
+	read_extensions32,
 	tls_opaque,
+	tls_opaque16,
 	tls_opaque32,
-	tls_opaque_varint,
 	tls_u8,
 	tls_u16,
 	tls_u32,
 	tls_u64,
 	tls_varint,
+	tls_extensions,
+	tls_extension,
 )
 from pure_mls.proposals import (
 	AddProposal,
@@ -61,6 +67,7 @@ class GroupContext:
 	epoch: int
 	tree_hash: bytes
 	confirmed_transcript_hash: bytes
+	extensions: list[tuple[int, bytes]]
 
 	# Fixed for our single supported suite:
 	#   MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
@@ -89,7 +96,7 @@ class GroupContext:
 			+ self.tree_hash
 			+ tls_varint(len(self.confirmed_transcript_hash))
 			+ self.confirmed_transcript_hash
-			+ tls_varint(0)  # extensions<V> empty
+			+ tls_extensions(self.extensions)
 		)
 
 	@classmethod
@@ -102,18 +109,17 @@ class GroupContext:
 		if cipher_suite != cls._CIPHER_SUITE:
 			raise ValueError(f"Unsupported cipher suite: {cipher_suite:#06x}")
 		# opaque<V> fields use VarInt length prefix (RFC 9420 §8.1)
-		group_id, offset = read_opaque_varint(data, offset)
+		group_id, offset = read_opaque(data, offset)
 		epoch, offset = read_u64(data, offset)
-		tree_hash, offset = read_opaque_varint(data, offset)
-		confirmed_transcript_hash, offset = read_opaque_varint(data, offset)
-		# skip extensions (VarInt length prefix)
-		if offset < len(data):
-			_, offset = read_opaque_varint(data, offset)
+		tree_hash, offset = read_opaque(data, offset)
+		confirmed_transcript_hash, offset = read_opaque(data, offset)
+		extensions, offset = read_extensions(data, offset)
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
 			tree_hash=tree_hash,
 			confirmed_transcript_hash=confirmed_transcript_hash,
+			extensions=extensions,
 		), offset
 
 	@classmethod
@@ -157,12 +163,12 @@ class GroupSecrets:
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupSecrets":
 		offset = 0
-		joiner_secret, offset = read_opaque_varint(data, offset)  # joiner_secret<V>
+		joiner_secret, offset = read_opaque(data, offset)  # joiner_secret<V>
 		has_path = data[offset]
 		offset += 1
 		path_secret: bytes | None = None
 		if has_path:
-			path_secret, offset = read_opaque_varint(data, offset)  # path_secret<V>
+			path_secret, offset = read_opaque(data, offset)  # path_secret<V>
 		# psk_ids: varint(len) + records
 		psks = []
 		if offset < len(data):
@@ -174,45 +180,52 @@ class GroupSecrets:
 				psk_type = data[offset]
 				offset += 1
 				if psk_type == 1: # EXTERNAL (only one we support here)
-					pid, offset = read_opaque_varint(data, offset)
-					pnonce, offset = read_opaque_varint(data, offset)
+					pid, offset = read_opaque(data, offset)
+					pnonce, offset = read_opaque(data, offset)
 					psks.append(PreSharedKeyID(psk_type=1, psk_id=pid, psk_nonce=pnonce))
 				else: # RESUMPTION
 					usage = data[offset]; offset += 1
-					pgid, offset = read_opaque_varint(data, offset)
+					pgid, offset = read_opaque(data, offset)
 					pepoch = struct.unpack("!Q", data[offset:offset+8])[0]
 					offset += 8
-					pnonce, offset = read_opaque_varint(data, offset)
+					pnonce, offset = read_opaque(data, offset)
 					psks.append(PreSharedKeyID(psk_type=2, psk_id=b"", usage=usage, psk_group_id=pgid, psk_epoch=pepoch, psk_nonce=pnonce))
 		return cls(joiner_secret=joiner_secret, path_secret=path_secret, psks=psks)
 
 
 @dataclass
 class EncryptedGroupSecrets:
-	"""RFC 9420 §12.1.2: HPKE-encrypted GroupSecrets for one recipient."""
-
+	"""
+	HPKE-encrypted GroupSecrets for a single joiner (RFC 9420 §12.4.3.1).
+	"""
 	new_member: bytes  # KeyPackageRef (32 bytes)
-	kem_output: bytes  # HPKE kem_output (enc)
+	kem_output: bytes  # HPKE enc
 	ciphertext: bytes  # HPKE ciphertext
 
 	def to_bytes(self) -> bytes:
-		"""Encode to RFC 9420 §12.1.2 wire format."""
-		# new_member is KeyPackageRef (fixed 32B), NO prefix.
-		# kem_output and ciphertext are opaque<V>, HAVE varint prefix.
-		return self.new_member + tls_opaque_varint(self.kem_output) + tls_opaque_varint(self.ciphertext)
+		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
+		return (
+			tls_opaque(self.new_member)
+			+ tls_opaque(self.kem_output)
+			+ tls_opaque(self.ciphertext)
+		)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["EncryptedGroupSecrets", int]:
-		"""Parse from RFC 9420 §12.1.2 wire format."""
-		new_member, offset = read_fixed(data, offset, 32)
-		kem_output, offset = read_opaque_varint(data, offset)
-		ciphertext, offset = read_opaque_varint(data, offset)
+		"""Parse from RFC 9420 §12.4.3.1 wire format."""
+		# KeyPackageRef is nominally fixed Nh bytes, but IETF vectors (OpenMLS)
+		# encode it as opaque<V> (with 1-byte length prefix usually).
+		new_member, offset = read_opaque(data, offset)
+		kem_output, offset = read_opaque(data, offset)
+		ciphertext, offset = read_opaque(data, offset)
 		return cls(new_member=new_member, kem_output=kem_output, ciphertext=ciphertext), offset
 
 
 @dataclass
 class Welcome:
-	"""RFC 9420 §12.1.2: Welcome message sent to new members.
+	"""
+	Welcome Message (RFC 9420 §12.4.3.1).
+	Sent by committer to new members to provide group state.
 
 	Contains:
 	- HPKE-encrypted GroupSecrets for each joiner (keyed by KeyPackageRef)
@@ -220,43 +233,32 @@ class Welcome:
 
 	GroupInfo is sealed with AES-128-GCM using welcome_key derived from
 	joiner_secret via ExpandWithLabel(joiner_secret, 'welcome', b'', 16).
-	This follows RFC 9420 §12.1.2 exactly.
 	"""
-
-	version: int
 	cipher_suite: int
+	secrets: list[EncryptedGroupSecrets]  # EncryptedGroupSecrets secrets<V>
 	encrypted_group_info: bytes  # opaque encrypted_group_info<V>
-	encrypted_group_secrets: list[EncryptedGroupSecrets]  # EncryptedGroupSecrets encrypted_group_secrets<V>
 
 	def to_bytes(self) -> bytes:
-		"""RFC 9420 §12.1.2: version | cipher_suite | EGI | EGS vector."""
-		egs_bytes = b"".join(egs.to_bytes() for egs in self.encrypted_group_secrets)
+		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
+		egs_bytes = b"".join(s.to_bytes() for s in self.secrets)
 		return (
-			tls_u16(self.version)
-			+ tls_u16(self.cipher_suite)
-			+ tls_opaque_varint(self.encrypted_group_info)
-			+ tls_opaque_varint(egs_bytes)
+			self.cipher_suite.to_bytes(2, "big")
+			+ tls_opaque(egs_bytes)
+			+ tls_opaque(self.encrypted_group_info)
 		)
 
 	@classmethod
-	def from_bytes(cls, data: bytes) -> "Welcome":
-		"""Deserialize from RFC 9420 §12.1.2 wire format.
-		Handles optional 4-byte MLSMessage header (0x0001 0003).
-		"""
-		offset = 0
-		# Detect MLSMessage header (ProtocolVersion=1, WireFormat=Welcome=3)
-		if len(data) >= 4 and data[:2] == b"\x00\x01" and data[2:4] == b"\x00\x03":
-			offset = 4
-			
-		version, offset = read_u16(data, offset)
-		if version != 1:
-			# If we missed the header and version looks like it's 1 anyway, continue
-			# But 0x0001 is a common first field.
-			pass
-			
+	def from_bytes(cls, data: bytes, offset: int = 0) -> "Welcome":
+		"""Parse from RFC 9420 §12.4.3.1 wire format."""
+		# Handle optional MLSMessage header (ProtocolVersion + WireFormat)
+		if len(data) >= (offset + 4) and data[offset : offset + 2] == b"\x00\x01":
+			wf = int.from_bytes(data[offset + 2 : offset + 4], "big")
+			if wf == 3:  # mls_welcome
+				offset += 4
+
 		cipher_suite, offset = read_u16(data, offset)
-		egi, offset = read_opaque_varint(data, offset)
-		egs_raw, offset = read_opaque_varint(data, offset)
+		egs_raw, offset = read_opaque(data, offset)
+		egi, offset = read_opaque(data, offset)
 		
 		egs_list = []
 		egs_offset = 0
@@ -265,10 +267,9 @@ class Welcome:
 			egs_list.append(egs)
 			
 		return cls(
-			version=version,
 			cipher_suite=cipher_suite,
+			secrets=egs_list,
 			encrypted_group_info=egi,
-			encrypted_group_secrets=egs_list,
 		)
 
 	@classmethod
@@ -341,51 +342,53 @@ class GroupInfo:
 	"""
 
 	group_context: GroupContext
-	extensions_bytes: bytes  # empty: b"" → serialised as uint32(0)
+	extensions: list[tuple[int, bytes]]
 	confirmation_tag: bytes  # HMAC-SHA256(confirmation_key, transcript_hash)
 	signer: int  # committer leaf index
-	signature: bytes  # Ed25519(TBS)
+	signature: bytes  # Ed25519(SignContent(TBS))
 
 	# ------------------------------------------------------------------
 	# Serialisation helpers
 	# ------------------------------------------------------------------
 
 	def _tbs_bytes(self) -> bytes:
-		"""TBS = GroupContext + extensions<V> + confirmation_tag<V> + signer(uint32)."""
+		"""TBS = GroupContext + extensions<V> + confirmation_tag[Nh] + signer(uint32)."""
 		return (
 			self.group_context.to_bytes()
-			+ tls_u32(len(self.extensions_bytes))
-			+ self.extensions_bytes
-			+ tls_opaque_varint(self.confirmation_tag)  # P1-1: opaque<V> per RFC §12.1.2
+			+ tls_extensions(self.extensions)
+			+ tls_opaque(self.confirmation_tag)
 			+ tls_u32(self.signer)
 		)
 
-	def to_bytes(self) -> bytes:
-		"""Full wire encoding: TBS + signature<V>."""
-		return self._tbs_bytes() + tls_opaque_varint(self.signature)  # P1-1: opaque<V> per RFC §6
-
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupInfo":
+		"""Standard RFC 9420 parser."""
 		group_context, offset = GroupContext.from_bytes_at(data, 0)
-		ext_len = int.from_bytes(data[offset : offset + 4], "big")
-		offset += 4
-		extensions_bytes = data[offset : offset + ext_len]
-		offset += ext_len
-		confirmation_tag, offset = read_opaque_varint(data, offset)  # P1-1: opaque<V>
-		signer = int.from_bytes(data[offset : offset + 4], "big")
-		offset += 4
-		signature, offset = read_opaque_varint(data, offset)  # P1-1: opaque<V>
+		extensions, offset = read_extensions(data, offset)
+		confirmation_tag, offset = read_opaque(data, offset)
+		signer, offset = read_u32(data, offset)
+		signature, offset = read_opaque(data, offset)
+		
 		return cls(
 			group_context=group_context,
-			extensions_bytes=extensions_bytes,
+			extensions=extensions,
 			confirmation_tag=confirmation_tag,
 			signer=signer,
 			signature=signature,
 		)
 
+	def to_bytes(self) -> bytes:
+		"""Full wire encoding: TBS + signature<V>."""
+		return self._tbs_bytes() + tls_opaque(self.signature)
+
 	# ------------------------------------------------------------------
-	# Signing and verification
+	# Signing and verification (RFC 9420 §16.1 Domain Separation)
 	# ------------------------------------------------------------------
+
+	def _sign_content_bytes(self) -> bytes:
+		"""Wrap TBS in SignContent (label + content) for domain separation."""
+		label = b"MLS 1.0 GroupInfoTBS"
+		return tls_opaque(label) + tls_opaque(self._tbs_bytes())
 
 	@classmethod
 	def build_and_sign(
@@ -394,26 +397,23 @@ class GroupInfo:
 		confirmation_tag: bytes,
 		signer: int,
 		sig_key: "SignatureKey",
+		extensions: list[tuple[int, bytes]] = None,
 	) -> "GroupInfo":
-		"""Create a GroupInfo and sign it with the committer's Ed25519 key."""
+		"""Create a GroupInfo and sign it using SignContent domain separation."""
 		gi = cls(
 			group_context=group_context,
-			extensions_bytes=b"",
+			extensions=extensions or [],
 			confirmation_tag=confirmation_tag,
 			signer=signer,
-			signature=b"",  # overwritten below after TBS computation
+			signature=b"",
 		)
-		gi.signature = sig_key.sign(gi._tbs_bytes())
+		gi.signature = sig_key.sign(gi._sign_content_bytes())
 		return gi
 
 	def verify(self, committer_sig_key_bytes: bytes) -> bool:
-		"""Verify the committer's Ed25519 signature over TBS.
-
-		Returns True if valid. Raises cryptography.exceptions.InvalidSignature on failure.
-		"""
-
+		"""VerifyEd25519 signature over SignContent-wrapped TBS."""
 		pub = ed25519.Ed25519PublicKey.from_public_bytes(committer_sig_key_bytes)
-		pub.verify(self.signature, self._tbs_bytes())
+		pub.verify(self.signature, self._sign_content_bytes())
 		return True
 
 
@@ -438,6 +438,7 @@ def _make_group_context(
 	epoch_id: int,
 	tree: RatchetTree,
 	confirmed_transcript_hash: bytes,
+	extensions: list[tuple[int, bytes]] = None,
 ) -> GroupContext:
 	"""Build GroupContext for the given group state."""
 	tree_hash = tree.tree_hash()
@@ -446,6 +447,7 @@ def _make_group_context(
 		epoch=epoch_id,
 		tree_hash=tree_hash,
 		confirmed_transcript_hash=confirmed_transcript_hash,
+		extensions=extensions or [],
 	)
 
 
@@ -530,7 +532,7 @@ def _compute_confirmed_transcript_hash_input(
 
 	wire_format(u16) + FramedContent + opaque signature<V>
 	"""
-	return tls_u16(0x0001) + framed_content_bytes + tls_opaque_varint(signature)
+	return tls_u16(0x0001) + framed_content_bytes + tls_opaque(signature)
 
 
 def _compute_confirmed_transcript_hash(
@@ -800,11 +802,11 @@ class FramedContent:
 	def to_bytes(self) -> bytes:
 		# RFC 9420 §6.1: group_id<V> and authenticated_data<V> are VarInt-prefixed
 		return (
-			tls_opaque_varint(self.group_id)
+			tls_opaque(self.group_id)
 			+ tls_u64(self.epoch)
 			+ tls_u8(0x01)  # SenderType = member
 			+ tls_u32(self.sender_leaf_index)
-			+ tls_opaque_varint(self.authenticated_data)
+			+ tls_opaque(self.authenticated_data)
 			+ tls_u8(self.CONTENT_TYPE_COMMIT)
 			+ tls_opaque32(self.content)
 		)
@@ -812,13 +814,13 @@ class FramedContent:
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "FramedContent":
 		offset = 0
-		group_id, offset = read_opaque_varint(data, offset)  # opaque group_id<V>
+		group_id, offset = read_opaque(data, offset)  # opaque group_id<V>
 		epoch, offset = read_u64(data, offset)
 		sender_type, offset = read_u8(data, offset)
 		if sender_type != 0x01:
 			raise ValueError(f"Unsupported SenderType: {sender_type:#04x}")
 		sender_leaf_index, offset = read_u32(data, offset)
-		authenticated_data, offset = read_opaque_varint(data, offset)  # opaque authenticated_data<V>
+		authenticated_data, offset = read_opaque(data, offset)  # opaque authenticated_data<V>
 		content_type, offset = read_u8(data, offset)
 		if content_type != cls.CONTENT_TYPE_COMMIT:
 			raise ValueError(f"Unsupported ContentType: {content_type:#04x}")
@@ -1195,9 +1197,9 @@ class MLSGroup:
 		# P1-3: RFC 9420 §12.4.3 — ratchet tree delivered inside GroupInfo extensions
 		# as ExtensionType 0x0004, VarInt-prefixed
 		tree_raw = new_tree.to_bytes()
-		ext_data = tls_opaque_varint(tree_raw)  # extension data = opaque<V> tree
-		ext_entry = tls_u16(0x0004) + tls_opaque_varint(ext_data)  # type(u16) + data<V>
-		ext_vec = tls_opaque_varint(ext_entry)  # extensions<V>
+		ext_data = tls_opaque(tree_raw)  # extension data = opaque<V> tree
+		ext_entry = tls_u16(0x0004) + tls_opaque(ext_data)  # type(u16) + data<V>
+		ext_vec = tls_opaque(ext_entry)  # extensions<V>
 		gi_plaintext = group_info.to_bytes() + ext_vec
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
 		egi = welcome_nonce_enc + gi_ct  # nonce(12) || ciphertext
@@ -1351,24 +1353,34 @@ class MLSGroup:
 		return new_group, update
 
 	@classmethod
-	def join(cls, welcome: "Welcome | bytes", my_sig_key: SignatureKey, my_kem_key: KemKey, psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> "MLSGroup":
+	def join(
+		cls, 
+		welcome: "Welcome | bytes", 
+		my_sig_key: SignatureKey, 
+		my_kem_key: KemKey, 
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
+		ratchet_tree: RatchetTree | None = None,
+	) -> "MLSGroup":
 		"""
 		Initializes a Group from a Welcome message (RFC 9420 §12.1.2).
 		Decrypts GroupSecrets and reconstructs the EpochState.
 
 		Accepts either a Welcome object or raw TLS wire-format bytes.
+		If the Welcome message does not contain a ratchet_tree extension,
+		one MUST be provided via the ratchet_tree argument.
 		"""
+		# (Logic remains same until tree parsing...)
 		# Auto-detect: if raw bytes, parse as Welcome TLS wire format
 		if isinstance(welcome, (bytes, bytearray)):
 			try:
 				welcome = Welcome.from_bytes(welcome)
 			except Exception as exc:
 				raise ValueError(f"Failed to parse Welcome TLS bytes: {exc}") from exc
-		# RFC 9420 §12.1.2: find our EncryptedGroupSecrets by trying each (KPRef match).
+		# RFC 9420 §12.4.3.1: find our EncryptedGroupSecrets by trying each (KPRef match).
 		# For single-joiner cases, take the only entry. For multi-joiner, try each.
 		gs_bytes_raw: bytes | None = None
 		egs_match: EncryptedGroupSecrets | None = None
-		for candidate in welcome.encrypted_group_secrets:
+		for candidate in welcome.secrets:
 			try:
 				# P0-B: RFC 9420 §12.4 EncryptWithLabel("Welcome", encrypted_group_info)
 				# Symmetric with add_member() seal — uses RFC info, matches IETF vectors
@@ -1379,42 +1391,56 @@ class MLSGroup:
 				continue
 		if gs_bytes_raw is None or egs_match is None:
 			raise ValueError("No EncryptedGroupSecrets could be decrypted with the provided KEM key")
+		
+		# 1.5 Parse GroupSecrets and resolve PSKs (RFC 9420 §12.4.2)
 		gs = GroupSecrets.from_bytes(gs_bytes_raw)
+		
+		# Resolve PSKs indicated in the Welcome message
+		resolved_psks = []
+		if gs.psks:
+			if psk_list is None:
+				raise ValueError("Welcome message requires PSKs, but none were provided")
+			psk_map = {pid.psk_id: val for pid, val in psk_list}
+			for psk_id in gs.psks:
+				if psk_id.psk_id not in psk_map:
+					raise ValueError(f"Required PSK {psk_id.psk_id.hex()} not found in provided psk_list")
+				resolved_psks.append((psk_id, psk_map[psk_id.psk_id]))
 
-		# 2. Derive welcome_key from joiner_secret and decrypt GroupInfo (AES-GCM)
-		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret)
-		gi_payload_raw = welcome.encrypted_group_info
-		if len(gi_payload_raw) < 12:
-			raise ValueError("encrypted_group_info too short")
-		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
-		gi_bytes = AESGCM(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
+		# 2. Derive welcome_key/nonce from joiner_secret + psk_secret and decrypt GroupInfo
+		psk_secret = _psk_secret(resolved_psks)
+		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret, psk_secret)
+		welcome_nonce_dec = KeySchedule.derive_welcome_nonce(gs.joiner_secret, psk_secret)
+		
+		gi_ct = welcome.encrypted_group_info
+		try:
+			gi_bytes = AESGCM(welcome_key_dec).decrypt(welcome_nonce_dec, gi_ct, b"")
+		except Exception as exc:
+			raise ValueError(f"Failed to decrypt GroupInfo: {exc}")
 
-		# 3. Parse signed GroupInfo + ratchet_tree extension (P1-3: RFC §12.4.3)
+		# 3. Parse signed GroupInfo + ratchet_tree extension (RFC §12.4.3)
 		gi = GroupInfo.from_bytes(gi_bytes)
 		gi_ctx = gi.group_context
-		gi_bytes_len = len(gi.to_bytes())
-		# Parse extensions vector: opaque<V> containing Extension entries
+
+		# Parse extensions to find ratchet_tree
 		tree: RatchetTree | None = None
-		ext_vec_data, ext_end = read_opaque_varint(gi_bytes, gi_bytes_len)
-		ext_offset = 0
-		while ext_offset < len(ext_vec_data):
-			ext_type, ext_offset = read_u16(ext_vec_data, ext_offset)
-			ext_body, ext_offset = read_opaque_varint(ext_vec_data, ext_offset)
-			if ext_type == 0x0004:  # ratchet_tree
-				tree_data, _ = read_opaque_varint(ext_body, 0)
-				tree = RatchetTree.from_bytes(tree_data)
+		for ext_type, ext_data in gi.extensions:
+			if ext_type == ExtensionType.RATCHET_TREE:
+				# ratchet_tree is optional<Node> ratchet_tree<V>
+				tree = RatchetTree.from_bytes(ext_data)
+				break
+
+		# Fallback to provided tree if extension is missing
 		if tree is None:
-			# Fallback: try legacy format (raw opaque append for backward compat)
-			try:
-				tree_bytes, _ = read_opaque(gi_bytes, gi_bytes_len)
-				tree = RatchetTree.from_bytes(tree_bytes)
-			except Exception:
-				raise ValueError("ratchet_tree extension absent from GroupInfo")
+			tree = ratchet_tree
+
+		if tree is None:
+			raise ValueError("ratchet_tree extension absent from GroupInfo and no external tree provided")
 
 		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
-		committer_node = tree.get_node(gi.signer)
+		# signer is a leaf index, map to node index (leaf_index * 2)
+		committer_node = tree.get_node(gi.signer * 2)
 		if not isinstance(committer_node, LeafNode):
-			raise ValueError(f"GroupInfo.signer ({gi.signer}) is not a leaf node")
+			raise ValueError(f"GroupInfo.signer ({gi.signer}) leaf node not found at expected index {gi.signer * 2}")
 		try:
 			gi.verify(committer_node.signature_key)
 		except Exception as exc:
@@ -1431,26 +1457,18 @@ class MLSGroup:
 		if my_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 
-		# 6. Reconstruct KeySchedule from joiner_secret + PSK list
-		# If the arrival GS has psks, we need their values from the caller's psk_store
-		resolved_psks = []
-		if gs.psks:
-			if not psk_list:
-				raise ValueError("Welcome requires PSKs but none were provided to join()")
-			# Cruce de identificadores
-			for psk_id in gs.psks:
-				found = False
-				for provided_id, val in psk_list:
-					if provided_id.to_bytes() == psk_id.to_bytes():
-						resolved_psks.append((provided_id, val))
-						found = True
-						break
-				if not found:
-					raise ValueError(f"Required PSK {psk_id.psk_id.hex()} not found in provided psk_list")
+		# 8.4 Key Schedule
+		# intermediate_secret = HKDF-Extract(joiner_secret, psk_secret)
+		# For Suite 1 (the only one we support in this test), Nh = 32.
+		_nh = 32 if welcome.cipher_suite == 1 else 32 
+		psk_sec = _psk_secret(resolved_psks, _nh)
+		intermediate = hkdf_extract(gs.joiner_secret, psk_sec)
 
-		intermediate = hkdf_extract(gs.joiner_secret, _psk_secret(resolved_psks))  # joiner=salt, psk_secret=IKM
-		# P1-02 fix: use gi_ctx.to_bytes() for GroupContext domain separation
-		epoch_secret = expand_with_label(intermediate, "epoch", gi_ctx.to_bytes(), 32)
+		# epoch_secret = HKDF-Expand-Label(intermediate_secret, "epoch", GroupContext, Nh)
+		epoch_secret = expand_with_label(intermediate, "epoch", gi_ctx.to_bytes(), _nh)
+		
+		# Derive the full epoch key schedule from the epoch_secret
+		# Ref: RFC 9420 §8.4 / Figure 22
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret, intermediate)
 
 		state = EpochState(
@@ -1461,8 +1479,9 @@ class MLSGroup:
 		)
 
 		# P1-N4: RFC 9420 §12.4.3.1 — joiner MUST verify confirmation_tag in GroupInfo
-		_expected_conf_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, "sha256").digest()
-		if not hmac.compare_digest(_expected_conf_tag, gi.confirmation_tag):
+		# Calculated as HMAC(confirmation_key, confirmed_transcript_hash)
+		expected_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, hashlib.sha256).digest()
+		if gi.confirmation_tag != expected_tag:
 			raise ValueError("GroupInfo confirmation_tag verification failed — forged Welcome or epoch mismatch (P1-N4)")
 
 		# RFC 9420 §12.4.3: compute interim_transcript_hash using GroupInfo.confirmation_tag

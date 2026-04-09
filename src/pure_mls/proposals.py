@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 from pure_mls.tls import (
-	read_opaque_varint,
+	read_opaque,
 	read_u16,
 	read_u32,
 	tls_u16,
@@ -62,7 +62,7 @@ class AddProposal:
 		proposal_type, offset = read_u16(data, offset)
 		if proposal_type != ProposalType.ADD:
 			raise ValueError(f"Expected ADD, got {proposal_type:#06x}")
-		kp_bytes, offset = read_opaque_varint(data, offset)
+		kp_bytes, offset = read_opaque(data, offset)
 		return cls(key_package_bytes=kp_bytes), offset
 
 
@@ -80,7 +80,7 @@ class UpdateProposal:
 		proposal_type, offset = read_u16(data, offset)
 		if proposal_type != ProposalType.UPDATE:
 			raise ValueError(f"Expected UPDATE, got {proposal_type:#06x}")
-		ln_bytes, offset = read_opaque_varint(data, offset)
+		ln_bytes, offset = read_opaque(data, offset)
 		return cls(leaf_node_bytes=ln_bytes), offset
 
 
@@ -126,12 +126,12 @@ class PSKProposal:
 		proposal_type, offset = read_u16(data, offset)
 		if proposal_type != ProposalType.PRE_SHARED_KEY:
 			raise ValueError(f"Expected PSK, got {proposal_type:#06x}")
-		psk_id_wire, offset = read_opaque_varint(data, offset)
+		psk_id_wire, offset = read_opaque(data, offset)
 		inner = 0
 		_psk_type = psk_id_wire[inner]
 		inner += 1
-		psk_id, inner = read_opaque_varint(psk_id_wire, inner)
-		psk_nonce, inner = read_opaque_varint(psk_id_wire, inner)
+		psk_id, inner = read_opaque(psk_id_wire, inner)
+		psk_nonce, inner = read_opaque(psk_id_wire, inner)
 		return cls(psk_id=psk_id, psk_nonce=psk_nonce), offset
 
 
@@ -171,9 +171,9 @@ class ProposalOrRef:
 
 	def to_bytes(self) -> bytes:
 		if self.value is not None:
-			return b"\x01" + _opaque_varint(self.value)
+			return b"\x01" + tls_varint(len(self.value)) + self.value
 		elif self.reference is not None:
-			return b"\x02" + _opaque_varint(self.reference)  # P1-5: opaque<V> varint prefix
+			return b"\x02" + tls_varint(len(self.reference)) + self.reference
 		raise ValueError("ProposalOrRef must have value or reference")
 
 	@classmethod
@@ -181,9 +181,53 @@ class ProposalOrRef:
 		kind = data[offset]
 		offset += 1
 		if kind == 0x01:
-			value, offset = read_opaque_varint(data, offset)
+			value, offset = read_opaque(data, offset)
 			return cls(value=value), offset
 		elif kind == 0x02:
-			reference, offset = read_opaque_varint(data, offset)
+			reference, offset = read_opaque(data, offset)
 			return cls(reference=reference), offset
 		raise ValueError(f"Unknown ProposalOrRef kind: {kind:#04x}")
+
+
+@dataclass
+class Commit:
+	"""RFC 9420 §12.1: Commit message body.
+
+	Wire format: proposals<V> + optional<UpdatePath>
+	"""
+
+	proposals: list[ProposalOrRef]
+	# UpdatePath is handled in group.py to avoid circular dependencies
+	update_path_bytes: bytes | None = None
+
+	def to_bytes(self) -> bytes:
+		prop_bytes = b"".join(p.to_bytes() for p in self.proposals)
+		res = tls_varint(len(prop_bytes)) + prop_bytes
+		if self.update_path_bytes is not None:
+			res += b"\x01" + tls_varint(len(self.update_path_bytes)) + self.update_path_bytes
+		else:
+			res += b"\x00"
+		return res
+
+	@classmethod
+	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["Commit", int]:
+		# proposals<V>
+		props_total_len, offset = read_u32(data, offset) if len(data) > offset + 4 else (0, offset) # Simple fallback if needed
+		# Wait, RFC says proposals<V> is a vector, usually TLS vectors have varint or u16/u32 length.
+		# Mapping pure_mls convention: read_opaque equivalent
+		
+		# Let's use read_opaque for safety as it's our standard for <V>
+		props_data, offset = read_opaque(data, offset)
+		props = []
+		p_offset = 0
+		while p_offset < len(props_data):
+			p, p_offset = ProposalOrRef.from_bytes(props_data, p_offset)
+			props.append(p)
+		
+		has_path = data[offset]
+		offset += 1
+		path_bytes = None
+		if has_path:
+			path_bytes, offset = read_opaque(data, offset)
+		
+		return cls(proposals=props, update_path_bytes=path_bytes), offset

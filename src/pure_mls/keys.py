@@ -29,6 +29,10 @@ class SignatureKey:
 
 	@classmethod
 	def from_private_bytes(cls, data: bytes) -> "SignatureKey":
+		# IETF/OpenMLS vectors often provide a 64-byte expanded key (seed + pub).
+		# cryptography expects a 32-byte seed.
+		if len(data) == 64:
+			data = data[:32]
 		return cls(ed25519.Ed25519PrivateKey.from_private_bytes(data))
 
 	@classmethod

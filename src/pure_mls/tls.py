@@ -11,6 +11,7 @@ Encoding conventions:
 """
 
 import struct
+from typing import List, Optional
 
 # Fixed-width integers
 
@@ -31,25 +32,30 @@ def tls_u64(v: int) -> bytes:
 	return struct.pack(">Q", v)
 
 
-# Variable-length octet strings  (opaque<V>)
-# RFC 9420 uses uint16-prefixed variable-length vectors for most fields.
+# Variable-length octet strings (opaque<V>)
+# RFC 9420 uses MLS VarInt length prefix (shortest possible representation).
 
 
 def tls_opaque(data: bytes) -> bytes:
-	"""Encode bytes as opaque<V> with uint16 length prefix (max 65535 bytes)."""
-	if len(data) > 0xFFFF:
-		raise ValueError(f"opaque<V> overflow: {len(data)} > 65535")
-	return struct.pack(">H", len(data)) + data
+	"""Encode bytes as opaque<V> with MLS VarInt length prefix (RFC 9420 §3.2)."""
+	return tls_varint(len(data)) + data
+
+
+def tls_opaque16(data: bytes) -> bytes:
+	"""Encode bytes with uint16 length prefix (non-standard / legacy)."""
+	return tls_u16(len(data)) + data
 
 
 def tls_opaque32(data: bytes) -> bytes:
-	"""Encode bytes as opaque<V> with uint32 length prefix (for large payloads)."""
-	return struct.pack(">I", len(data)) + data
+	"""Encode bytes with uint32 length prefix."""
+	return tls_u32(len(data)) + data
 
 
-def tls_opaque_varint(data: bytes) -> bytes:
-	"""Encode bytes as opaque<V> with MLS VarInt length prefix."""
-	return tls_varint(len(data)) + data
+def tls_vec8(data: bytes) -> bytes:
+	"""Encode bytes with uint8 length prefix."""
+	if len(data) > 0xFF:
+		raise ValueError(f"vec8 overflow: {len(data)} > 255")
+	return struct.pack(">B", len(data)) + data
 
 
 # Decoding: Reader helpers
@@ -76,7 +82,15 @@ def read_u64(buf: bytes, offset: int) -> tuple[int, int]:
 
 
 def read_opaque(buf: bytes, offset: int) -> tuple[bytes, int]:
-	"""Decode opaque<V> with uint16 length prefix."""
+	"""Decode opaque<V> with MLS VarInt length prefix (RFC 9420 §3.2)."""
+	length, offset = _varint_decode(buf, offset)
+	if offset + length > len(buf):
+		raise ValueError(f"MLS TLS Parsing: opaque length {length} exceeds buffer size (offset {offset}, buffer {len(buf)})")
+	return buf[offset : offset + length], offset + length
+
+
+def read_opaque16(buf: bytes, offset: int) -> tuple[bytes, int]:
+	"""Decode opaque<V> with uint16 length prefix (non-standard / legacy)."""
 	(length,) = struct.unpack_from(">H", buf, offset)
 	offset += 2
 	return buf[offset : offset + length], offset + length
@@ -130,7 +144,135 @@ def tls_varint(n: int) -> bytes:
 	raise ValueError(f"VarInt out of range: {n}")
 
 
-def read_opaque_varint(buf: bytes, offset: int) -> tuple[bytes, int]:
-	"""Decode opaque<V> with MLS VarInt length prefix."""
-	length, offset = _varint_decode(buf, offset)
+def read_vector16(buf: bytes, offset: int) -> tuple[bytes, int]:
+	"""Read a vector with a 2-byte length prefix (uint16)."""
+	(length,) = struct.unpack_from(">H", buf, offset)
+	offset += 2
 	return buf[offset : offset + length], offset + length
+
+
+def read_vector32(buf: bytes, offset: int) -> tuple[bytes, int]:
+	"""Read a vector with a 4-byte length prefix (uint32)."""
+	(length,) = struct.unpack_from(">I", buf, offset)
+	offset += 4
+	return buf[offset : offset + length], offset + length
+
+
+def read_extensions16(buf: bytes, offset: int) -> tuple[List[tuple[int, bytes]], int]:
+	"""Read an Extension vector with a 2-byte length prefix."""
+	data, offset = read_vector16(buf, offset)
+	return _parse_extensions_internal(data), offset
+
+
+def read_extensions32(buf: bytes, offset: int) -> tuple[List[tuple[int, bytes]], int]:
+	"""Read an Extension vector with a 4-byte length prefix."""
+	data, offset = read_vector32(buf, offset)
+	return _parse_extensions_internal(data), offset
+
+
+def _parse_extensions_internal(data: bytes) -> List[tuple[int, bytes]]:
+	"""Internal helper to parse a sequence of raw extension blocks."""
+	exts = []
+	i = 0
+	while i < len(data):
+		etype = int.from_bytes(data[i : i + 2], "big")
+		elen = int.from_bytes(data[i + 2 : i + 4], "big")
+		edata = data[i + 4 : i + 4 + elen]
+		exts.append((etype, edata))
+		i += 4 + elen
+	return exts
+
+
+def read_vec8(buf: bytes, offset: int) -> tuple[bytes, int]:
+	"""Decode vec<T> with uint8 length prefix."""
+	length = buf[offset]
+	offset += 1
+	return buf[offset : offset + length], offset + length
+
+
+# MLS Extensions (RFC 9420 §13.4)
+
+
+from enum import IntEnum
+
+
+class ExtensionType(IntEnum):
+	CAPABILITIES = 0x0001
+	RATCHET_TREE = 0x0002
+	EXTERNAL_PUB = 0x0003
+	EXTERNAL_PSK = 0x0004
+	RESUMPTION_PSK = 0x0005
+	APP_ACK = 0x0006
+
+
+def tls_extension(ext_type: int, data: bytes) -> bytes:
+	"""Native MLS: Encode an Extension: uint16 type + VarInt-prefixed data (RFC 9420 §13.2)."""
+	return tls_u16(ext_type) + tls_opaque(data)
+
+
+def tls_extension16(ext_type: int, data: bytes) -> bytes:
+	"""TLS-Style: Encode an Extension: uint16 type + uint16-prefixed data (Appendix B)."""
+	return tls_u16(ext_type) + tls_opaque16(data)
+
+
+def read_extension(buf: bytes, offset: int) -> tuple[tuple[int, bytes], int]:
+	"""Native MLS: Decode an Extension: (type, data), new_offset. Uses VarInt."""
+	ext_type, offset = read_u16(buf, offset)
+	ext_data, offset = read_opaque(buf, offset)
+	return (ext_type, ext_data), offset
+
+
+def read_extension16(buf: bytes, offset: int) -> tuple[tuple[int, bytes], int]:
+	"""TLS-Style: Decode an Extension: (type, data), new_offset. Uses uint16."""
+	ext_type, offset = read_u16(buf, offset)
+	ext_data, offset = read_opaque16(buf, offset)
+	return (ext_type, ext_data), offset
+
+
+def tls_extensions(extensions: list[tuple[int, bytes]]) -> bytes:
+	"""Native MLS: Encode a vec<Extension> with VarInt length prefix."""
+	body = b"".join(tls_extension(t, d) for t, d in extensions)
+	return tls_varint(len(body)) + body
+
+
+def tls_extensions16(extensions: list[tuple[int, bytes]]) -> bytes:
+	"""TLS-Style: Encode a vec<Extension> with uint16 length prefix (Appendix B)."""
+	body = b"".join(tls_extension16(t, d) for t, d in extensions)
+	return tls_u16(len(body)) + body
+
+
+def read_extensions(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], int]:
+	"""Native MLS: Decode a vec<Extension> with VarInt length prefix."""
+	raw_exts, offset = read_opaque(buf, offset)
+	sub_offset = 0
+	res = []
+	while sub_offset < len(raw_exts):
+		ext, sub_offset = read_extension(raw_exts, sub_offset)
+		res.append(ext)
+	return res, offset
+
+
+def read_extensions16(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], int]:
+	"""TLS-Style: Decode a vec<Extension> with uint16 length prefix."""
+	raw_exts, offset = read_opaque16(buf, offset)
+	sub_offset = 0
+	res = []
+	while sub_offset < len(raw_exts):
+		try:
+			ext, sub_offset = read_extension16(raw_exts, sub_offset)
+			res.append(ext)
+		except Exception:
+			break
+	return res, offset
+
+
+def read_vector(buf: bytes, offset: int, cls: type) -> tuple[list, int]:
+	"""Decode vec<T> with MLS VarInt length prefix."""
+	# vec<T> is basically opaque<V> interpreted as elements
+	opaque_bytes, offset = read_opaque(buf, offset)
+	sub_offset = 0
+	res = []
+	while sub_offset < len(opaque_bytes):
+		val, sub_offset = cls.from_bytes_at(opaque_bytes, sub_offset)
+		res.append(val)
+	return res, offset

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.5.0] - Unreleased
+
+### Added (Hardening — RFC 9420 Pure-MLS Compliance)
+
+- **[RFC-PSK] PSK Integration** (`group.py`, `proposals.py`, `keyschedule.py`):
+  Implemented `PSKProposal` (RFC §12.1.4) and integrated it into the `MLSGroup` lifecycle. `add_member()` now accepts optional `external_psks` for out-of-band group seeding. `process_update()` resolves `PSKProposal` references and re-binds the KeySchedule via `HKDF-Extract(joiner_secret, psk_secret)`.
+- **[RFC-COMMIT] Formal Proposal/Commit Architecture** (`group.py`, `proposals.py`):
+  Eliminated legacy `GroupUpdate` shortcuts in favor of the formal `Commit` structure (RFC §12.1). Implemented `ProposalOrRef` (by_value vs by_reference dispatch) and a robust `ProposalStore` for out-of-commit proposal resolution.
+- **[RFC-TREE] Dynamic RatchetTree Growth** (`tree.py`):
+  Added `RatchetTree.expanded()` to handle membership additions that exceed current tree capacity, ensuring parent-hash computation remains stable during tree resizing.
+
+### Fixed (Interop — Wire Format Hardening)
+
+- **[P0-WELCOME] Welcome & EGS Wire-Format Refactor** (`group.py`):
+  Refactored `Welcome` and `EncryptedGroupSecrets` (EGS) to match RFC 9420 §12.1.2. Corrected field ordering (EGI before EGS) and fixed `KeyPackageRef` as a fixed 32-byte field (removed invalid varint prefix).
+- **[P1-GI] GroupInfo Confirmation Tag linkage** (`group.py`):
+  `GroupInfo` now strictly uses the `confirmation_tag` derived from the *new* epoch's key material, preventing the "binding desync" identified during OpenMLS interoperability testing.
+
 ## [3.0.4.0] - Unreleased
 
 ### Fixed (B760 Second Audit — Wire-Path & Interop Remediation)

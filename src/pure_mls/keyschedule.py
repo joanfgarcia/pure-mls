@@ -53,7 +53,7 @@ class PreSharedKeyID:
 		)
 
 
-def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> bytes:
+def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None, nh: int = 32) -> bytes:
 	"""RFC 9420 §8.4: PSK chain derivation.
 
 	psk_list: list of (PreSharedKeyID, psk_value) tuples. When empty: PSKSecret = 0^Nh.
@@ -67,14 +67,14 @@ def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> b
 	PSKLabel = struct { PreSharedKeyID id; uint16 index; uint16 count; }
 	"""
 	if not psk_list:
-		return b"\x00" * _NH
+		return b"\x00" * nh
 
 	n = len(psk_list)
-	psk_secret_acc = b"\x00" * _NH
+	psk_secret_acc = b"\x00" * nh
 	for i, (psk_key_id, psk_value) in enumerate(psk_list):
-		psk_extracted = hkdf_extract(b"\x00" * _NH, psk_value)
+		psk_extracted = hkdf_extract(b"\x00" * nh, psk_value)
 		psk_label = psk_key_id.to_bytes() + struct.pack("!HH", i, n)
-		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, _NH)
+		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, nh)
 		psk_secret_acc = hkdf_extract(psk_input, psk_secret_acc)
 
 	return psk_secret_acc
@@ -189,27 +189,28 @@ class KeySchedule:
 	# -------------------------------------------------------------------------
 
 	@staticmethod
-	def derive_welcome_key(joiner_secret: bytes) -> bytes:
-		"""RFC 9420 §12.4: welcome_key from intermediate_secret.
-
-		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret=0^32)
+	def derive_welcome_key(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
+		"""RFC 9420 §12.4: welcome_key from joiner_secret + psk_secret.
+		intermediate = Extract(joiner_secret, psk_secret or 0^Nh)
 		welcome_secret = DeriveSecret(intermediate, "welcome")
-		welcome_key = EWL(welcome_secret, "key", b"", 16)  ← AES-128-GCM Nk=16
+		welcome_key = ExpandWithLabel(welcome_secret, "key", b"", 16)
 		"""
-		# For the common case (no PSK): psk_secret = 0^32
-		psk_secret_0 = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		if psk_secret is None:
+			psk_secret = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "key", b"", 16)
 
 	@staticmethod
-	def derive_welcome_nonce(joiner_secret: bytes) -> bytes:
-		"""RFC 9420 §12.4: welcome_nonce from intermediate_secret.
-
-		Nn = 12 bytes (AES-128-GCM nonce length).
+	def derive_welcome_nonce(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
+		"""RFC 9420 §12.4: welcome_nonce from joiner_secret + psk_secret.
+		intermediate = Extract(joiner_secret, psk_secret or 0^Nh)
+		welcome_secret = DeriveSecret(intermediate, "welcome")
+		welcome_nonce = ExpandWithLabel(welcome_secret, "nonce", "", 12)
 		"""
-		psk_secret_0 = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		if psk_secret is None:
+			psk_secret = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "nonce", b"", 12)
 

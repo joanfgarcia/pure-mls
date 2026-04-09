@@ -11,24 +11,29 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 import copy
 import hashlib
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from pure_mls.extensions import Capabilities
 from pure_mls.tls import (
 	read_opaque,
+	read_opaque16,
 	read_opaque32,
-	read_opaque_varint,
 	read_u8,
 	read_u16,
-	read_u32,
+	read_u64,
 	tls_opaque,
+	tls_opaque16,
 	tls_opaque32,
-	tls_opaque_varint,
 	tls_u8,
 	tls_u16,
 	tls_u32,
+	tls_u64,
 	tls_varint,
+	tls_extensions,
+	read_extensions,
+	read_extensions16,
 )
 
 # §7.2 Credential
@@ -67,63 +72,11 @@ class Credential:
 		return cls(identity=identity)
 
 
-# §7.2 Capabilities
-
-
-@dataclass
-class Capabilities:
-	"""RFC 9420 §7.2: Capabilities declares supported protocol features.
-
-	For pure-mls v2.0 we declare the single supported ciphersuite.
-	"""
-
-	versions: list[int] = field(default_factory=lambda: [0x0001])  # mls10
-	cipher_suites: list[int] = field(default_factory=lambda: [0x0001])  # MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
-	extensions: list[int] = field(default_factory=list)
-	proposals: list[int] = field(default_factory=list)
-	credentials: list[int] = field(default_factory=lambda: [CREDENTIAL_TYPE_BASIC])
-
-	def to_bytes(self) -> bytes:
-		"""TLS: each field is a uint16-prefixed vector of uint16 values."""
-
-		def u16_vec(lst: list[int]) -> bytes:
-			inner = b"".join(tls_u16(v) for v in lst)
-			return tls_opaque(inner)
-
-		return u16_vec(self.versions) + u16_vec(self.cipher_suites) + u16_vec(self.extensions) + u16_vec(self.proposals) + u16_vec(self.credentials)
-
-	@classmethod
-	def from_bytes(cls, data: bytes) -> "Capabilities":
-		"""Parse from standalone bytes buffer (backward-compatible)."""
-		obj, _ = cls.from_bytes_at(data, 0)
-		return obj
-
-	@classmethod
-	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["Capabilities", int]:
-		def read_u16_vec(buf: bytes, off: int) -> tuple[list[int], int]:
-			raw, off = read_opaque(buf, off)
-			values = [int.from_bytes(raw[i : i + 2], "big") for i in range(0, len(raw), 2)]
-			return values, off
-
-		versions, offset = read_u16_vec(data, offset)
-		cipher_suites, offset = read_u16_vec(data, offset)
-		extensions, offset = read_u16_vec(data, offset)
-		proposals, offset = read_u16_vec(data, offset)
-		credentials, offset = read_u16_vec(data, offset)
-		return cls(
-			versions=versions,
-			cipher_suites=cipher_suites,
-			extensions=extensions,
-			proposals=proposals,
-			credentials=credentials,
-		), offset
-
-	@classmethod
-	def default(cls) -> "Capabilities":
-		return cls()
-
-
 # §7.2 LeafNodeSource
+
+LEAF_NODE_SOURCE_KEY_PACKAGE = 0x01
+LEAF_NODE_SOURCE_UPDATE = 0x02
+LEAF_NODE_SOURCE_COMMIT = 0x03
 
 LEAF_NODE_SOURCE_KEY_PACKAGE = 0x01
 LEAF_NODE_SOURCE_UPDATE = 0x02
@@ -152,7 +105,9 @@ class LeafNode:
 	credential: Credential
 	capabilities: Capabilities
 	leaf_node_source: int = LEAF_NODE_SOURCE_KEY_PACKAGE
-	extensions: bytes = b""  # TLS-encoded extensions vector (empty = 4 zero bytes)
+	lifetime: Optional[tuple[int, int]] = None  # (not_before, not_after) if source == key_package
+	parent_hash: Optional[bytes] = None        # if source == commit
+	extensions: list[tuple[int, bytes]] = field(default_factory=list)  # vec<Extension>
 	signature: bytes = b""  # Ed25519(LeafNodeTBS), set by sign()
 
 	@property
@@ -183,10 +138,22 @@ class LeafNode:
 			+ tls_opaque(self.encryption_key)
 			+ tls_opaque(self.signature_key)
 			+ self.credential.to_bytes()
-			+ self.capabilities.to_bytes()
+			+ self.capabilities.marshal()
 			+ tls_u8(self.leaf_node_source)
-			+ (tls_varint(len(self.extensions)) + self.extensions if self.extensions else tls_varint(0))  # extensions<V>
 		)
+		
+		# RFC 9420 §7.2: select block
+		if self.leaf_node_source == LEAF_NODE_SOURCE_KEY_PACKAGE:
+			if self.lifetime:
+				tbs += tls_u64(self.lifetime[0]) + tls_u64(self.lifetime[1])
+			else:
+				# Default to zeros if missing (though should be present for KP)
+				tbs += tls_u64(0) + tls_u64(0)
+		elif self.leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
+			tbs += tls_opaque(self.parent_hash or b"")
+
+		tbs += tls_extensions(self.extensions)
+
 		if self.leaf_node_source in (LEAF_NODE_SOURCE_UPDATE, LEAF_NODE_SOURCE_COMMIT):
 			tbs += tls_opaque(group_id) + tls_u32(leaf_index)
 		return tbs
@@ -198,13 +165,7 @@ class LeafNode:
 		return replace(self, signature=sign_fn(tbs))
 
 	def verify_signature(self, group_id: bytes = b"", leaf_index: int = 0) -> None:
-		"""Verify the Ed25519 signature on this LeafNode.
-
-		P1-04 fix: the TBS content depends on leaf_node_source (RFC 9420 §7.2):
-		- 0x01 key_package: TBS does NOT include group_id / leaf_index.
-		- 0x02 update / 0x03 commit: TBS MUST include group_id and leaf_index.
-		Callers must supply group_id and leaf_index when verifying non-KeyPackage leaves.
-		"""
+		"""Verify the Ed25519 signature on this LeafNode."""
 
 		if not self.signature:
 			raise ValueError("LeafNode has no signature")
@@ -213,40 +174,69 @@ class LeafNode:
 		pub.verify(self.signature, tbs)
 
 	def to_bytes(self) -> bytes:
-		"""RFC 9420 §7.2 TLS wire encoding of LeafNode."""
+		"""Serializes as LeafNode (RFC 9420 §7.2)."""
+		bytes_ = (
+			tls_opaque(self.encryption_key)
+			+ tls_opaque(self.signature_key)
+			+ self.credential.to_bytes()
+			+ self.capabilities.marshal()
+			+ tls_u8(self.leaf_node_source)
+		)
+		
+		# RFC 9420 §7.2: select block
+		if self.leaf_node_source == LEAF_NODE_SOURCE_KEY_PACKAGE:
+			if self.lifetime:
+				bytes_ += tls_u64(self.lifetime[0]) + tls_u64(self.lifetime[1])
+			else:
+				bytes_ += tls_u64(0) + tls_u64(0)
+		elif self.leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
+			bytes_ += tls_opaque(self.parent_hash or b"")
+			
 		return (
-			tls_opaque(self.encryption_key)  # HPKEPublicKey encryption_key<V>
-			+ tls_opaque(self.signature_key)  # SignaturePublicKey signature_key<V>
-			+ self.credential.to_bytes()  # Credential credential
-			+ self.capabilities.to_bytes()  # Capabilities capabilities
-			+ tls_u8(self.leaf_node_source)  # LeafNodeSource leaf_node_source
-			+ (tls_varint(len(self.extensions)) + self.extensions if self.extensions else tls_varint(0))  # extensions<V>
-			+ tls_opaque(self.signature)  # opaque signature<V>
+			bytes_
+			+ tls_extensions(self.extensions)
+			+ tls_opaque(self.signature)
 		)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "LeafNode":
-		"""Parse from standalone bytes buffer (backward-compatible)."""
+		"""Parse from standalone bytes buffer."""
 		obj, _ = cls.from_bytes_at(data, 0)
 		return obj
 
 	@classmethod
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["LeafNode", int]:
+		# encryption_key: opaque<V>
 		encryption_key, offset = read_opaque(data, offset)
+		# signature_key: opaque<V>
 		signature_key, offset = read_opaque(data, offset)
+		
 		credential, offset = Credential.from_bytes_at(data, offset)
 		capabilities, offset = Capabilities.from_bytes_at(data, offset)
 		leaf_node_source, offset = read_u8(data, offset)
-		# extensions<V> — read as raw bytes (varint-prefixed)
-		ext_raw, offset = read_opaque_varint(data, offset)
+		
+		# RFC 9420 §7.2: select block
+		lifetime = None
+		parent_hash = None
+		if leaf_node_source == LEAF_NODE_SOURCE_KEY_PACKAGE:
+			nb, offset = read_u64(data, offset)
+			na, offset = read_u64(data, offset)
+			lifetime = (nb, na)
+		elif leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
+			parent_hash, offset = read_opaque(data, offset)
+			
+		extensions, offset = read_extensions(data, offset)
 		signature, offset = read_opaque(data, offset)
+		
 		return cls(
 			encryption_key=encryption_key,
 			signature_key=signature_key,
 			credential=credential,
 			capabilities=capabilities,
 			leaf_node_source=leaf_node_source,
-			extensions=ext_raw,
+			lifetime=lifetime,
+			parent_hash=parent_hash,
+			extensions=extensions,
 			signature=signature,
 		), offset
 
@@ -316,7 +306,7 @@ class KeyPackage:
 			+ tls_u16(self._CIPHER_SUITE)
 			+ tls_opaque(self.init_key_pub)  # HPKEPublicKey init_key<V>
 			+ self.leaf_node.to_bytes()  # LeafNode leaf_node
-			+ tls_u32(0)  # extensions<V> empty
+			+ tls_varint(0)  # extensions<V> empty (RFC 9420 uses VarInt for <V>)
 			+ tls_opaque(self.leaf_node_signature)  # signature<V>
 		)
 
@@ -336,9 +326,8 @@ class KeyPackage:
 			raise ValueError(f"Unsupported cipher suite: {cipher_suite:#06x}")
 		init_key_pub, offset = read_opaque(data, offset)
 		leaf_node, offset = LeafNode.from_bytes_at(data, offset)
-		# extensions<V> (uint32-prefixed) — read and discard
-		ext_len, offset = read_u32(data, offset)
-		offset += ext_len
+		# extensions<V> — per RFC 9420 uses VarInt prefix
+		extensions, offset = read_extensions(data, offset)
 		signature, offset = read_opaque(data, offset)
 		return cls(
 			leaf_node=leaf_node,
@@ -411,7 +400,7 @@ class ParentNode:
 		return (
 			tls_opaque(self.public_key)  # HPKEPublicKey encryption_key<V>
 			+ tls_opaque(self.parent_hash)  # opaque parent_hash<V>
-			+ tls_opaque32(unmerged)  # uint32 unmerged_leaves<V>
+			+ tls_opaque(unmerged)  # uint32 unmerged_leaves<V> (RFC 9420 §3.3 uses VarInt prefix for vectors)
 		)
 
 	@classmethod
@@ -424,7 +413,8 @@ class ParentNode:
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["ParentNode", int]:
 		public_key, offset = read_opaque(data, offset)
 		parent_hash, offset = read_opaque(data, offset)
-		unmerged_raw, offset = read_opaque32(data, offset)
+		# RFC 9420 §7.3 unmerged_leaves<V> uses VarInt prefix
+		unmerged_raw, offset = read_opaque(data, offset)
 		unmerged = [int.from_bytes(unmerged_raw[i : i + 4], "big") for i in range(0, len(unmerged_raw), 4)]
 		return cls(public_key=public_key, parent_hash=parent_hash, unmerged_leaves=unmerged), offset
 
@@ -473,6 +463,19 @@ class RatchetTree:
 			return None
 		return self.nodes[index]
 
+	def expanded(self, new_num_leaves: int) -> "RatchetTree":
+		"""Returns a new tree with more leaves, copying existing nodes."""
+		if new_num_leaves < self.num_leaves:
+			raise ValueError("Cannot contract tree with expanded()")
+		new_tree = RatchetTree(new_num_leaves)
+		for i, node in enumerate(self.nodes):
+			if node is not None:
+				if i % 2 == 0:
+					new_tree.set_leaf(i, node)
+				else:
+					new_tree.set_parent(i, node)
+		return new_tree
+
 	def remove_leaf(self, leaf_index: int) -> "RatchetTree":
 		"""RFC 9420 §7.7: Remove a member by blanking their leaf + direct path.
 
@@ -520,21 +523,25 @@ class RatchetTree:
 		return tree
 
 	def to_bytes(self) -> bytes:
-		"""RFC 9420 §7.4: ratchet_tree as optional<Node>[] (uint32-prefixed vector).
-
-		Each slot: 0x00=blank, 0x01=LeafNode, 0x02=ParentNode.
+		"""RFC 9420 §7.4, §13.4.3.2: ratchet_tree as optional<Node> nodes<V>.
+		
+		optional<Node>:
+		- presence 0x00
+		- presence 0x01 + NodeType + NodeBody
 		"""
 		parts = bytearray()
 		for node in self.nodes:
 			if node is None:
-				parts += b"\x00"
+				parts += b"\x00"  # presence=0
 			elif isinstance(node, LeafNode):
-				encoded = node.to_bytes()
-				parts += b"\x01" + encoded
+				# presence=1, type=leaf(1)
+				parts += b"\x01\x01" + node.to_bytes()
 			elif isinstance(node, ParentNode):
-				encoded = node.to_bytes()
-				parts += b"\x02" + encoded
-		return tls_opaque32(bytes(parts))
+				# presence=1, type=parent(2)
+				parts += b"\x01\x02" + node.to_bytes()
+		
+		# Return as a vector nodes<V> (struct RatchetTree wrapper)
+		return tls_varint(len(parts)) + bytes(parts)
 
 	@classmethod
 	def _parse(cls, raw: bytes) -> "RatchetTree":
@@ -542,18 +549,25 @@ class RatchetTree:
 		nodes: list[LeafNode | ParentNode | None] = []
 		i = 0
 		while i < len(raw):
-			node_type = raw[i]
+			present = raw[i]
 			i += 1
-			if node_type == 0x00:
+			if present == 0x00:
 				nodes.append(None)
-			elif node_type == 0x01:
-				leaf, i = LeafNode.from_bytes_at(raw, i)
-				nodes.append(leaf)
-			elif node_type == 0x02:
-				parent, i = ParentNode.from_bytes_at(raw, i)
-				nodes.append(parent)
+			elif present == 0x01:
+				if i >= len(raw):
+					break
+				node_type = raw[i]
+				i += 1
+				if node_type == 0x01:
+					leaf, i = LeafNode.from_bytes_at(raw, i)
+					nodes.append(leaf)
+				elif node_type == 0x02:
+					parent, i = ParentNode.from_bytes_at(raw, i)
+					nodes.append(parent)
+				else:
+					break
 			else:
-				raise ValueError(f"Unknown node type: {node_type:#04x}")
+				break
 		num_leaves = (len(nodes) + 1) // 2
 		tree = cls(num_leaves)
 		tree.nodes = nodes
@@ -561,14 +575,15 @@ class RatchetTree:
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "RatchetTree":
-		"""Backward-compatible: parse RFC §7.4 ratchet_tree<V> from a standalone buffer."""
-		raw, _ = read_opaque32(data, 0)
+		"""Parse RFC 9420 §7.4 ratchet_tree (vector of optional nodes)."""
+		# The extension content is a vector <optional<Node>>, so it has a length prefix.
+		raw, _ = read_opaque(data, 0)
 		return cls._parse(raw)
 
 	@classmethod
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["RatchetTree", int]:
 		"""TLS streaming: parse ratchet_tree<V> from data at offset, return (tree, new_offset)."""
-		raw, offset = read_opaque32(data, offset)
+		raw, offset = read_opaque(data, offset)
 		return cls._parse(raw), offset
 
 	# ------------------------------------------------------------------
@@ -722,6 +737,6 @@ class RatchetTree:
 				res += b"\x01" + node.to_bytes()
 
 			# Opaque hashes use project-standard VarInt prefix
-			res += tls_opaque_varint(left_h)
-			res += tls_opaque_varint(right_h)
+			res += tls_opaque(left_h)
+			res += tls_opaque(right_h)
 			return hashlib.sha256(res).digest()
