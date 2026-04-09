@@ -3,23 +3,11 @@
 The SecretTree converts an epoch's encryption_secret into per-leaf,
 per-generation symmetric keys (content_key, content_nonce) for
 encrypting/decrypting PrivateMessage payloads.
-
-RFC §9.3 Binary-Tree Derivation Path:
-	root = encryption_secret
-	parent -> left  = ExpandWithLabel(parent, "left",  b"", NH)
-	parent -> right = ExpandWithLabel(parent, "right", b"", NH)
-	leaf_secret[leaf]  = ExpandWithLabel(leaf_node, "application", b"", NH)
-	leaf_secret per-generation ratcheting adds the generation as context:
-	next = ExpandWithLabel(current, "application", I2OSP(gen, 4), NH).
-	key   = ExpandWithLabel(leaf_secret[gen], "key",   b"", KEY_LEN)
-	nonce = ExpandWithLabel(leaf_secret[gen], "nonce", b"", NONCE_LEN)
-
-SenderData (§9.4): sender_data_secret -> sd_key / sd_nonce via ExpandWithLabel.
-
-Note: AES-128-GCM (16-byte key) per MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519.
 """
 
+import struct
 from dataclasses import dataclass, field
+from typing import Tuple
 
 from pure_mls.hkdf import expand_with_label
 
@@ -28,36 +16,64 @@ _NONCE_LEN: int = 12  # AEAD nonce (bytes)
 _NH: int = 32  # Hash output length
 
 
-def _tree_width(n_leaves: int) -> int:
-	"""Smallest power-of-2 >= n_leaves (number of tree slots at leaf level)."""
-	w = 1
-	while w < n_leaves:
-		w <<= 1
-	return w
+def _log2(x: int) -> int:
+	"""Return the log2 of x, matching RFC §13.1."""
+	if x == 0:
+		return 0
+	return x.bit_length() - 1
 
 
-def _derive_leaf_node_secret(encryption_secret: bytes, leaf_index: int, n_leaves: int) -> bytes:
-	"""RFC §9.3: traverse the binary tree from root to the given leaf.
+def _level(index: int) -> int:
+	"""Return the level of a node in the tree (RFC §13.1)."""
+	if (index & 0x01) == 0:
+		return 0
+	k = 0
+	while ((index >> k) & 0x01) == 1:
+		k += 1
+	return k
 
-	The tree has `w = _tree_width(n_leaves)` leaf slots.
-	Root secret = encryption_secret.
-	At each level: go left (bit=0) or right (bit=1) based on the bit of leaf_index,
-	reading from MSB to LSB for the current tree depth.
-	"""
-	w = _tree_width(n_leaves)
-	depth = 0
-	tmp = w
-	while tmp > 1:
-		depth += 1
-		tmp >>= 1
 
-	secret = encryption_secret
-	for bit_pos in range(depth - 1, -1, -1):
-		bit = (leaf_index >> bit_pos) & 1
-		direction = "right" if bit else "left"
-		secret = expand_with_label(secret, direction, b"", _NH)
+def _root(n_leaves: int) -> int:
+	"""Return the root node index for a tree with n_leaves (RFC §13.1)."""
+	n = 2 * n_leaves - 1
+	return (1 << _log2(n)) - 1
 
-	return secret
+
+def _left(index: int) -> int:
+	"""Return the left child of a parent node (RFC §13.1)."""
+	k = _level(index)
+	return index ^ (0x01 << (k - 1))
+
+
+def _right(index: int) -> int:
+	"""Return the right child of a parent node (RFC §13.1)."""
+	k = _level(index)
+	return index ^ (0x03 << (k - 1))
+
+
+def _parent(index: int, n_leaves: int) -> int:
+	"""Return the parent of a node (RFC §13.1)."""
+	k = _level(index)
+	b = (index >> (k + 1)) & 0x01
+	p = (index | (1 << k)) ^ (b << (k + 1))
+	return p
+
+
+def _get_path(target_leaf_index: int, n_leaves: int) -> list[str]:
+	"""Compute the path from root to leaf, returning a list of 'left'/'right' directions."""
+	target_node = target_leaf_index * 2
+	root_node = _root(n_leaves)
+	path = []
+	curr = target_node
+	while curr != root_node:
+		p = _parent(curr, n_leaves)
+		if curr == _left(p):
+			path.append("left")
+		else:
+			path.append("right")
+		curr = p
+	path.reverse()
+	return path
 
 
 @dataclass
@@ -66,81 +82,89 @@ class SecretTree:
 
 	Holds next-to-use generation for each leaf. Derives keys on demand
 	and advances the generation counter to enforce forward secrecy.
-	Uses RFC §9.3 binary-tree derivation for IETF vector compliance.
-
-	P2-1 audit: encryption_secret stored as mutable bytearray from creation,
-	enabling in-place zeroing in wipe() without the copy-and-discard pattern.
 	"""
 
 	encryption_secret: bytearray  # P2-1: mutable — allows in-place zeroing
 	n_leaves: int
 	_generations: dict[int, int] = field(default_factory=dict)
-	_leaf_tip: dict[int, tuple[int, bytearray]] = field(default_factory=dict)
+	# Cache for the latest derived secret per leaf to optimize forward ratcheting
+	# (leaf_index) -> (generation, type, secret)
+	# P2-1: secret stored as bytearray for zeroing
+	_leaf_cache: dict[int, dict[str, tuple[int, bytearray]]] = field(default_factory=dict)
 
-	def _leaf_node_secret(self, leaf_index: int) -> bytes:
-		"""RFC §9.3: root -> binary-tree path -> leaf node secret."""
-		return _derive_leaf_node_secret(bytes(self.encryption_secret), leaf_index, self.n_leaves)
+	def _derive_leaf_node_secret(self, leaf_index: int) -> bytes:
+		"""Traverse §9.3 binary tree from root encryption_secret to leaf node."""
+		path = _get_path(leaf_index, self.n_leaves)
+		secret = bytes(self.encryption_secret)
+		for direction in path:
+			# OpenMLS/IETF parity: label="tree", context=direction (b"left"/b"right")
+			# although RFC 9420 §9.3 says label=direction, context=b""
+			secret = expand_with_label(secret, "tree", direction.encode(), _NH)
+		return secret
 
-	def _leaf_secret_for_gen(self, leaf_index: int, generation: int) -> bytearray:
-		"""RFC §9.3: leaf_node_secret ratcheted to the given generation.
+	def _get_ratchet_secret(self, leaf_index: int, generation: int, secret_type: str) -> bytes:
+		"""Derive ratchet secret for a specific leaf/gen/type (§10.1)."""
+		# secret_type is "handshake" or "application"
+		
+		# Check cache first
+		cache = self._leaf_cache.setdefault(leaf_index, {})
+		tip_gen, tip_secret = cache.get(secret_type, (-1, bytearray()))
 
-		gen_N_secret = ExpandWithLabel(gen_N-1_secret, "application", I2OSP(N, 4), NH)
-		"""
-		tip_gen, tip_secret = self._leaf_tip.get(leaf_index, (-1, bytearray(b"")))
 		if tip_gen == generation:
-			return tip_secret
-		start_gen = tip_gen + 1 if tip_gen >= 0 else 0
-		secret = bytes(tip_secret) if tip_gen >= 0 else self._leaf_node_secret(leaf_index)
-		for gen in range(start_gen, generation + 1):
-			secret = expand_with_label(secret, "application", gen.to_bytes(4, "big"), _NH)
-		result = bytearray(secret)
-		self._leaf_tip[leaf_index] = (generation, result)
-		return result
+			return bytes(tip_secret)
 
-	def get_key_and_nonce(self, leaf_index: int) -> tuple[bytes, bytes, int]:
-		"""Derive (content_key, content_nonce, generation) for the next message from leaf_index.
+		if generation < tip_gen:
+			raise ValueError(f"SecretTree forward-secrecy: gen {generation} < tip {tip_gen}")
 
-		Advances the internal generation counter for that leaf
-		(forward secrecy: old generations cannot be rederived).
-		Returns the generation used so the sender can include it in SenderData.
-		"""
+		# Start from tip or from leaf node secret (gen 0 split)
+		if tip_gen >= 0:
+			curr_gen = tip_gen
+			curr_secret = bytes(tip_secret)
+		else:
+			# §9.2: split happens at the leaf node secret
+			node_secret = self._derive_leaf_node_secret(leaf_index)
+			# Gen 0 secret = ExpandWithLabel(node_secret, type, b"", NH)
+			curr_secret = expand_with_label(node_secret, secret_type, b"", _NH)
+			curr_gen = 0
+
+		# Ratchet forward (§10.1 DeriveTreeSecret)
+		for g in range(curr_gen, generation):
+			# OpenMLS/IETF parity: ratchet label is ALWAYS "secret"
+			# context = struct { uint32 generation; }
+			context = struct.pack("!I", g)
+			curr_secret = expand_with_label(curr_secret, "secret", context, _NH)
+
+		# Update cache
+		cache[secret_type] = (generation, bytearray(curr_secret))
+		return curr_secret
+
+	def get_key_and_nonce_for_gen(
+		self, leaf_index: int, generation: int, secret_type: str = "application"
+	) -> tuple[bytes, bytes]:
+		"""Non-consuming derivation for a specific generation (receiver side)."""
+		ratchet_secret = self._get_ratchet_secret(leaf_index, generation, secret_type)
+		# §9.3: key/nonce from ratchet secret
+		# context = struct { uint32 generation; }
+		context = struct.pack("!I", generation)
+		key = expand_with_label(ratchet_secret, "key", context, _KEY_LEN)
+		nonce = expand_with_label(ratchet_secret, "nonce", context, _NONCE_LEN)
+		return key, nonce
+
+	def get_key_and_nonce(self, leaf_index: int, secret_type: str = "application") -> tuple[bytes, bytes, int]:
+		"""Consuming derivation (sender side). Advances generation counter."""
 		gen = self._generations.get(leaf_index, 0)
-		leaf_secret = self._leaf_secret_for_gen(leaf_index, gen)
-		key = expand_with_label(bytes(leaf_secret), "key", b"", _KEY_LEN)
-		nonce = expand_with_label(bytes(leaf_secret), "nonce", b"", _NONCE_LEN)
+		key, nonce = self.get_key_and_nonce_for_gen(leaf_index, gen, secret_type)
 		self._generations[leaf_index] = gen + 1
 		return key, nonce, gen
 
-	def get_key_and_nonce_for_gen(self, leaf_index: int, generation: int) -> tuple[bytes, bytes]:
-		"""Derive (content_key, content_nonce) for a specific generation (receiver side).
-
-		Raises ValueError if this generation was already consumed (forward secrecy).
-		"""
-		current_gen = self._generations.get(leaf_index, 0)
-		if generation < current_gen:
-			raise ValueError(
-				f"SecretTree: leaf {leaf_index} generation {generation} already consumed (current={current_gen}) — forward secrecy violated"
-			)
-		leaf_secret = self._leaf_secret_for_gen(leaf_index, generation)
-		self._generations[leaf_index] = generation + 1
-		key = expand_with_label(bytes(leaf_secret), "key", b"", _KEY_LEN)
-		nonce = expand_with_label(bytes(leaf_secret), "nonce", b"", _NONCE_LEN)
-		return key, nonce
-
 	def wipe(self) -> None:
-		"""Zero all key material for this epoch (RFC 9420 §9 forward secrecy).
-
-		P2-1 audit fix: encryption_secret and leaf-tip secrets are now stored
-		as bytearray from creation, enabling in-place zeroing of the live
-		allocation without the copy-and-discard pattern.
-		"""
-		# Zero encryption_secret in-place (mutable bytearray)
+		"""Securely zero all sensitive data (RFC 9420 §9)."""
 		self.encryption_secret[:] = b"\x00" * len(self.encryption_secret)
-		# Zero each cached leaf-tip secret in-place
-		for _gen, tip_secret in self._leaf_tip.values():
-			tip_secret[:] = b"\x00" * len(tip_secret)
+		for leaf_data in self._leaf_cache.values():
+			for _gen, secret in leaf_data.values():
+				secret[:] = b"\x00" * len(secret)
+		self._leaf_cache.clear()
 		self._generations.clear()
-		self._leaf_tip.clear()
 
 
 def derive_sender_data_key(sender_data_secret: bytes, ciphertext_sample: bytes) -> bytes:
