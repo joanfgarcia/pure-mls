@@ -215,7 +215,7 @@ class Commit:
 		props_total_len, offset = read_u32(data, offset) if len(data) > offset + 4 else (0, offset) # Simple fallback if needed
 		# Wait, RFC says proposals<V> is a vector, usually TLS vectors have varint or u16/u32 length.
 		# Mapping pure_mls convention: read_opaque equivalent
-		
+
 		# Let's use read_opaque for safety as it's our standard for <V>
 		props_data, offset = read_opaque(data, offset)
 		props = []
@@ -223,11 +223,11 @@ class Commit:
 		while p_offset < len(props_data):
 			p, p_offset = ProposalOrRef.from_bytes(props_data, p_offset)
 			props.append(p)
-		
+
 		has_path = data[offset]
 		offset += 1
 		path_bytes = None
 		if has_path:
 			path_bytes, offset = read_opaque(data, offset)
-		
+
 		return cls(proposals=props, update_path_bytes=path_bytes), offset

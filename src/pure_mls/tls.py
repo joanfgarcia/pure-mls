@@ -11,7 +11,8 @@ Encoding conventions:
 """
 
 import struct
-from typing import List, Optional
+from enum import IntEnum
+from typing import List
 
 # Fixed-width integers
 
@@ -193,9 +194,6 @@ def read_vec8(buf: bytes, offset: int) -> tuple[bytes, int]:
 # MLS Extensions (RFC 9420 §13.4)
 
 
-from enum import IntEnum
-
-
 class ExtensionType(IntEnum):
 	CAPABILITIES = 0x0001
 	RATCHET_TREE = 0x0002
@@ -252,18 +250,6 @@ def read_extensions(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], i
 	return res, offset
 
 
-def read_extensions16(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], int]:
-	"""TLS-Style: Decode a vec<Extension> with uint16 length prefix."""
-	raw_exts, offset = read_opaque16(buf, offset)
-	sub_offset = 0
-	res = []
-	while sub_offset < len(raw_exts):
-		try:
-			ext, sub_offset = read_extension16(raw_exts, sub_offset)
-			res.append(ext)
-		except Exception:
-			break
-	return res, offset
 
 
 def read_vector(buf: bytes, offset: int, cls: type) -> tuple[list, int]:

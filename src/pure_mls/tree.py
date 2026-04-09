@@ -11,29 +11,24 @@ with OpenMLS (Rust), mlspp (C++), and any other RFC-conforming implementation.
 import copy
 import hashlib
 from dataclasses import dataclass, field, replace
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from pure_mls.extensions import Capabilities
 from pure_mls.tls import (
+	read_extensions,
 	read_opaque,
-	read_opaque16,
-	read_opaque32,
 	read_u8,
 	read_u16,
 	read_u64,
+	tls_extensions,
 	tls_opaque,
-	tls_opaque16,
-	tls_opaque32,
 	tls_u8,
 	tls_u16,
 	tls_u32,
 	tls_u64,
 	tls_varint,
-	tls_extensions,
-	read_extensions,
-	read_extensions16,
 )
 
 # §7.2 Credential
@@ -141,7 +136,7 @@ class LeafNode:
 			+ self.capabilities.marshal()
 			+ tls_u8(self.leaf_node_source)
 		)
-		
+
 		# RFC 9420 §7.2: select block
 		if self.leaf_node_source == LEAF_NODE_SOURCE_KEY_PACKAGE:
 			if self.lifetime:
@@ -182,7 +177,7 @@ class LeafNode:
 			+ self.capabilities.marshal()
 			+ tls_u8(self.leaf_node_source)
 		)
-		
+
 		# RFC 9420 §7.2: select block
 		if self.leaf_node_source == LEAF_NODE_SOURCE_KEY_PACKAGE:
 			if self.lifetime:
@@ -191,7 +186,7 @@ class LeafNode:
 				bytes_ += tls_u64(0) + tls_u64(0)
 		elif self.leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
 			bytes_ += tls_opaque(self.parent_hash or b"")
-			
+
 		return (
 			bytes_
 			+ tls_extensions(self.extensions)
@@ -210,11 +205,11 @@ class LeafNode:
 		encryption_key, offset = read_opaque(data, offset)
 		# signature_key: opaque<V>
 		signature_key, offset = read_opaque(data, offset)
-		
+
 		credential, offset = Credential.from_bytes_at(data, offset)
 		capabilities, offset = Capabilities.from_bytes_at(data, offset)
 		leaf_node_source, offset = read_u8(data, offset)
-		
+
 		# RFC 9420 §7.2: select block
 		lifetime = None
 		parent_hash = None
@@ -224,10 +219,10 @@ class LeafNode:
 			lifetime = (nb, na)
 		elif leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
 			parent_hash, offset = read_opaque(data, offset)
-			
+
 		extensions, offset = read_extensions(data, offset)
 		signature, offset = read_opaque(data, offset)
-		
+
 		return cls(
 			encryption_key=encryption_key,
 			signature_key=signature_key,
@@ -524,7 +519,7 @@ class RatchetTree:
 
 	def to_bytes(self) -> bytes:
 		"""RFC 9420 §7.4, §13.4.3.2: ratchet_tree as optional<Node> nodes<V>.
-		
+
 		optional<Node>:
 		- presence 0x00
 		- presence 0x01 + NodeType + NodeBody
@@ -539,7 +534,7 @@ class RatchetTree:
 			elif isinstance(node, ParentNode):
 				# presence=1, type=parent(2)
 				parts += b"\x01\x02" + node.to_bytes()
-		
+
 		# Return as a vector nodes<V> (struct RatchetTree wrapper)
 		return tls_varint(len(parts)) + bytes(parts)
 

@@ -7,7 +7,6 @@ encrypting/decrypting PrivateMessage payloads.
 
 import struct
 from dataclasses import dataclass, field
-from typing import Tuple
 
 from pure_mls.hkdf import expand_with_label
 
@@ -51,7 +50,7 @@ def _right(index: int) -> int:
 	return index ^ (0x03 << (k - 1))
 
 
-def _parent(index: int, n_leaves: int) -> int:
+def _parent(index: int, _n_leaves: int) -> int:
 	"""Return the parent of a node (RFC §13.1)."""
 	k = _level(index)
 	b = (index >> (k + 1)) & 0x01
@@ -105,7 +104,7 @@ class SecretTree:
 	def _get_ratchet_secret(self, leaf_index: int, generation: int, secret_type: str) -> bytes:
 		"""Derive ratchet secret for a specific leaf/gen/type (§10.1)."""
 		# secret_type is "handshake" or "application"
-		
+
 		# Check cache first
 		cache = self._leaf_cache.setdefault(leaf_index, {})
 		tip_gen, tip_secret = cache.get(secret_type, (-1, bytearray()))

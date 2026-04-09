@@ -278,18 +278,18 @@ def test_secret_tree_key_nonce(vec_i, leaf_i, n_leaves, encryption_secret, gener
 
 	for gen_data in generations:
 		gen = gen_data["generation"]
-		
+
 		# Application Key/Nonce
 		expected_app_key = _h(gen_data["application_key"])
 		expected_app_nonce = _h(gen_data["application_nonce"])
-		
+
 		# Handshake Key/Nonce
 		expected_hand_key = _h(gen_data["handshake_key"])
 		expected_hand_nonce = _h(gen_data["handshake_nonce"])
 
 		# Fresh SecretTree per generation (get_key_and_nonce_for_gen starts from base)
 		st = SecretTree(encryption_secret=bytearray(encryption_secret), n_leaves=n_leaves)
-		
+
 		# Verify Application
 		app_key, app_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen, secret_type="application")
 		assert app_key == expected_app_key, (

@@ -7,30 +7,26 @@ Extensions are used to provide additional information in various MLS structures:
 - Welcome (§12.4.3)
 """
 
-import struct
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 
 from pure_mls.tls import (
     ExtensionType,
+    read_extensions,
+    read_opaque,
+    read_u8,
+    tls_extensions,
+    tls_opaque,
     tls_u8,
     tls_u16,
-    tls_u32,
-    tls_opaque,
     tls_varint,
-    tls_extensions,
-    read_u8,
-    read_u16,
-    read_u32,
-    read_opaque,
-    read_extensions,
 )
 
 
 @dataclass
 class Capabilities:
     """RFC 9420 §7.2: Capabilities of a client or group.
-    
+
     Fields are vectors (<V>) with VarInt length prefixes, as per OpenMLS interop.
     """
 
@@ -39,6 +35,11 @@ class Capabilities:
     extensions: List[int] = field(default_factory=lambda: [1, 2, 4])  # Cap, Tree, ExtPSK
     proposals: List[int] = field(default_factory=lambda: [1, 2, 3])  # Add, Update, Remove
     credentials: List[int] = field(default_factory=lambda: [1])  # Basic
+
+    @classmethod
+    def default(cls) -> "Capabilities":
+        """Returns default capabilities for MLS 1.0."""
+        return cls()
 
     def marshal(self) -> bytes:
         """Standard MLS serialization using VarInt prefixes."""
@@ -60,7 +61,6 @@ class Capabilities:
         # RFC 9420 §7.2: Capabilities vectors have range <0..255>, meaning 1st byte is length (uint8).
         # OpenMLS and standard MLS implementations follow this TLS 1.3 convention.
         def read_u8_vec(buf: bytes, off: int) -> tuple[List[int], int]:
-            from .tls import read_u8
             length, off = read_u8(buf, off)
             raw = buf[off : off + length]
             # Elements are uint16 as per RFC 9420 Appendix B

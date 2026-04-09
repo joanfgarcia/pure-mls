@@ -10,11 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added (Hardening — RFC 9420 Pure-MLS Compliance)
 
 - **[RFC-PSK] PSK Integration** (`group.py`, `proposals.py`, `keyschedule.py`):
-  Implemented `PSKProposal` (RFC §12.1.4) and integrated it into the `MLSGroup` lifecycle. `add_member()` now accepts optional `external_psks` for out-of-band group seeding. `process_update()` resolves `PSKProposal` references and re-binds the KeySchedule via `HKDF-Extract(joiner_secret, psk_secret)`.
-- **[RFC-COMMIT] Formal Proposal/Commit Architecture** (`group.py`, `proposals.py`):
-  Eliminated legacy `GroupUpdate` shortcuts in favor of the formal `Commit` structure (RFC §12.1). Implemented `ProposalOrRef` (by_value vs by_reference dispatch) and a robust `ProposalStore` for out-of-commit proposal resolution.
+  Implemented `PSKProposal` (RFC §12.1.4) and integrated it into the `MLSGroup` lifecycle. `add_member()` now accepts optional `external_psks` for out-of-band group seeding. `process_update()` resolves `PSKProposal` references and re-binds the KeySchedule via the iterative `HKDF-Extract(salt=prior, IKM=psk)` chain (§8.4), achieving 100% interop with IETF multi-PSK vectors.
+- **[RFC-JOIN] External RatchetTree Fallback** (`group.py`):
+  Enhanced `MLSGroup.join()` to support external `RatchetTree` injection. If the `Welcome` message omits the `ratchet_tree` extension (RFC §12.4.3), the joiner uses the provided tree state, enabling interop with "implicit-tree" Welcome messages.
 - **[RFC-TREE] Dynamic RatchetTree Growth** (`tree.py`):
   Added `RatchetTree.expanded()` to handle membership additions that exceed current tree capacity, ensuring parent-hash computation remains stable during tree resizing.
+
+### Fixed (Interop — 100% IETF Welcome Compliance)
+
+- **[P0-PSK] KeySchedule PSK Nonce Handling** (`group.py`):
+  `join()` now correctly preserves the `psk_nonce` defined in the `Welcome` message's `PreSharedKeyID` vector, instead of defaulting to a zero-length nonce.
+- **[P1-GI] GroupInfo Wire-Format Correction** (`group.py`):
+  Corrected `GroupInfo` and `ConfirmedTranscriptHashInput` serialization to treat `confirmation_tag` and `signature` as `opaque<V>` (VarInt-prefixed) instead of fixed-length blocks, aligning with OpenMLS/mls-rs.
 
 ### Fixed (Interop — Wire Format Hardening)
 
