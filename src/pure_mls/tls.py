@@ -12,7 +12,7 @@ Encoding conventions:
 
 import struct
 from enum import IntEnum
-from typing import List
+from typing import Any, List, Protocol
 
 # Fixed-width integers
 
@@ -250,7 +250,12 @@ def read_extensions(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], i
 	return res, offset
 
 
-def read_vector(buf: bytes, offset: int, cls: type) -> tuple[list, int]:
+class Parsable(Protocol):
+	@classmethod
+	def from_bytes_at(cls, data: bytes, offset: int) -> tuple[Any, int]: ...
+
+
+def read_vector(buf: bytes, offset: int, cls: type[Parsable]) -> tuple[list[Any], int]:
 	"""Decode vec<T> with MLS VarInt length prefix."""
 	# vec<T> is basically opaque<V> interpreted as elements
 	opaque_bytes, offset = read_opaque(buf, offset)

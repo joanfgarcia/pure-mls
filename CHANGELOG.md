@@ -15,8 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Enhanced `MLSGroup.join()` to support external `RatchetTree` injection. If the `Welcome` message omits the `ratchet_tree` extension (RFC §12.4.3), the joiner uses the provided tree state, enabling interop with "implicit-tree" Welcome messages.
 - **[RFC-TREE] Dynamic RatchetTree Growth** (`tree.py`):
   Added `RatchetTree.expanded()` to handle membership additions that exceed current tree capacity, ensuring parent-hash computation remains stable during tree resizing.
+- **[PY-3.12] Future Annotations & Dataclass Fixes** (`group.py`):
+  Enabled `from __future__ import annotations` to support `|` union types in string-evaluated dataclass fields on Python 3.12+. Corrected `GroupContext` and `GroupInfo` field order to maintain default-argument invariants.
 
 ### Fixed (Interop — 100% IETF Welcome Compliance)
+
+- **[P0-WELCOME] Welcome Encryption Symmetry** (`group.py`):
+  Corrected `add_member()` to use derived nonces instead of prepended ones for the `encrypted_group_info` (EGI), matching RFC 9420 §12.4. Ensured `psk_secret` consistency (Nhnd-zeros) between Alice and Bob when PSKs are absent.
+- **[P0-GI] GroupInfo Extension Signing** (`group.py`):
+  Refactored `ratchet_tree` (0x0002) delivery to be part of the `GroupInfo` extensions list *before* signing, ensuring the tree state is cryptographically bound to the committer's identity. Fixed double-prefixing in the extension vector.
+- **[P0-PROP] PublicMessage Metadata Propagation** (`group.py`):
+  `to_group_update()` now correctly propagates `epoch_id`, `committer_index`, and `signature` from the envelope, resolving state desyncs in the wire-format round-trip.
 
 - **[P0-PSK] KeySchedule PSK Nonce Handling** (`group.py`):
   `join()` now correctly preserves the `psk_nonce` defined in the `Welcome` message's `PreSharedKeyID` vector, instead of defaulting to a zero-length nonce.

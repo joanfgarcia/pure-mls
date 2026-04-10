@@ -462,8 +462,10 @@ class RatchetTree:
 		for i, node in enumerate(self.nodes):
 			if node is not None:
 				if i % 2 == 0:
+					assert isinstance(node, LeafNode)
 					new_tree.set_leaf(i, node)
 				else:
+					assert isinstance(node, ParentNode)
 					new_tree.set_parent(i, node)
 		return new_tree
 

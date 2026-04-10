@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import List
 
 from pure_mls.tls import (
-	ExtensionType,
 	read_extensions,
 	read_opaque,
 	read_u8,
@@ -126,7 +125,7 @@ class ExternalPSKExtension:
 class GroupContextExtensions:
 	"""RFC 9420 §12.1.7: Extensions applied to the GroupContext."""
 
-	extensions: List[tuple[ExtensionType, bytes]] = field(default_factory=list)
+	extensions: List[tuple[int, bytes]] = field(default_factory=list)
 
 	def marshal(self) -> bytes:
 		# RFC 9420 §12.1.1: Extension extensions<V>;
@@ -135,4 +134,4 @@ class GroupContextExtensions:
 	@classmethod
 	def unmarshal(cls, data: bytes) -> "GroupContextExtensions":
 		exts, _ = read_extensions(data, 0)
-		return cls(exts)
+		return cls(extensions=exts)

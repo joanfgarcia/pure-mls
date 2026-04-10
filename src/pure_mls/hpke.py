@@ -21,22 +21,22 @@ class HPKE:
 	@staticmethod
 	def _kem_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + ikm
-		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _kem_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
 		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + info
-		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _labeled_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.SUITE_ID + label + ikm
-		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _labeled_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
 		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.SUITE_ID + label + info
-		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _xor_nonce(base_nonce: bytes, seq: int) -> bytes:

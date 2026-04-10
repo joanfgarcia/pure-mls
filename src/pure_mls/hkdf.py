@@ -48,7 +48,7 @@ def expand_with_label(
 	label: str,
 	context: bytes,
 	length: int,
-	hash_func: HashFunction = hashlib.sha256,
+	hash_func: HashFunction = hashlib.sha256,  # type: ignore[assignment]
 ) -> bytes:
 	"""RFC 9420 §8: ExpandWithLabel(Secret, Label, Context, Length).
 
@@ -61,22 +61,22 @@ def expand_with_label(
 	return hkdf_expand(secret, hkdf_label, length, hash_func)
 
 
-def derive_secret(secret: bytes, label: str, hash_func: HashFunction = hashlib.sha256) -> bytes:
+def derive_secret(secret: bytes, label: str, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
 	"""RFC 9420 §8: DeriveSecret(Secret, Label) = ExpandWithLabel(Secret, Label, b'', NH)."""
 	nh = hash_func().digest_size
 	return expand_with_label(secret, label, b"", nh, hash_func)
 
 
-def hkdf_extract(salt: bytes | None, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:
+def hkdf_extract(salt: bytes | None, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
 	"""HKDF-Extract (RFC 5869).
 	Extracts a pseudorandom key (PRK) from input keying material (IKM) and a salt.
 	"""
 	if salt is None:
 		salt = b"\x00" * hash_func().digest_size
-	return hmac.new(salt, ikm, hash_func).digest()
+	return hmac.new(salt, ikm, hash_func).digest()  # type: ignore[arg-type]
 
 
-def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = hashlib.sha256) -> bytes:
+def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
 	"""HKDF-Expand (RFC 5869).
 	Expands a pseudorandom key (PRK) and info string into output keying material (OKM).
 	"""
@@ -85,6 +85,6 @@ def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = 
 	okm = b""
 	t_i = b""
 	for i in range(1, n + 1):
-		t_i = hmac.new(prk, t_i + info + bytes([i]), hash_func).digest()
+		t_i = hmac.new(prk, t_i + info + bytes([i]), hash_func).digest()  # type: ignore[arg-type]
 		okm += t_i
 	return okm[:length]

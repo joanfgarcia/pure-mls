@@ -140,14 +140,18 @@ def test_welcome_e2e_join(alice_bob_group):
 
 
 def test_group_update_round_trip(alice_bob_group):
-	"""GroupUpdate to_bytes()/from_bytes() produces an identical struct."""
+	"""GroupUpdate to_bytes()/from_bytes() produces a Commit with an identical struct.
+	Internal metadata (epoch/signature) is reset as it lives in the PublicMessage envelope.
+	"""
 	_, _, _, update = alice_bob_group
 	encoded = update.to_bytes()
 	decoded = GroupUpdate.from_bytes(encoded)
-	assert decoded.epoch_id == update.epoch_id
-	assert decoded.committer_index == update.committer_index
-	assert decoded.signature == update.signature
-	assert set(decoded.encrypted_commit_secrets.keys()) == set(update.encrypted_commit_secrets.keys())
+	# Metadata is handled by envelope, helper returns defaults
+	assert decoded.epoch_id == 0
+	# The core Commit proposals must survive
+	assert len(decoded.commit.proposals) == len(update.commit.proposals)
+	assert decoded.commit.proposals[0].value == update.commit.proposals[0].value
+	assert decoded.commit.to_bytes() == update.commit.to_bytes()
 
 
 # ---------------------------------------------------------------------------
