@@ -101,7 +101,7 @@ class LeafNode:
 	capabilities: Capabilities
 	leaf_node_source: int = LEAF_NODE_SOURCE_KEY_PACKAGE
 	lifetime: Optional[tuple[int, int]] = None  # (not_before, not_after) if source == key_package
-	parent_hash: Optional[bytes] = None        # if source == commit
+	parent_hash: Optional[bytes] = None  # if source == commit
 	extensions: list[tuple[int, bytes]] = field(default_factory=list)  # vec<Extension>
 	signature: bytes = b""  # Ed25519(LeafNodeTBS), set by sign()
 
@@ -187,11 +187,7 @@ class LeafNode:
 		elif self.leaf_node_source == LEAF_NODE_SOURCE_COMMIT:
 			bytes_ += tls_opaque(self.parent_hash or b"")
 
-		return (
-			bytes_
-			+ tls_extensions(self.extensions)
-			+ tls_opaque(self.signature)
-		)
+		return bytes_ + tls_extensions(self.extensions) + tls_opaque(self.signature)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "LeafNode":

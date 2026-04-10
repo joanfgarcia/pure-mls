@@ -250,8 +250,6 @@ def read_extensions(buf: bytes, offset: int) -> tuple[list[tuple[int, bytes]], i
 	return res, offset
 
 
-
-
 def read_vector(buf: bytes, offset: int, cls: type) -> tuple[list, int]:
 	"""Decode vec<T> with MLS VarInt length prefix."""
 	# vec<T> is basically opaque<V> interpreted as elements

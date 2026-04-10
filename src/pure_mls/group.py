@@ -172,15 +172,15 @@ class GroupSecrets:
 				# Based on KeySchedule.PreSharedKeyID structure
 				psk_type = data[offset]
 				offset += 1
-				if psk_type == 1: # EXTERNAL (only one we support here)
+				if psk_type == 1:  # EXTERNAL (only one we support here)
 					pid, offset = read_opaque(data, offset)
 					pnonce, offset = read_opaque(data, offset)
 					psks.append(PreSharedKeyID(psk_type=1, psk_id=pid, psk_nonce=pnonce))
-				else: # RESUMPTION
+				else:  # RESUMPTION
 					usage = data[offset]
 					offset += 1
 					pgid, offset = read_opaque(data, offset)
-					pepoch = struct.unpack("!Q", data[offset:offset+8])[0]
+					pepoch = struct.unpack("!Q", data[offset : offset + 8])[0]
 					offset += 8
 					pnonce, offset = read_opaque(data, offset)
 					psks.append(PreSharedKeyID(psk_type=2, psk_id=b"", usage=usage, psk_group_id=pgid, psk_epoch=pepoch, psk_nonce=pnonce))
@@ -192,17 +192,14 @@ class EncryptedGroupSecrets:
 	"""
 	HPKE-encrypted GroupSecrets for a single joiner (RFC 9420 §12.4.3.1).
 	"""
+
 	new_member: bytes  # KeyPackageRef (32 bytes)
 	kem_output: bytes  # HPKE enc
 	ciphertext: bytes  # HPKE ciphertext
 
 	def to_bytes(self) -> bytes:
 		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
-		return (
-			tls_opaque(self.new_member)
-			+ tls_opaque(self.kem_output)
-			+ tls_opaque(self.ciphertext)
-		)
+		return tls_opaque(self.new_member) + tls_opaque(self.kem_output) + tls_opaque(self.ciphertext)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["EncryptedGroupSecrets", int]:
@@ -228,6 +225,7 @@ class Welcome:
 	GroupInfo is sealed with AES-128-GCM using welcome_key derived from
 	joiner_secret via ExpandWithLabel(joiner_secret, 'welcome', b'', 16).
 	"""
+
 	cipher_suite: int
 	secrets: list[EncryptedGroupSecrets]  # EncryptedGroupSecrets secrets<V>
 	encrypted_group_info: bytes  # opaque encrypted_group_info<V>
@@ -235,11 +233,7 @@ class Welcome:
 	def to_bytes(self) -> bytes:
 		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
 		egs_bytes = b"".join(s.to_bytes() for s in self.secrets)
-		return (
-			self.cipher_suite.to_bytes(2, "big")
-			+ tls_opaque(egs_bytes)
-			+ tls_opaque(self.encrypted_group_info)
-		)
+		return self.cipher_suite.to_bytes(2, "big") + tls_opaque(egs_bytes) + tls_opaque(self.encrypted_group_info)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> "Welcome":
@@ -347,12 +341,7 @@ class GroupInfo:
 
 	def _tbs_bytes(self) -> bytes:
 		"""TBS = GroupContext + extensions<V> + confirmation_tag[Nh] + signer(uint32)."""
-		return (
-			self.group_context.to_bytes()
-			+ tls_extensions(self.extensions)
-			+ tls_opaque(self.confirmation_tag)
-			+ tls_u32(self.signer)
-		)
+		return self.group_context.to_bytes() + tls_extensions(self.extensions) + tls_opaque(self.confirmation_tag) + tls_u32(self.signer)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupInfo":
@@ -1014,7 +1003,9 @@ class MLSGroup:
 			interim_transcript_hash=b"",
 		)
 
-	def add_member(self, key_package: KeyPackage, psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> tuple["MLSGroup", Welcome, GroupUpdate]:
+	def add_member(
+		self, key_package: KeyPackage, psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None
+	) -> tuple["MLSGroup", Welcome, GroupUpdate]:
 		"""
 		Adds a new member, generating a Commit and advancing the Epoch.
 		Returns the updated Group, the Welcome for the joiner, and the Update for peers.
@@ -1129,11 +1120,7 @@ class MLSGroup:
 		# Add PSKs
 		if psk_list:
 			for p_id, _ in psk_list:
-				props.append(
-					ProposalOrRef(
-						value=PSKProposal(psk_id=p_id.psk_id, psk_nonce=p_id.psk_nonce).to_bytes()
-					)
-				)
+				props.append(ProposalOrRef(value=PSKProposal(psk_id=p_id.psk_id, psk_nonce=p_id.psk_nonce).to_bytes()))
 
 		commit = Commit(proposals=props, update_path_bytes=update_path.to_bytes())
 
@@ -1460,13 +1447,13 @@ class MLSGroup:
 		if node_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
 		my_index = node_index // 2
-			# P0-Join: Reconstruct our KeyPackage to get our KeyPackageRef
+		# P0-Join: Reconstruct our KeyPackage to get our KeyPackageRef
 		# In a real system, the client would have its published KeyPackage stored.
 		# Here we reconstruct it using the keys provided to join().
 		# Ref: RFC 9420 §10.1
 		_my_kp = KeyPackage.create(
 			encryption_key=my_kem_key.public_bytes(),
-			init_key_pub=KemKey().public_bytes(), # Dummy init key (not used in RefHash)
+			init_key_pub=KemKey().public_bytes(),  # Dummy init key (not used in RefHash)
 			signature_key=my_sig_key.public_bytes(),
 			identity=my_sig_key.public_bytes(),
 			sign_fn=my_sig_key.sign,
@@ -1523,7 +1510,7 @@ class MLSGroup:
 
 		# 1. Parse Commit and resolve proposals
 		commit = update.commit
-		new_tree = self.state.tree.expanded(self.state.tree.num_leaves) # copy current
+		new_tree = self.state.tree.expanded(self.state.tree.num_leaves)  # copy current
 		resolved_psks = []
 
 		for por in commit.proposals:

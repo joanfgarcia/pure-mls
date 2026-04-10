@@ -220,6 +220,7 @@ def test_passive_client_welcome(vec):
 	# Resolve PSKs from vector to pass to join()
 	from pure_mls.group import PreSharedKeyID
 	from pure_mls.keyschedule import PSK_TYPE_EXTERNAL
+
 	psk_list = []
 	for psk_data in vec.get("external_psks", []):
 		psk_id = _h(psk_data["psk_id"])
@@ -228,6 +229,7 @@ def test_passive_client_welcome(vec):
 		psk_list.append((PreSharedKeyID(psk_type=PSK_TYPE_EXTERNAL, psk_id=psk_id, psk_nonce=b""), psk_val))
 	# Load ratchet_tree fallback if specificed in vector
 	from pure_mls.tree import RatchetTree
+
 	ratchet_tree = None
 	if vec.get("ratchet_tree"):
 		ratchet_tree = RatchetTree.from_bytes(_h(vec["ratchet_tree"]))

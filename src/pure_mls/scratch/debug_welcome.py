@@ -5,6 +5,7 @@ from pure_mls.tls import read_opaque, read_u16
 
 VECTORS_PATH = Path("/home/joan/Documents/IA/pure-mls/tests/ietf_vectors/passive-client-welcome.json")
 
+
 def debug():
 	with open(VECTORS_PATH) as f:
 		data = json.load(f)
@@ -60,6 +61,7 @@ def debug():
 
 	except Exception as e:
 		print(f"Error parsing Welcome: {e}")
+
 
 if __name__ == "__main__":
 	debug()

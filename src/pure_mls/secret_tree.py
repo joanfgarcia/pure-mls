@@ -137,9 +137,7 @@ class SecretTree:
 		cache[secret_type] = (generation, bytearray(curr_secret))
 		return curr_secret
 
-	def get_key_and_nonce_for_gen(
-		self, leaf_index: int, generation: int, secret_type: str = "application"
-	) -> tuple[bytes, bytes]:
+	def get_key_and_nonce_for_gen(self, leaf_index: int, generation: int, secret_type: str = "application") -> tuple[bytes, bytes]:
 		"""Non-consuming derivation for a specific generation (receiver side)."""
 		ratchet_secret = self._get_ratchet_secret(leaf_index, generation, secret_type)
 		# §9.3: key/nonce from ratchet secret

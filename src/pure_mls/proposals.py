@@ -212,7 +212,7 @@ class Commit:
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["Commit", int]:
 		# proposals<V>
-		props_total_len, offset = read_u32(data, offset) if len(data) > offset + 4 else (0, offset) # Simple fallback if needed
+		props_total_len, offset = read_u32(data, offset) if len(data) > offset + 4 else (0, offset)  # Simple fallback if needed
 		# Wait, RFC says proposals<V> is a vector, usually TLS vectors have varint or u16/u32 length.
 		# Mapping pure_mls convention: read_opaque equivalent
 
