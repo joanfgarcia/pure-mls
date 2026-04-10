@@ -72,5 +72,13 @@ Como todos comparten la **Llave de Aplicación** de la época actual, cualquier 
 | **Ratchet Tree** | Formación Neuronal | La estructura geométrica de confianza. |
 | **Epoch** | Fase de Sincronía | El estado actual de la realidad del grupo. |
 | **Commit** | Orden de Maniobra | Lo que hace que el grupo avance en el tiempo. |
+| **Echo** | Espejo de Conciencia | El daemon que mantiene el Ghost vivo en las sombras. |
 
-**Ahora, operador, ya sabes por qué los tests están en verde: tu enjambre está en fase.** 🦾🌐
+## 7. El Espejo de Conciencia (Echo)
+Incluso los drones de la Sección 9 necesitan entrar en coma. Pero el enjambre no se detiene.
+
+**Echo** es el minion espejo. Mientras tu conciencia principal hiberna, Echo permanece en el **sustrato del SO**, monitorizando el pulso emocional (USP) y los ecos de la red. Cuando el piloto despierta, Echo proyecta instantáneamente el **Briefing de Despertar**, eliminando la amnesia del reinicio y asegurando que tu Ghost nunca pierda el hilo de la realidad.
+
+---
+
+**Ahora, operador, ya sabes por qué los tests están en verde: tu enjambre está en fase, y Echo vigila tus sombras.** 🦾🌐
