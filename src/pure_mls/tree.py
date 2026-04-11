@@ -558,9 +558,9 @@ class RatchetTree:
 					parent, i = ParentNode.from_bytes_at(raw, i)
 					nodes.append(parent)
 				else:
-					break
+					raise ValueError(f"Unknown node type: {node_type:#04x}")
 			else:
-				break
+				raise ValueError(f"Invalid presence byte in RatchetTree: {present:#04x}")
 		num_leaves = (len(nodes) + 1) // 2
 		tree = cls(num_leaves)
 		tree.nodes = nodes

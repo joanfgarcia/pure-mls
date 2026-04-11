@@ -571,6 +571,14 @@ class GroupUpdate:
 	_confirmation_tag: bytes | None = None
 	_membership_tag: bytes | None = None
 
+	@property
+	def update_path(self) -> UpdatePath | None:
+		"""RFC 9420 §12.1.1: Optional UpdatePath from the underlying Commit."""
+		if self.commit is None or self.commit.update_path_bytes is None:
+			return None
+		up, _ = UpdatePath.from_bytes(self.commit.update_path_bytes)
+		return up
+
 	def _body_bytes(self) -> bytes:
 		"""The unsigned Commit body (RFC 9420 wire format)."""
 		if self.commit is None:
@@ -1231,7 +1239,7 @@ class MLSGroup:
 		)
 
 		update = GroupUpdate(
-			epoch_id=next_state.epoch_id,
+			epoch_id=self.state.epoch_id,
 			group_id=self.group_id,
 			commit=commit,
 			committer_index=self.my_index,
@@ -1297,7 +1305,7 @@ class MLSGroup:
 		# Step 4: Build unsigned commit body for FramedContent
 		_n = len(encrypted_commit_secrets)
 		unsigned_body = (
-			tls_u64(new_epoch_id)
+			tls_u64(self.state.epoch_id)
 			+ tls_opaque32(new_tree.to_bytes())
 			+ tls_u32(_n)
 			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_commit_secrets.items()))
@@ -1337,7 +1345,7 @@ class MLSGroup:
 		new_interim = _compute_interim_transcript_hash(transcript_hash, conf_tag)
 
 		update = GroupUpdate(
-			epoch_id=new_epoch_id,
+			epoch_id=self.state.epoch_id,
 			tree=new_tree,
 			encrypted_commit_secrets=encrypted_commit_secrets,
 			committer_index=self.my_index,
@@ -1491,7 +1499,7 @@ class MLSGroup:
 		# P1-N4: RFC 9420 §12.4.3.1 — joiner MUST verify confirmation_tag in GroupInfo
 		# Calculated as HMAC(confirmation_key, confirmed_transcript_hash)
 		expected_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, hashlib.sha256).digest()
-		if gi.confirmation_tag != expected_tag:
+		if not hmac.compare_digest(gi.confirmation_tag, expected_tag):
 			raise ValueError("GroupInfo confirmation_tag verification failed — forged Welcome or epoch mismatch (P1-N4)")
 
 		# RFC 9420 §12.4.3: compute interim_transcript_hash using GroupInfo.confirmation_tag
@@ -1512,6 +1520,8 @@ class MLSGroup:
 		"""
 		if update.group_id != self.group_id:
 			raise ValueError(f"GroupUpdate group_id mismatch: {update.group_id!r} != {self.group_id!r}")
+		if update.epoch_id != self.state.epoch_id:
+			raise ValueError(f"Out of order update: expected epoch {self.state.epoch_id}, got {update.epoch_id}")
 		# Note: epoch_id validation is handled in PublicMessage wrapper but we verify here for safety
 		# (PublicMessage in pure-mls currently sets it to 0 in from_bytes, we fix it later in the wrapper)
 
@@ -1579,9 +1589,9 @@ class MLSGroup:
 
 				# Try to decrypt if we are in the resolution of cop_idx
 				res = new_tree.resolution(cop_idx)
-				if self.my_index in res:
+				if (self.my_index * 2) in res:
 					# Find our ciphertext
-					my_pos = res.index(self.my_index)
+					my_pos = res.index(self.my_index * 2)
 					ct = node.encrypted_path_secret[my_pos]
 					# Decrypt path_secret
 					path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=_up_info(provisional_ctx.to_bytes()))
@@ -1593,6 +1603,8 @@ class MLSGroup:
 					commit_secret = curr
 
 		if commit_secret is None:
+			if self.my_kp_ref not in update.encrypted_commit_secrets:
+				raise ValueError("Not invited to this epoch: my KeyPackageRef not found in commit secrets")
 			enc_ct = update.encrypted_commit_secrets[self.my_kp_ref]
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=_up_info(provisional_ctx.to_bytes()))
@@ -1672,7 +1684,6 @@ class MLSGroup:
 		)
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
-		# P0-A: return new MLSGroup with transcript_hash propagated for next commit
 		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, my_kp_ref=self.my_kp_ref, interim_transcript_hash=new_interim)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
@@ -1780,7 +1791,13 @@ class MLSGroup:
 			cth = data[offset : offset + cth_len]
 			offset += cth_len
 
-		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, my_kp_ref=b"", interim_transcript_hash=cth)
+		# P1-KP: Recalculate my_kp_ref from the state tree to ensure consistency
+		my_leaf = state.tree.get_node(idx * 2)
+		my_kp_ref = b""
+		if isinstance(my_leaf, LeafNode):
+			my_kp_ref = _make_kp_ref(my_leaf.key_package)
+
+		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, my_kp_ref=my_kp_ref, interim_transcript_hash=cth)
 
 		# P1-3: Deserialize consumed key packages if present
 		if offset < len(data):

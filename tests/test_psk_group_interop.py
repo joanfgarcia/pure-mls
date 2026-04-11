@@ -23,8 +23,11 @@ def test_join_with_psk_real_objects():
 	gs = GroupSecrets(joiner_secret=js, psks=[psk_id])
 
 	# 3. Create a valid Welcome structure
+	from pure_mls.tls import ExtensionType, tls_opaque
+	tree = RatchetTree(num_leaves=1)
+	tree_ext = [(ExtensionType.RATCHET_TREE, tree.to_bytes())]
 	dummy_ctx = GroupContext(group_id=b"group1", epoch=1, tree_hash=b"\x00" * 32, confirmed_transcript_hash=b"\x00" * 32)
-	gi = GroupInfo.build_and_sign(group_context=dummy_ctx, confirmation_tag=b"\x00" * 32, signer=0, sig_key=alice_sig)
+	gi = GroupInfo.build_and_sign(group_context=dummy_ctx, confirmation_tag=b"\x00" * 32, signer=0, sig_key=alice_sig, extensions=tree_ext)
 
 	egi = b"\x00" * 12 + b"dummy_encrypted_group_info"
 	egs = EncryptedGroupSecrets(new_member=b"\x00" * 32, kem_output=b"kem", ciphertext=b"ct")
@@ -44,7 +47,7 @@ def test_join_with_psk_real_objects():
 		mock_rt_from_bytes.return_value = tree
 
 		# Case A: Missing PSKs
-		with pytest.raises(ValueError, match="Welcome requires PSKs but none were provided"):
+		with pytest.raises(ValueError, match="Welcome message requires PSKs, but none were provided"):
 			MLSGroup.join(welcome, alice_sig, alice_kem, psk_list=None)
 
 		# Case B: Success with correct PSK

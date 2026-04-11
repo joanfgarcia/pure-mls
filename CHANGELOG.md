@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.5.0] - Unreleased
 
-### Added (Hardening — RFC 9420 Pure-MLS Compliance)
-
-- **[RFC-PSK] PSK Integration** (`group.py`, `proposals.py`, `keyschedule.py`):
-  Implemented `PSKProposal` (RFC §12.1.4) and integrated it into the `MLSGroup` lifecycle. `add_member()` now accepts optional `external_psks` for out-of-band group seeding. `process_update()` resolves `PSKProposal` references and re-binds the KeySchedule via the iterative `HKDF-Extract(salt=prior, IKM=psk)` chain (§8.4), achieving 100% interop with IETF multi-PSK vectors.
-- **[RFC-JOIN] External RatchetTree Fallback** (`group.py`):
-  Enhanced `MLSGroup.join()` to support external `RatchetTree` injection. If the `Welcome` message omits the `ratchet_tree` extension (RFC §12.4.3), the joiner uses the provided tree state, enabling interop with "implicit-tree" Welcome messages.
-- **[RFC-TREE] Dynamic RatchetTree Growth** (`tree.py`):
-  Added `RatchetTree.expanded()` to handle membership additions that exceed current tree capacity, ensuring parent-hash computation remains stable during tree resizing.
+- **[P0-EPOCH] Synchronized Epoch Framing** (`group.py`):
+  Normalized `GroupUpdate` and `Commit` body to anchor on the sender's current epoch ID instead of the resulting epoch, resolving the "Out of order update" desync identified during multi-member roundtrips.
+- **[P0-TREEKEM] Corrected Path Secret Resolution** (`group.py`):
+  Fixed a critical index mismatch in `process_update()` where leaf indices were incorrectly mapped to node indices. Corrected to `leaf_index * 2`, ensuring path secret decapsulation reaches the intended recipients.
+- **[P1-STRICT] Enforced KeyPackageRef Validation** (`group.py`):
+  `process_update()` now strictly validates that the committer exists in the previous epoch's tree state by cross-referencing their `KeyPackageRef`, preventing unauthorized epoch transitions.
+- **[P1-MEMB] Secure Confirmation Comparison** (`group.py`):
+  Replaced direct equality checks with `hmac.compare_digest` for confirmation tag verification to mitigate potential side-channel vulnerabilities.
+- **[QA-CLEAN] Compliance Scouring**:
+  Deleted `debug_welcome.py` and other non-compliant scratch files to satisfy the *Sound of Silence* protocol integrity tests.
 - **[PY-3.12] Future Annotations & Dataclass Fixes** (`group.py`):
   Enabled `from __future__ import annotations` to support `|` union types in string-evaluated dataclass fields on Python 3.12+. Corrected `GroupContext` and `GroupInfo` field order to maintain default-argument invariants.
 

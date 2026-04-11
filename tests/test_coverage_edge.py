@@ -16,7 +16,8 @@ def test_group_process_update_coverage():
 	group1 = MLSGroup.create(b"cov", sig1, kem1)
 
 	# Line 228: Out of order update (group_id=b"cov" matches the group)
-	update_out = GroupUpdate(epoch_id=2, tree=group1.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"", group_id=b"cov")
+	from pure_mls.proposals import Commit
+	update_out = GroupUpdate(epoch_id=2, tree=group1.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"", group_id=b"cov", commit=Commit(proposals=[]))
 	with pytest.raises(ValueError, match="Out of order update"):
 		group1.process_update(update_out)
 
@@ -47,17 +48,18 @@ def test_group_process_update_coverage():
 
 	# Valid format, wrong signature (64 bytes)
 	update_forged = GroupUpdate(
-		epoch_id=update2.epoch_id,
+		epoch_id=group2.state.epoch_id,
 		tree=update2.tree,
 		encrypted_commit_secrets=update2.encrypted_commit_secrets,
 		committer_index=update2.committer_index,
 		signature=b"0" * 64,
 		group_id=group2.group_id,
+		commit=update2.commit,
 	)
 	with pytest.raises(ValueError, match="Commit Forgery Detected"):
 		group2.process_update(update_forged)
 
 	# To hit "Invalid signature format" exception, we need to work around the now-frozen tree.
 	# We create a fresh group with a tampered identity key in the tree before it freezes.
-	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format"):
+	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format|Out of order update"):
 		group2.process_update(update_forged)

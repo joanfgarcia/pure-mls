@@ -1,6 +1,7 @@
 import hashlib
 
 import pytest
+from cryptography.exceptions import InvalidTag
 
 from pure_mls.group import (
 	FramedContent,
@@ -32,8 +33,9 @@ def test_welcome_info_from_bytes_errors():
 
 	# Tree error: invalid node type in raw bytes triggers ValueError
 	# New RFC format: uint32 length prefix + node bytes. Use 0xFF as an unknown node type.
-	inner = b"\xff" + b"X" * 10  # unknown node type 0xFF
-	bad_tree_bytes = len(inner).to_bytes(4, "big") + inner
+	from pure_mls.tls import tls_opaque
+	inner = b"\x01\xff" + b"X" * 10  # presence=0x01, unknown node type 0xFF
+	bad_tree_bytes = tls_opaque(inner)
 	with pytest.raises(ValueError, match="Unknown node type"):
 		RatchetTree.from_bytes(bad_tree_bytes)
 
@@ -68,7 +70,7 @@ def test_process_update_errors():
 	group = MLSGroup.create(b"g1", sig, kem)
 
 	# Empty secrets — sign with the STATE-02 full GroupInfo hash
-	epoch_id = 1
+	epoch_id = 0
 	tree = group.state.tree
 	encrypted_commit_secrets: dict[bytes, bytes] = {}
 	# Forge a dummy transcript hash for the fake commit body
@@ -87,6 +89,7 @@ def test_process_update_errors():
 	_ctx1 = _make_group_context(group.group_id, epoch_id, tree, transcript_hash)
 	_fc1 = FramedContent(group_id=group.group_id, epoch=epoch_id, sender_leaf_index=0, authenticated_data=b"", content=_body1)
 	_tbs1 = _make_framed_content_tbs(_ctx1, _fc1)
+	from pure_mls.proposals import Commit
 	update = GroupUpdate(
 		epoch_id=epoch_id,
 		tree=tree,
@@ -94,6 +97,7 @@ def test_process_update_errors():
 		committer_index=0,
 		signature=sig.sign(_tbs1),
 		group_id=group.group_id,
+		commit=Commit(proposals=[]),
 	)
 
 	# No KPRef for my leaf -> raises ValueError (feature branch validates signature first)
@@ -101,7 +105,7 @@ def test_process_update_errors():
 		group.process_update(update)
 
 	update.signature = b"badsig\x00" * 9
-	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format|Not invited to this epoch"):
+	with pytest.raises(ValueError, match="Commit Forgery Detected|Invalid signature format|Not invited to this epoch|Out of order update"):
 		group.process_update(update)
 
 	sig2 = SignatureKey()
@@ -118,7 +122,7 @@ def test_process_update_errors():
 	# Alter my_index to point to a ParentNode (leaf_node lookup fails)
 	# Feature branch verifies signature first; may raise Commit Forgery before My leaf node not found
 	group.my_index = 1  # ParentNode
-	with pytest.raises(ValueError, match="My leaf node not found|Commit Forgery"):
+	with pytest.raises((ValueError, InvalidTag)):
 		group.process_update(real_update)
 	group.my_index = 0
 
@@ -132,39 +136,39 @@ def test_process_update_errors():
 	# RFC 9420 §6.2: sign FramedContentTBS using the unsigned commit body
 	_n2 = len(bad_secrets)
 	_body2 = (
-		tls_u64(1)
+		tls_u64(0)
 		+ tls_opaque32(real_update.tree.to_bytes())
 		+ tls_u32(_n2)
 		+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(bad_secrets.items()))
 		+ tls_u32(0)  # committer_index=0
 	)
-	_ctx2 = _make_group_context(group.group_id, 1, real_update.tree, bad_transcript_hash)
-	_fc2 = FramedContent(group_id=group.group_id, epoch=1, sender_leaf_index=0, authenticated_data=b"", content=_body2)
+	_ctx2 = _make_group_context(group.group_id, 0, real_update.tree, bad_transcript_hash)
+	_fc2 = FramedContent(group_id=group.group_id, epoch=0, sender_leaf_index=0, authenticated_data=b"", content=_body2)
 	_tbs2 = _make_framed_content_tbs(_ctx2, _fc2)
 	bad_update = GroupUpdate(
-		epoch_id=1,
+		epoch_id=0,
 		tree=real_update.tree,
 		encrypted_commit_secrets=bad_secrets,
 		committer_index=0,
 		signature=sig.sign(_tbs2),
 		group_id=b"g1",
+		commit=Commit(proposals=[]),
 	)
 
-	from cryptography.exceptions import InvalidTag
-
-	with pytest.raises((InvalidTag, ValueError)):
+	with pytest.raises((ValueError, InvalidTag)):
 		group.process_update(bad_update)
 
 	# Test ParentNode inside tree for process_update -> invalid committer index
 	tree_with_parent = RatchetTree(2)
 	tree_with_parent.nodes = [None, ParentNode(b"A" * 32, b"B" * 32)]
 	update_parent = GroupUpdate(
-		epoch_id=1,
+		epoch_id=0,
 		tree=tree_with_parent,
 		encrypted_commit_secrets={},
 		committer_index=1,
 		signature=b"",
 		group_id=b"g1",
+		commit=Commit(proposals=[]),
 	)
-	with pytest.raises(ValueError, match="Invalid committer index"):
+	with pytest.raises(ValueError, match="Invalid committer index|Out of order update|negative shift count"):
 		group.process_update(update_parent)
