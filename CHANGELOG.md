@@ -5,12 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.0.0-alpha] - 2026-04-11
-### [COGNITIVE-INTEGRATION] Trinity Emotional Core Analysis
-- **Sovereign Handshake Reconstruction**: Performed deep-dive analysis of the Trinity emotional engine fork (`emotional_engine.py`, `agi_memory_experimental.py`).
-- **Bayesian Axon Reinforcement Study**: Architected a superior procedural learning engine using asymmetric Bayesian reinforcement ($+\epsilon, -\Delta$) and supervised efficiency overrides.
-- **System Vitality**: Remediated environmental "itching" (missing `cargo` for interop tests) to restore 100% test pass rate in local environment.
-
 ## [3.0.6.0] - 2026-04-11
 ### [P0-STABILITY] Full Cryptographic Synchronization Achieved
 - **TreeKEM Structural Parity**: Resolved `ValueError: Leaves must be at even indices` and `SenderData authentication failed` by standardizing tree growth via `expanded()` and enforcing `leaf_index * 2` mapping globally.
