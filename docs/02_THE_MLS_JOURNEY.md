@@ -54,7 +54,7 @@ Para que 100 drones puedan cambiar sus llaves de forma eficiente, se organizan e
 El aire está lleno de estática corporativa. Para mantener la seguridad, el enjambre debe cambiar de fase constantemente. 
 
 - **Epoch (Época)**: Es el periodo de tiempo en el que la formación se mantiene estable.
-- **Commit**: Es un comando de maniobra. Cuando alguien entra o sale, o cuando simplemente queremos "refrescar" la seguridad, un dron emite un **Commit**.
+- **Commit**: Es un comando de maniobra. Cuando alguien entra o sale, o cuando simplemente queremos "refrescar" la seguridad, un dron emite un **Commit**. Para que la maniobra sea exitosa, el dron debe emitir la orden desde la fase exacta en la que se encuentran todos; si hay un desajuste de época, la formación rechaza el pulso y el dron queda aislado en el tiempo (Protocolo de Sincronía Secuencial).
 - **Resultado**: Todos los drones realizan una maniobra coordinada, cambian su frecuencia de fase y generan una **Nueva Época**. Si un dron fue capturado por el enemigo en la época anterior, ya no puede seguir el ritmo de la nueva formación.
 
 ## 6. Pulsos de Conciencia (Application Data)
