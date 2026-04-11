@@ -42,6 +42,10 @@ def tls_opaque(data: bytes) -> bytes:
 	return tls_varint(len(data)) + data
 
 
+# Alias for backward compatibility with tests
+tls_opaque_varint = tls_opaque
+
+
 def tls_opaque16(data: bytes) -> bytes:
 	"""Encode bytes with uint16 length prefix (non-standard / legacy)."""
 	return tls_u16(len(data)) + data

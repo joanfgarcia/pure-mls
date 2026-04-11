@@ -24,6 +24,7 @@ def test_join_with_psk_real_objects():
 
 	# 3. Create a valid Welcome structure
 	from pure_mls.tls import ExtensionType
+
 	tree = RatchetTree(num_leaves=1)
 	tree_ext = [(ExtensionType.RATCHET_TREE, tree.to_bytes())]
 	dummy_ctx = GroupContext(group_id=b"group1", epoch=1, tree_hash=b"\x00" * 32, confirmed_transcript_hash=b"\x00" * 32)

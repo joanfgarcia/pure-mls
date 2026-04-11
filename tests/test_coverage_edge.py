@@ -17,7 +17,16 @@ def test_group_process_update_coverage():
 
 	# Line 228: Out of order update (group_id=b"cov" matches the group)
 	from pure_mls.proposals import Commit
-	update_out = GroupUpdate(epoch_id=2, tree=group1.state.tree, encrypted_commit_secrets={}, committer_index=0, signature=b"", group_id=b"cov", commit=Commit(proposals=[]))
+
+	update_out = GroupUpdate(
+		epoch_id=2,
+		tree=group1.state.tree,
+		encrypted_commit_secrets={},
+		committer_index=0,
+		signature=b"",
+		group_id=b"cov",
+		commit=Commit(proposals=[]),
+	)
 	with pytest.raises(ValueError, match="Out of order update"):
 		group1.process_update(update_out)
 

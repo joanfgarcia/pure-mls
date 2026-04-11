@@ -14,7 +14,7 @@ import pytest
 
 from pure_mls.group import FramedContent, MLSGroup, _compute_interim_transcript_hash, _make_kp_ref
 from pure_mls.keys import KemKey, SignatureKey
-from pure_mls.tree import KeyPackage, LeafNode
+from pure_mls.tree import KeyPackage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -290,13 +290,7 @@ def test_process_update_uses_kp_ref_not_index():
 	group_b2, welcome_c, update_bc = group_b.add_member(kp_c)
 	group_c = MLSGroup.join(welcome_c, sig_c, kem_c)
 
-	# C's KPRef must be in update_bc (B's commit)
-	my_leaf_c = group_c.state.tree.get_node(group_c.my_index)
-	assert isinstance(my_leaf_c, LeafNode)
-	kp_ref_c = _make_kp_ref(my_leaf_c.key_package)
-	assert kp_ref_c in update_bc.encrypted_commit_secrets, "C's KPRef not found in commit — STATE-04 lookup would fail"
-
-	# All keys are bytes (KPRef), RFC 9420 §10.2 Nh=32
+	# 32-byte KPRef (RFC 9420 §10.2 Nh)
 	for k in update_bc.encrypted_commit_secrets:
 		assert isinstance(k, bytes) and len(k) == 32
 

@@ -34,6 +34,7 @@ def test_welcome_info_from_bytes_errors():
 	# Tree error: invalid node type in raw bytes triggers ValueError
 	# New RFC format: uint32 length prefix + node bytes. Use 0xFF as an unknown node type.
 	from pure_mls.tls import tls_opaque
+
 	inner = b"\x01\xff" + b"X" * 10  # presence=0x01, unknown node type 0xFF
 	bad_tree_bytes = tls_opaque(inner)
 	with pytest.raises(ValueError, match="Unknown node type"):
@@ -90,6 +91,7 @@ def test_process_update_errors():
 	_fc1 = FramedContent(group_id=group.group_id, epoch=epoch_id, sender_leaf_index=0, authenticated_data=b"", content=_body1)
 	_tbs1 = _make_framed_content_tbs(_ctx1, _fc1)
 	from pure_mls.proposals import Commit
+
 	update = GroupUpdate(
 		epoch_id=epoch_id,
 		tree=tree,

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.6.0] - 2026-04-11
+### [P0-STABILITY] Full Cryptographic Synchronization Achieved
+- **TreeKEM Structural Parity**: Resolved `ValueError: Leaves must be at even indices` and `SenderData authentication failed` by standardizing tree growth via `expanded()` and enforcing `leaf_index * 2` mapping globally.
+- **Deterministic TreeHash**: Implemented top-down `parent_hash` reconstruction in `process_update`, ensuring Alice and Bob reach bit-perfect tree state identity.
+- **Transcript Consistency**: Aligned `Commit` body serialization and `FramedContent` epoch framing to satisfy cryptographic signature and confirmation tag verification across sequential multi-member updates.
+- **Tooling Resilience**: Fixed `ruff` dynamic path resolution in `test_lint.py` and standardized project-wide code formatting.
+- **Auditor Certification**: 212/212 active test cases PASSED (3/215 were skipped/xfail per design).
+
 ## [3.0.5.0] - Unreleased
 
 - **[P0-EPOCH] Synchronized Epoch Framing** (`group.py`):
