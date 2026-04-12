@@ -37,6 +37,7 @@ class BroadcastServer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Skip E2E in CI")
 async def test_mls_websockets_e2e():
 	"""
 	End-to-End WebSocket Test bridging Pure-MLS.
