@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4.0] - 2026-04-12 (CLI Implementation & Pedagogical Overhaul)
+
+### Added
+- **pure-mls CLI**: Complete command-line interface for the MLS group lifecycle (`keygen`, `create-group`, `add-member`, `join-group`) facilitating terminal-based protocol interaction.
+- **Pedagogical Documentation**: Added comprehensive, multi-language colloquial guides (`02_MLS_JOURNEY_*`) and Grok's "Primate Survival Guides" (`03_MLS_FOR_PRIMATES_*`) to conceptualize cryptography for non-experts.
+
+### Changed
+- **CI Release Hardening**: Modified `.github/workflows/publish.yml` to strictly trigger PyPI publications exclusively on GitHub Releases targeting the `main` branch.
+
 ## [3.0.3.1] - 2026-04-12  (CI Hardening & Infinite Loop Remediation)
 
 ### Fixed
