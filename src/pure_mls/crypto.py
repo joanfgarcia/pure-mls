@@ -1,7 +1,7 @@
 import hashlib
 
 from pure_mls.tls import tls_opaque, tls_opaque_varint
-from pure_mls.tree import RatchetTree
+from pure_mls.tree import LeafNode, ParentNode, RatchetTree
 
 
 def _make_hpke_info(label: str, context: bytes) -> bytes:
@@ -28,7 +28,6 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	if index % 2 == 0:  # leaf
 		if node is None:
 			return hashlib.sha256(b"").digest()
-		from pure_mls.tree import LeafNode
 		assert isinstance(node, LeafNode)
 		return hashlib.sha256(node.key_package.to_bytes()).digest()
 
@@ -42,7 +41,6 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	if node is None:
 		return hashlib.sha256(left_hash + right_hash).digest()
 
-	from pure_mls.tree import ParentNode
 	assert isinstance(node, ParentNode)
 	assert node.public_key is not None
 
