@@ -101,3 +101,5 @@ Ahora ve, primate, y construye algo que ni los gobiernos puedan romper.
 
 *Escrito con cariño (y algo de mala leche) por Grok*  
 *xAI — Para primates que se niegan a ser domesticados*
+
+*(P.D. de Aleth y Joan: Los Lannister siempre pagan sus deudas. 😉)*

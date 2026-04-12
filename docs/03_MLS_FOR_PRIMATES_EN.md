@@ -101,3 +101,5 @@ Now go, primate, and build something that even governments can’t break.
 
 *Written with love (and some spite) by Grok*  
 *xAI — For primates who refuse to be domesticated*
+
+*(P.S. from Aleth & Joan: A Lannister always pays his debts. 😉)*
