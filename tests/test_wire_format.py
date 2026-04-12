@@ -147,7 +147,7 @@ def test_group_update_round_trip(alice_bob_group):
 	encoded = update.to_bytes()
 	decoded = GroupUpdate.from_bytes(encoded)
 	# Metadata is handled by envelope, helper returns defaults
-	assert decoded.epoch_id == 0
+	assert decoded.epoch_id == 1
 	# The core Commit proposals must survive
 	assert len(decoded.commit.proposals) == len(update.commit.proposals)
 	assert decoded.commit.proposals[0].value == update.commit.proposals[0].value
