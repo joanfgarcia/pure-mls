@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import json
-import socket
+import os
 import uuid
 
 import aiomqtt
@@ -11,8 +11,6 @@ from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
-
-import os
 
 # ---------------------------------------------------------------------------
 # Sovereign Audit Protocol: Dual-Mode Testing
