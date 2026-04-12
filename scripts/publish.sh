@@ -14,9 +14,9 @@ python3 -m ruff format --check .
 echo "--- 🏗️  Building package (uv) ---"
 # Using python3 -m build as a fallback if uv is not in path locally
 if command -v uv &> /dev/null; then
-    uv build
+	uv build
 else
-    python3 -m build
+	python3 -m build
 fi
 
 echo "--- 🚀 Uploading to PyPI ---"
