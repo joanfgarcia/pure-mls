@@ -41,7 +41,7 @@ def is_broker_online(host: str, port: int) -> bool:
 async def test_mls_mqtt_e2e():
 	"""
 	End-to-End IoT test validating TreeKEM over a real MQTT transport.
-	
+
 	AUDIT NOTE: This test validates the full cryptographic lifecycle:
 	KeyPackage -> Welcome (HPKE) -> Group Join -> App Data (SecretTree).
 	In CI, this test is skipped to ensure determinism. Auditors should
