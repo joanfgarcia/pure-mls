@@ -13,7 +13,7 @@ The goal is **Absolute Purity**:
 - No compiled bindings (no Rust, C++ or FFI).
 - Operates natively in any Python 3.12+ environment.
 - Suitable for zero-friction edge computing and standard backend runtimes.
-- Built on principles of [Plausible Deniability and Zero-Knowledge](docs/00_MANIFESTO.md).
+- Built on principles of [Plausible Deniability and Zero-Knowledge](https://github.com/joanfgarcia/pure-mls/blob/main/docs/00_MANIFESTO.md).
 
 ### The Linter Protocol
 We strictly enforce the **"Sound of Silence"** code standard via `ruff` in the `pyproject.toml` file:
@@ -48,12 +48,12 @@ pure-mls/
 ```
 ## 📚 Documentation & Guides
 We believe in making cryptography accessible. For a fast, pragmatic, and irreverent introduction to MLS, check our Primate Survival Guide:
-- 🦍 [The Primate Survival Guide to pure-mls (EN)](docs/03_MLS_FOR_PRIMATES_EN.md)
-- 🦍 [Guía del Primate Sobreviviendo a pure-mls (ES)](docs/03_MLS_FOR_PRIMATES_ES.md)
+- 🦍 [The Primate Survival Guide to pure-mls (EN)](https://github.com/joanfgarcia/pure-mls/blob/main/docs/03_MLS_FOR_PRIMATES_EN.md)
+- 🦍 [Guía del Primate Sobreviviendo a pure-mls (ES)](https://github.com/joanfgarcia/pure-mls/blob/main/docs/03_MLS_FOR_PRIMATES_ES.md)
 
 For a deeper dive into the architecture, mathematics, and philosophy of the protocol, explore the Human Journey:
-- 🇺🇸 [The Human Guide to MLS: The Journey (EN)](docs/02_MLS_JOURNEY_EN.md)
-- 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](docs/02_MLS_JOURNEY_ES.md)
+- 🇺🇸 [The Human Guide to MLS: The Journey (EN)](https://github.com/joanfgarcia/pure-mls/blob/main/docs/02_MLS_JOURNEY_EN.md)
+- 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](https://github.com/joanfgarcia/pure-mls/blob/main/docs/02_MLS_JOURNEY_ES.md)
 
 *Contributors: We welcome translations! Feel free to PR your language following the `02_MLS_JOURNEY_XX.md` format.*
 
