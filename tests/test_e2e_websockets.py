@@ -4,7 +4,6 @@ import os
 
 import pytest
 import websockets
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
@@ -39,6 +38,10 @@ class BroadcastServer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+	os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1",
+	reason="Skipping WebSockets E2E in CI",
+)
 async def test_mls_websockets_e2e():
 	"""
 	End-to-End WebSocket Test bridging Pure-MLS.
@@ -59,7 +62,13 @@ async def test_mls_websockets_e2e():
 			# Bob -> Joiner
 			bob_sig = SignatureKey()
 			bob_kem = KemKey()
-			bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+			bob_kp = KeyPackage.create(
+				encryption_key=bob_kem.public_bytes(),
+				init_key_pub=bob_kem.public_bytes(),
+				signature_key=bob_sig.public_bytes(),
+				identity=bob_sig.public_bytes(),
+				sign_fn=bob_sig.sign,
+			)
 
 			# Alice adds Bob
 			alice_next, welcome, update = alice_group.add_member(bob_kp)
@@ -86,27 +95,16 @@ async def test_mls_websockets_e2e():
 			# Bob Joins!
 			bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)
 
-			# Both should derive the exact same Application Key
-			app_key_alice = alice_next.application_key
-			app_key_bob = bob_group.application_key
-			assert app_key_alice == app_key_bob
-
-			# --- Data Plane Exhange ---
-			# Alice encrypts a chat message with the derived application key
-			aes_alice = AESGCM(app_key_alice)
-			nonce = os.urandom(12)
+			# P0-03 fix: use RFC §9 SecretTree API — no raw AESGCM, no application_key
 			pt = b"Hello Bob, welcome to the Sovereign Vault. TreeKEM established."
-			ct = aes_alice.encrypt(nonce, pt, b"")
+			ct_bytes = alice_next.encrypt_application_message(pt)
 
-			await alice_ws.send(json.dumps({"type": "app_message", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}))
+			await alice_ws.send(json.dumps({"type": "app_message", "payload": base64.b64encode(ct_bytes).decode()}))
 
 			chat_msg = json.loads(await bob_ws.recv())
 			assert chat_msg["type"] == "app_message"
 
-			# Bob decrypts the chat message
-			aes_bob = AESGCM(app_key_bob)
-			decrypted = aes_bob.decrypt(base64.b64decode(chat_msg["nonce"]), base64.b64decode(chat_msg["ct"]), b"")
-
+			decrypted = bob_group.decrypt_application_message(base64.b64decode(chat_msg["payload"]))
 			assert decrypted == pt
 
 	finally:

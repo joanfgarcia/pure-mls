@@ -38,5 +38,17 @@ jobs:
     - name: Start Mosquitto (Test Broker)
       run: docker run -d -p 1883:1883 eclipse-mosquitto:1.6.15
 
+    - name: Download IETF MLS Test Vectors
+      run: |
+        mkdir -p tests/ietf_vectors
+        BASE="https://raw.githubusercontent.com/mlswg/mls-implementations/main/test-vectors"
+        curl -sf "${BASE}/crypto-basics.json"          -o tests/ietf_vectors/crypto-basics.json
+        curl -sf "${BASE}/key-schedule.json"           -o tests/ietf_vectors/key-schedule.json
+        curl -sf "${BASE}/passive-client-welcome.json" -o tests/ietf_vectors/passive-client-welcome.json
+        curl -sf "${BASE}/secret-tree.json"            -o tests/ietf_vectors/secret-tree.json
+
     - name: Run Pytest (Unit & E2E)
       run: uv run pytest tests/ -v
+
+    - name: Run IETF Interop Vector Tests
+      run: uv run pytest tests/test_ietf_vectors.py -v --tb=short

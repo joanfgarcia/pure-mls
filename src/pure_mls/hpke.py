@@ -11,33 +11,32 @@ class HPKE:
 	Hybrid Public Key Encryption (RFC 9180) - Base Mode.
 	Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM.
 
-	MLS cipher suite 0x0001: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519.
-	Used for end-to-end encrypting isolated messages like 'Welcome' Envelopes
-	or TreeKEM UpdatePaths across the network.
+	Matches the MLS ciphersuite MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (0x0001).
+	SUITE_ID per RFC 9180 §8: KEM=0x0020 (X25519), KDF=0x0001 (SHA-256), AEAD=0x0001 (AES-128-GCM).
 	"""
 
-	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x01"  # KEM=X25519(0x0020), KDF=SHA-256(0x0001), AEAD=AES-128-GCM(0x0001)
+	SUITE_ID = b"HPKE\x00\x20\x00\x01\x00\x01"  # KEM=X25519, KDF=SHA-256, AEAD=AES-128-GCM
 	KEM_SUITE_ID = b"KEM\x00\x20"  # DHKEM(X25519)
 
 	@staticmethod
 	def _kem_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + ikm
-		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _kem_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
 		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.KEM_SUITE_ID + label + info
-		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _labeled_extract(salt: bytes | None, label: bytes, ikm: bytes) -> bytes:
 		labeled_ikm = b"HPKE-v1" + HPKE.SUITE_ID + label + ikm
-		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)
+		return hkdf_extract(salt, labeled_ikm, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _labeled_expand(prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
 		labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + HPKE.SUITE_ID + label + info
-		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)
+		return hkdf_expand(prk, labeled_info, length, hashlib.sha256)  # type: ignore[arg-type]
 
 	@staticmethod
 	def _xor_nonce(base_nonce: bytes, seq: int) -> bytes:
@@ -58,18 +57,19 @@ class HPKE:
 		dh = ephemeral.dh_exchange(receiver_pub)
 		kem_context = enc + receiver_pub
 
-		# Phase 1: KEM (ExtractAndExpand with KEM_SUITE_ID)
-		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
+		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
+		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
+		prk_kem = HPKE._kem_extract(b"", b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule (with full HPKE SUITE_ID)
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
-		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
-		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM = 16 bytes
+		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
 
@@ -86,18 +86,19 @@ class HPKE:
 		dh = receiver_priv.dh_exchange(enc)
 		kem_context = enc + receiver_priv.public_bytes()
 
-		# Phase 1: KEM
-		prk_kem = HPKE._kem_extract(None, b"shared_secret", dh)
+		# Phase 1: KEM ExtractAndExpand (RFC 9180 §4.1)
+		# LabeledExtract("", "eae_prk", dh) → then LabeledExpand(prk, "shared_secret", kem_context)
+		prk_kem = HPKE._kem_extract(b"", b"eae_prk", dh)
 		shared_secret = HPKE._kem_expand(prk_kem, b"shared_secret", kem_context, 32)
 
 		# Phase 2: KeySchedule
 		mode = b"\x00"
-		psk_id_hash = HPKE._labeled_extract(None, b"psk_id_hash", b"")
-		info_hash = HPKE._labeled_extract(None, b"info_hash", info)
+		psk_id_hash = HPKE._labeled_extract(b"", b"psk_id_hash", b"")
+		info_hash = HPKE._labeled_extract(b"", b"info_hash", info)
 		ks_context = mode + psk_id_hash + info_hash
 
-		prk_key = HPKE._labeled_extract(shared_secret, b"key", b"")
-		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM = 16 bytes
+		prk_key = HPKE._labeled_extract(shared_secret, b"secret", b"")  # RFC 9180 §5.1: salt=shared_secret, IKM=psk=b"" (base mode)
+		key = HPKE._labeled_expand(prk_key, b"key", ks_context, 16)  # AES-128-GCM Nk=16
 		base_nonce = HPKE._labeled_expand(prk_key, b"base_nonce", ks_context, 12)
 		nonce = HPKE._xor_nonce(base_nonce, seq)
 

@@ -1,7 +1,7 @@
 import copy
 from dataclasses import dataclass
 
-from pure_mls.keyschedule import KeySchedule
+from pure_mls.keyschedule import KeySchedule, PreSharedKeyID
 from pure_mls.tree import RatchetTree
 
 
@@ -20,37 +20,54 @@ class EpochState:
 
 	def __post_init__(self) -> None:
 		# Prevent mutation of the RatchetTree through the immutable EpochState
+
 		cloned = copy.deepcopy(self.tree)
 		cloned.freeze()  # STATE-03: enforce immutability after deepcopy
 		super().__setattr__("tree", cloned)
 
-	def advance_epoch(self, commit_secret: bytes, next_tree: RatchetTree, group_context: bytes, psk_secret: bytes | None = None) -> "EpochState":
-		"""
-		Transitions the group to the next cryptographic Era.
-		Consumes the next_init_secret from the current era and mixes it with the
-		new commit_secret derived from the TreeKEM operations and GroupContext.
-		"""
+	def advance_epoch(
+		self,
+		commit_secret: bytes,
+		next_tree: RatchetTree,
+		group_context: bytes = b"",
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
+	) -> "EpochState":
+		"""Transitions the group to the next cryptographic era."""
 		next_schedule = KeySchedule.derive(
-			init_secret=self.key_schedule.next_init_secret,
+			init_secret=self.key_schedule.init_secret,
 			commit_secret=commit_secret,
 			group_context=group_context,
-			psk_secret=psk_secret,
+			psk_list=psk_list,
 		)
 		return EpochState(group_id=self.group_id, epoch_id=self.epoch_id + 1, tree=next_tree, key_schedule=next_schedule)
 
 	@classmethod
-	def genesis(cls, group_id: bytes, creator_tree: RatchetTree, group_context: bytes) -> "EpochState":
+	def genesis(
+		cls,
+		group_id: bytes,
+		creator_tree: RatchetTree,
+		group_context_bytes: bytes = b"",
+	) -> "EpochState":
 		"""Bootstraps Epoch 0 for a brand new sovereign group.
+
 		RFC 9420 §8.1: epoch 0 init_secret is the all-zeros vector.
+
+		group_context_bytes MUST be the TLS-serialised GroupContext for epoch 0
+		(group_id, epoch=0, tree_hash, confirmed_transcript_hash=b\"\").
+		Passing b\"\" (default) skips domain separation — use only in tests that
+		explicitly target the genesis-only code path without a full group context.
+
+		The caller (group.py) constructs the GroupContext and passes it here to
+		avoid a circular import: epoch.py → group.py → epoch.py.
 		"""
-		genesis_init = b"\x00" * 32
+		genesis_init = b"\x00" * 32  # RFC 9420 §8.1: epoch 0 init_secret = zeros
 		blank_commit = b"\x00" * 32
 
 		return cls(
 			group_id=group_id,
 			epoch_id=0,
 			tree=creator_tree,
-			key_schedule=KeySchedule.derive(genesis_init, blank_commit, group_context),
+			key_schedule=KeySchedule.derive(genesis_init, blank_commit, group_context=group_context_bytes),
 		)
 
 	def to_bytes(self) -> bytes:

@@ -1,40 +1,83 @@
 import hashlib
 import hmac
-from typing import Any, Callable
+from typing import Protocol
 
 
-def encode_varint(val: int) -> bytes:
+class _HashObj(Protocol):
+	"""Protocol for hashlib hash objects (PEP 544)."""
+
+	digest_size: int
+
+	def update(self, data: bytes, /) -> None: ...
+	def digest(self) -> bytes: ...
+	def copy(self) -> "_HashObj": ...
+
+
+class HashFunction(Protocol):
+	"""Callable that returns a fresh hashlib-compatible hash object."""
+
+	def __call__(self) -> _HashObj: ...
+
+
+# MLS suite identifier prefix (RFC 9420 §8)
+MLS_SUITE_ID = b"MLS 1.0 "
+
+
+def varint_encode(n: int) -> bytes:
+	"""MLS variable-length integer encoding (RFC 9420 §C / mls-rs-codec VarInt).
+
+	Encoding:
+	0..63        → 1 byte  (top 2 bits = 00)
+	64..16383    → 2 bytes (top 2 bits = 01, i.e. OR 0x4000)
+	16384..2^30-1 → 4 bytes (top 2 bits = 10, i.e. OR 0x80000000)
+
+	This is what mls-rs `byte_vec` uses for HkdfLabel field lengths.
 	"""
-	QUIC-style variable-length integer encoding (RFC 9000).
-	Used by MLS (RFC 9420) for encoding the lengths of labels and contexts.
+	if n <= 63:
+		return bytes([n])
+	elif n <= 16383:
+		return ((n | 0x4000) & 0xFFFF).to_bytes(2, "big")
+	elif n <= (1 << 30) - 1:
+		return ((n | 0x80000000) & 0xFFFFFFFF).to_bytes(4, "big")
+	else:
+		raise ValueError(f"VarInt out of range: {n}")
+
+
+def expand_with_label(
+	secret: bytes,
+	label: str,
+	context: bytes,
+	length: int,
+	hash_func: HashFunction = hashlib.sha256,  # type: ignore[assignment]
+) -> bytes:
+	"""RFC 9420 §8: ExpandWithLabel(Secret, Label, Context, Length).
+
+	HkdfLabel wire format (matching mls-rs VarInt byte_vec encoding):
+	length(u16) | varint(len(full_label)) | full_label | varint(len(context)) | context
+	where full_label = b"MLS 1.0 " + label.encode()
 	"""
-	if val <= 0x3F:
-		return bytes([val])
-	if val <= 0x3FFF:
-		return (0x4000 | val).to_bytes(2, "big")
-	if val <= 0x3FFFFFFF:
-		return (0x80000000 | val).to_bytes(4, "big")
-	if val <= 0x3FFFFFFFFFFFFFFF:
-		return (0xC000000000000000 | val).to_bytes(8, "big")
-	raise ValueError(f"Varint value too large: {val}")
+	full_label = MLS_SUITE_ID + label.encode()
+	hkdf_label = length.to_bytes(2, "big") + varint_encode(len(full_label)) + full_label + varint_encode(len(context)) + context
+	return hkdf_expand(secret, hkdf_label, length, hash_func)
 
 
-HashFunction = Callable[[], Any]
+def derive_secret(secret: bytes, label: str, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
+	"""RFC 9420 §8: DeriveSecret(Secret, Label) = ExpandWithLabel(Secret, Label, b'', NH)."""
+	nh = hash_func().digest_size
+	return expand_with_label(secret, label, b"", nh, hash_func)
 
 
-def hkdf_extract(salt: bytes | None, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:
-	"""
-	HKDF-Extract (RFC 5869).
+def hkdf_extract(salt: bytes | None, ikm: bytes, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
+	"""HKDF-Extract (RFC 5869).
 	Extracts a pseudorandom key (PRK) from input keying material (IKM) and a salt.
 	"""
 	if salt is None:
 		salt = b"\x00" * hash_func().digest_size
-	return hmac.new(salt, ikm, hash_func).digest()
+	return hmac.new(salt, ikm, hash_func).digest()  # type: ignore[arg-type]
 
 
-def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = hashlib.sha256) -> bytes:
-	"""
-	HKDF-Expand (RFC 5869).
+def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = hashlib.sha256) -> bytes:  # type: ignore[assignment]
+	"""HKDF-Expand (RFC 5869).
 	Expands a pseudorandom key (PRK) and info string into output keying material (OKM).
 	"""
 	hash_len = hash_func().digest_size
@@ -42,6 +85,6 @@ def hkdf_expand(prk: bytes, info: bytes, length: int, hash_func: HashFunction = 
 	okm = b""
 	t_i = b""
 	for i in range(1, n + 1):
-		t_i = hmac.new(prk, t_i + info + bytes([i]), hash_func).digest()
+		t_i = hmac.new(prk, t_i + info + bytes([i]), hash_func).digest()  # type: ignore[arg-type]
 		okm += t_i
 	return okm[:length]

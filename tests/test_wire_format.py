@@ -25,7 +25,13 @@ def alice_bob_group():
 	"""Create a 2-member MLS group and return (alice_group, bob_group, welcome, update)."""
 	alice_sig, alice_kem = SignatureKey(), KemKey()
 	bob_sig, bob_kem = SignatureKey(), KemKey()
-	bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+	bob_kp = KeyPackage.create(
+		encryption_key=bob_kem.public_bytes(),
+		init_key_pub=bob_kem.public_bytes(),
+		signature_key=bob_sig.public_bytes(),
+		identity=bob_sig.public_bytes(),
+		sign_fn=bob_sig.sign,
+	)
 
 	alice_group = MLSGroup.create(b"wire-format-test", alice_sig, alice_kem)
 	alice_group2, welcome, update = alice_group.add_member(bob_kp)
@@ -69,11 +75,18 @@ def test_group_context_unsupported_version():
 
 
 def test_group_secrets_round_trip():
-	"""GroupSecrets to_bytes()/from_bytes() preserves fields."""
-	gs = GroupSecrets(joiner_secret=b"\x01" * 32, joiner_index=5)
+	"""GroupSecrets to_bytes()/from_bytes() preserves fields (RFC 9420 §12.1.2)."""
+	# Without path_secret (most common case)
+	gs = GroupSecrets(joiner_secret=b"\x01" * 32)
 	decoded = GroupSecrets.from_bytes(gs.to_bytes())
 	assert decoded.joiner_secret == gs.joiner_secret
-	assert decoded.joiner_index == gs.joiner_index
+	assert decoded.path_secret is None
+
+	# With path_secret (TreeKEM full commit case)
+	gs2 = GroupSecrets(joiner_secret=b"\x02" * 32, path_secret=b"\x03" * 32)
+	decoded2 = GroupSecrets.from_bytes(gs2.to_bytes())
+	assert decoded2.joiner_secret == gs2.joiner_secret
+	assert decoded2.path_secret == gs2.path_secret
 
 
 # ---------------------------------------------------------------------------
@@ -127,14 +140,18 @@ def test_welcome_e2e_join(alice_bob_group):
 
 
 def test_group_update_round_trip(alice_bob_group):
-	"""GroupUpdate to_bytes()/from_bytes() produces an identical struct."""
+	"""GroupUpdate to_bytes()/from_bytes() produces a Commit with an identical struct.
+	Internal metadata (epoch/signature) is reset as it lives in the PublicMessage envelope.
+	"""
 	_, _, _, update = alice_bob_group
 	encoded = update.to_bytes()
 	decoded = GroupUpdate.from_bytes(encoded)
-	assert decoded.epoch_id == update.epoch_id
+	# Metadata is handled by envelope, helper returns defaults
+	assert decoded.epoch_id == 1
+	# The core secrets and signature must survive the round-trip
 	assert decoded.committer_index == update.committer_index
 	assert decoded.signature == update.signature
-	assert set(decoded.encrypted_commit_secrets.keys()) == set(update.encrypted_commit_secrets.keys())
+	assert len(decoded.encrypted_commit_secrets) == len(update.encrypted_commit_secrets)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +212,13 @@ def test_mls_message_full_firebase_flow():
 	"""
 	alice_sig, alice_kem = SignatureKey(), KemKey()
 	bob_sig, bob_kem = SignatureKey(), KemKey()
-	bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+	bob_kp = KeyPackage.create(
+		encryption_key=bob_kem.public_bytes(),
+		init_key_pub=bob_kem.public_bytes(),
+		signature_key=bob_sig.public_bytes(),
+		identity=bob_sig.public_bytes(),
+		sign_fn=bob_sig.sign,
+	)
 
 	# Alice: create + add member
 	alice = MLSGroup.create(b"firebase-group", alice_sig, alice_kem)
@@ -324,10 +347,10 @@ def test_welcome_key_derivation_determinism():
 	from pure_mls.keyschedule import KeySchedule
 
 	secret = b"\\x42" * 32
-	k1 = KeySchedule.derive_welcome_key(secret, b"")
-	k2 = KeySchedule.derive_welcome_key(secret, b"")
-	n1 = KeySchedule.derive_welcome_nonce(secret, b"")
-	n2 = KeySchedule.derive_welcome_nonce(secret, b"")
+	k1 = KeySchedule.derive_welcome_key(secret)
+	k2 = KeySchedule.derive_welcome_key(secret)
+	n1 = KeySchedule.derive_welcome_nonce(secret)
+	n2 = KeySchedule.derive_welcome_nonce(secret)
 
 	assert k1 == k2
 	assert n1 == n2
@@ -340,6 +363,6 @@ def test_welcome_key_changes_with_secret():
 	"""Different joiner_secrets produce different welcome keys."""
 	from pure_mls.keyschedule import KeySchedule
 
-	k1 = KeySchedule.derive_welcome_key(b"\\xAA" * 32, b"")
-	k2 = KeySchedule.derive_welcome_key(b"\\xBB" * 32, b"")
+	k1 = KeySchedule.derive_welcome_key(b"\\xAA" * 32)
+	k2 = KeySchedule.derive_welcome_key(b"\\xBB" * 32)
 	assert k1 != k2

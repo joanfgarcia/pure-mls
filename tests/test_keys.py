@@ -1,3 +1,9 @@
+"""Tests for RFC 9420 §10.1 KeyPackage and §7.2 LeafNode signatures.
+
+Updated for v2.0: KeyPackage.create() now takes encryption_key, init_key_pub,
+signature_key, identity, sign_fn per RFC 9420 §10.1 wire format.
+"""
+
 import os
 
 import pytest
@@ -36,61 +42,78 @@ def test_kem_exchange() -> None:
 
 
 # ---------------------------------------------------------------------------
-# v1.3: KeyPackage leaf_signature (RFC 9420 §10.1)
+# v2.0: KeyPackage RFC 9420 §10.1 TLS wire format
 # ---------------------------------------------------------------------------
 
 
-def test_key_package_create_signed():
-	"""KeyPackage.create() self-signs with the identity key."""
-	sig = SignatureKey()
-	kem = KemKey()
-	kp = KeyPackage.create(
-		identity_key_pub=sig.public_bytes(),
+def _make_kp(sig: SignatureKey | None = None, kem: KemKey | None = None) -> KeyPackage:
+	"""Helper: create a fully signed KeyPackage with the new RFC 9420 API."""
+	sig = sig or SignatureKey()
+	kem = kem or KemKey()
+	return KeyPackage.create(
+		encryption_key=kem.public_bytes(),
 		init_key_pub=kem.public_bytes(),
+		signature_key=sig.public_bytes(),
+		identity=sig.public_bytes(),
 		sign_fn=sig.sign,
 	)
-	assert len(kp.leaf_node_signature) == 64
+
+
+def test_key_package_create_signed():
+	"""KeyPackage.create() produces a fully signed KeyPackage."""
+	sig = SignatureKey()
+	kem = KemKey()
+	kp = _make_kp(sig, kem)
+
+	# leaf_node carries the signature over LeafNodeTBS
+	assert len(kp.leaf_node.signature) == 64
 	kp.verify_signature()  # must not raise
+
+	# leaf_node_signature is the KeyPackage-level signature (over KeyPackageTBS) — distinct from LeafNode.signature
+	assert len(kp.leaf_node_signature) == 64
+	# Both signatures are produced by the same key but over different TBS structures
+	# (KeyPackageTBS ≠ LeafNodeTBS), so they are intentionally different values
 
 
 def test_key_package_signature_roundtrip():
-	"""Signed KeyPackage survives to_bytes()/from_bytes()."""
+	"""Signed KeyPackage survives to_bytes()/from_bytes() (TLS round-trip)."""
 	sig = SignatureKey()
 	kem = KemKey()
-	kp = KeyPackage.create(
-		identity_key_pub=sig.public_bytes(),
-		init_key_pub=kem.public_bytes(),
-		sign_fn=sig.sign,
-	)
+	kp = _make_kp(sig, kem)
 	raw = kp.to_bytes()
-	assert len(raw) == 128  # 32 + 32 + 64
+
+	# RFC wire format is variable length (not fixed 128 bytes)
+	assert len(raw) > 64
+
 	kp2 = KeyPackage.from_bytes(raw)
-	assert kp2.identity_key_pub == kp.identity_key_pub
 	assert kp2.init_key_pub == kp.init_key_pub
-	assert kp2.leaf_node_signature == kp.leaf_node_signature
+	assert kp2.identity_key_pub == kp.identity_key_pub
+	assert kp2.leaf_node.signature == kp.leaf_node.signature
 	kp2.verify_signature()
 
 
 def test_key_package_legacy_64_bytes():
-	"""Legacy 64-byte KeyPackage (no signature) loads without signature."""
+	"""Legacy 64-byte KeyPackage loads via from_bytes_legacy without signature."""
 	sig = SignatureKey()
 	kem = KemKey()
 	legacy = sig.public_bytes() + kem.public_bytes()
-	kp = KeyPackage.from_bytes(legacy)
-	assert kp.leaf_node_signature == b""
+	kp = KeyPackage.from_bytes_legacy(legacy)
+	assert kp.leaf_node.signature == b""
 
 
 def test_key_package_tampered_signature_raises():
 	"""Tampered KeyPackage raises on verify_signature()."""
+	from dataclasses import replace
+
 	from cryptography.exceptions import InvalidSignature
 
 	sig = SignatureKey()
 	kem = KemKey()
-	kp = KeyPackage.create(
-		identity_key_pub=sig.public_bytes(),
-		init_key_pub=kem.public_bytes(),
-		sign_fn=sig.sign,
-	)
-	kp.leaf_node_signature = bytes([0xFF]) * 64
+	kp = _make_kp(sig, kem)
+
+	# Tamper the leaf_node signature
+	tampered_leaf = replace(kp.leaf_node, signature=bytes([0xFF]) * 64)
+	tampered_kp = replace(kp, leaf_node=tampered_leaf)
+
 	with pytest.raises((InvalidSignature, Exception)):
-		kp.verify_signature()
+		tampered_kp.verify_signature()

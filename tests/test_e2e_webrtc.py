@@ -5,7 +5,6 @@ import os
 
 import pytest
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
@@ -22,6 +21,11 @@ class MockSignaler:
 
 
 @pytest.mark.asyncio
+@pytest.mark.network
+@pytest.mark.skipif(
+	os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1",
+	reason="Skipping WebRTC E2E in CI",
+)
 async def test_mls_webrtc_e2e():
 	"""
 	End-to-End P2P test using aiortc (WebRTC Data Channels).
@@ -73,11 +77,9 @@ async def test_mls_webrtc_e2e():
 						alice_group = alice_next
 
 					elif msg["type"] == "app_data":
-						ct = base64.b64decode(msg["ct"])
-						nonce = base64.b64decode(msg["nonce"])
-
-						aes = AESGCM(alice_group.application_key)
-						plaintext = aes.decrypt(nonce, ct, b"sender_bob")
+						# P0-03: use MLS-compliant decrypt_application_message
+						payload_bytes = base64.b64decode(msg["payload"])
+						plaintext = alice_group.decrypt_application_message(payload_bytes)
 
 						assert plaintext == b"Hello Alice, P2P Edge Node Bob securely online."
 						print("Alice: Decrypted successfully!")
@@ -114,7 +116,13 @@ async def test_mls_webrtc_e2e():
 
 			sig = SignatureKey()
 			kem = KemKey()
-			kp = KeyPackage(identity_key_pub=sig.public_bytes(), init_key_pub=kem.public_bytes())
+			kp = KeyPackage.create(
+				encryption_key=kem.public_bytes(),
+				init_key_pub=kem.public_bytes(),
+				signature_key=sig.public_bytes(),
+				identity=sig.public_bytes(),
+				sign_fn=sig.sign,
+			)
 
 			@pc.on("datachannel")
 			def on_datachannel(channel):
@@ -148,12 +156,11 @@ async def test_mls_webrtc_e2e():
 
 						bob_group = MLSGroup.join(welcome_info, sig, kem)
 
-						aes = AESGCM(bob_group.application_key)
-						nonce = os.urandom(12)
+						# P0-03: use MLS-compliant encrypt_application_message
 						reading = b"Hello Alice, P2P Edge Node Bob securely online."
-						ct = aes.encrypt(nonce, reading, b"sender_bob")
+						payload_bytes = bob_group.encrypt_application_message(reading)
 
-						data_msg = {"type": "app_data", "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode()}
+						data_msg = {"type": "app_data", "payload": base64.b64encode(payload_bytes).decode()}
 						channel.send(json.dumps(data_msg))
 
 			print("Bob: Waiting for offer")

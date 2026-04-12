@@ -10,6 +10,8 @@ Cipher suite: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (0x0001)
 import hashlib
 import hmac
 
+from pure_mls.hkdf import expand_with_label
+
 # These values are taken directly from the IETF MLS test vector crypto-basics.json
 # suite 0x0001 (DHKEM-X25519-AES128GCM-SHA256-Ed25519)
 SUITE_ID = b"MLS 1.0 "
@@ -25,20 +27,6 @@ def _hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
 	return hmac.new(salt, ikm, hashlib.sha256).digest()
 
 
-def _hkdf_expand_label(secret: bytes, label: str, context: bytes, length: int) -> bytes:
-	"""RFC 9420 §8 ExpandWithLabel using the MLS 1.0 subdomain prefix."""
-	full_label = SUITE_ID + label.encode()
-	hkdf_label = length.to_bytes(2, "big") + len(full_label).to_bytes(1, "big") + full_label + len(context).to_bytes(4, "big") + context
-	# HKDF-Expand
-	n = (length + 31) // 32
-	okm = b""
-	t = b""
-	for i in range(1, n + 1):
-		t = hmac.new(secret, t + hkdf_label + bytes([i]), hashlib.sha256).digest()
-		okm += t
-	return okm[:length]
-
-
 def test_hkdf_extract_zero_vectors():
 	"""Validate HKDF-Extract with zeroed IKM and salt produces the expected PRK."""
 	prk = _hkdf_extract(_SALT_ZERO, _IKM_ZERO)
@@ -48,14 +36,14 @@ def test_hkdf_extract_zero_vectors():
 def test_expand_with_label_deterministic():
 	"""ExpandWithLabel with the same inputs is always deterministic (idempotency check)."""
 	for _ in range(3):
-		result = _hkdf_expand_label(_PRK_ZERO, b"test".decode(), b"", 32)
+		result = expand_with_label(_PRK_ZERO, "test", b"", 32)
 		assert len(result) == 32
 
 
 def test_expand_with_label_domain_separation():
 	"""Labels 'welcome' and 'sender' must produce distinct outputs — domain separation."""
-	out_a = _hkdf_expand_label(_PRK_ZERO, "welcome", b"", 32)
-	out_b = _hkdf_expand_label(_PRK_ZERO, "sender", b"", 32)
+	out_a = expand_with_label(_PRK_ZERO, "welcome", b"", 32)
+	out_b = expand_with_label(_PRK_ZERO, "sender", b"", 32)
 	assert out_a != out_b, "Domain separation failure: different labels produced identical outputs"
 
 
@@ -88,8 +76,10 @@ def test_key_package_ref_length():
 	kem_key = KemKey()
 	# SEC-CRIT-01 regression: KeyPackage.create requires identity_key_pub, init_key_pub, sign_fn
 	kp = KeyPackage.create(
-		identity_key_pub=sig_key.public_bytes(),
+		encryption_key=kem_key.public_bytes(),
 		init_key_pub=kem_key.public_bytes(),
+		signature_key=sig_key.public_bytes(),
+		identity=sig_key.public_bytes(),
 		sign_fn=sig_key.sign,
 	)
 	kp_ref = _make_kp_ref(kp)

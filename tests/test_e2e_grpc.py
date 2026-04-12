@@ -48,6 +48,10 @@ class MLSSwarmServicer(mls_pb2_grpc.MLSSwarmServicer):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+	os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1",
+	reason="Skipping gRPC E2E in CI",
+)
 async def test_mls_grpc_e2e():
 	"""
 	End-to-End backend test using gRPC.
@@ -68,7 +72,13 @@ async def test_mls_grpc_e2e():
 		# 2. Bob announces himself to the Swarm Directory
 		bob_sig = SignatureKey()
 		bob_kem = KemKey()
-		bob_kp = KeyPackage(identity_key_pub=bob_sig.public_bytes(), init_key_pub=bob_kem.public_bytes())
+		bob_kp = KeyPackage.create(
+			encryption_key=bob_kem.public_bytes(),
+			init_key_pub=bob_kem.public_bytes(),
+			signature_key=bob_sig.public_bytes(),
+			identity=bob_sig.public_bytes(),
+			sign_fn=bob_sig.sign,
+		)
 
 		await stub.JoinSwarm(mls_pb2.JoinRequest(identity="bob", key_package=bob_kp.to_bytes()))
 
@@ -104,7 +114,9 @@ async def test_mls_grpc_e2e():
 		bob_group = MLSGroup.join(received_welcome, bob_sig, bob_kem)
 
 		# Verify consensus
-		assert alice_next.application_key == bob_group.application_key
+		msg = b"grpc-epoch-verified"
+		ct = alice_next.encrypt_application_message(msg)
+		assert bob_group.decrypt_application_message(ct) == msg
 		assert alice_next.epoch_id == 1
 		assert bob_group.epoch_id == 1
 

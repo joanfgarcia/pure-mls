@@ -36,7 +36,7 @@ async def test_encrypted_storage_roundtrip(tmp_path):
 	assert loaded_group.group_id == group.group_id
 	assert loaded_group.epoch_id == group.epoch_id
 	assert loaded_group.my_index == group.my_index
-	assert loaded_group.application_key == group.application_key
+	assert loaded_group.state.key_schedule.encryption_secret == group.state.key_schedule.encryption_secret
 
 	# Verify keys (private)
 	assert loaded_group.my_sig_key.private_bytes() == sig_key.private_bytes()

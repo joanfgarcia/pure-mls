@@ -1,7 +1,7 @@
 [project]
 name = "pure-mls"
-version = "2.0.0"
-description = "Add your description here"
+version = "3.0.4.0"
+description = "Pure Python MLS implementation with CLI. Still maturing the application messaging CLI commands."
 readme = "README.md"
 authors = [
     { name = "Joan F Garcia", email = "joanfgarcia@gmail.com" }
@@ -10,6 +10,9 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=46.0.5",
 ]
+
+[project.scripts]
+pure-mls = "pure_mls.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
@@ -36,19 +39,28 @@ line-length = 150
 exclude = ["tests/protos/*", ".venv/*"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "ARG", "PLC"]
 ignore = [
     "W191", # Allow tabs (Sound of Silence protocol)
     "E501", # Allow long lines
     "E265", # Allow some comment variants
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLC0415", "ARG001", "ARG002"]  # inline imports + fixtures are valid pytest patterns
+"scripts/*" = ["PLC0415"]  # standalone scripts use inline imports intentionally
+"src/pure_mls/keyschedule.py" = ["ARG003"]  # intermediate kept for PSK audit trail
+
 [tool.ruff.format]
 indent-style = "tab"
 quote-style = "double"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["3rdparty", ".venv", "build", "dist"]
 markers = [
     "network: tests that require internet access to fetch live IETF vectors",
+    "interop: tests that cross-validate with external implementations (e.g. OpenMLS)",
 ]
-
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

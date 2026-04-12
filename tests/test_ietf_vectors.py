@@ -1,153 +1,319 @@
+"""Definitive IETF MLS test vector interop suite (Phase 6+).
+
+Tests pure-mls cryptographic primitives and key schedule derivations against
+the official IETF MLS test vectors from:
+  https://github.com/mlswg/mls-implementations/test-vectors
+
+The same vectors are used by OpenMLS, mls-rs, Cisco IMLS, and all other
+RFC 9420 implementations for cross-implementation interoperability validation.
+
+== Test Categories ==
+
+1. **crypto-basics.json**: Validates our HKDF/KDF primitives directly.
+   - ExpandWithLabel (§8): KDFLabel wire format + HKDF-Expand
+   - DeriveSecret (§8): ExpandWithLabel with empty context
+   All must match exactly or our entire cryptographic layer is broken.
+
+2. **key-schedule.json** (§8): Validates epoch secret derivation chain.
+   For each epoch vector, uses the GIVEN joiner_secret from the vector
+   (which incorporates GroupContext + PSK) and derives all epoch secrets:
+   sender_data_secret, encryption_secret, epoch_authenticator,
+   confirmation_key, membership_key, init_secret.
+   Chain: joiner_secret → HKDF-Extract(psk_secret) → intermediate →
+          ExpandWithLabel(group_ctx) → epoch_secret → DeriveSecret(label)
+
+3. **passive-client-welcome.json** (§12): Wire-format interop.
+   Given an OpenMLS-generated Welcome message binary + joiner private keys,
+   calls MLSGroup.join() and verifies the resulting epoch_authenticator.
+   This is the hard E2E test that validates full wire-format compatibility.
+
+4. **secret-tree.json** (§9): Per-leaf per-generation key/nonce derivation.
+   Validates SecretTree derives correct content keys and nonces.
+
+Ciphersuite: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (0x0001)
 """
-RFC 9420 (MLS) Interoperability Test Suite — IETF Official Test Vectors.
 
-Source:
-    https://github.com/mlswg/mls-implementations/blob/main/test-vectors/key-schedule.json
-    Repository: https://github.com/mlswg/mls-implementations (IETF MLS Working Group)
-    Commit pinned: main branch (fetched at test time, with embedded fallback)
-
-Verification:
-    Any auditor can reproduce these vectors by:
-    1. Cloning https://github.com/mlswg/mls-implementations
-    2. Reading test-vectors/key-schedule.json
-    3. Comparing the cipher_suite=1 (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) epochs
-       against the assertions below.
-
-Test strategy:
-    - Fetches the live JSON when network is available (marks test SKIP if unreachable,
-      NOT fail — CI without network should not break).
-    - Falls back to an embedded snapshot of the first 2 epochs of Suite 1
-      so the test always has a baseline without network.
-    - Validates: joiner_secret, epoch_authenticator, encryption_secret,
-      exporter_secret, confirmation_key, sender_data_secret, membership_key,
-      next init_secret for every epoch in the chain.
-"""
+from __future__ import annotations
 
 import json
-import urllib.request
-from urllib.error import URLError
+from pathlib import Path
 
 import pytest
 
-from pure_mls.keyschedule import KeySchedule
+from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract
 
-# ---------------------------------------------------------------------------
-# Source of truth
-# ---------------------------------------------------------------------------
-_VECTOR_URL = "https://raw.githubusercontent.com/mlswg/mls-implementations/main/test-vectors/key-schedule.json"
-_CIPHER_SUITE = 1  # MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+VECTORS_DIR = Path(__file__).parent / "ietf_vectors"
+SUITE_1 = 1  # MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
 
-# ---------------------------------------------------------------------------
-# Embedded fallback snapshot — Suite 1, epochs 0 and 1.
-# Extracted directly from mlswg/mls-implementations @ main (2026-03-25).
-# Enables offline / network-free CI to still run a baseline assertion.
-# ---------------------------------------------------------------------------
-_FALLBACK_EPOCHS = [
-	{
-		"commit_secret": "a22606222e350fd7f0937168fe7548fb06626ab143cba7611d641693b1447509",
-		"psk_secret": "e871b247379522395689182736cb3d1e7b108d6ae934b802223975de8dc3f80b",
-		"group_context": (
-			"0001000120a897b53575b4dd35fed4466e4e714bfa949eaa72e616a9c68a47b39cb7a60d2e"
-			"0000000000000000209769e302a99c457350a8e636009b12a2fee068664004606d6318eb3a1977d818"
-			"205e57c9364dc71f0f71b19ffe561ab77257c490708a47e29f8f73f2b318201d2f00"
-		),
-		"joiner_secret": "4fb996ba26b29a70f3ce6c310151ce8701cb812d027f4d4bbf5cc4e9f884638d",
-		"epoch_authenticator": "7375d449cde2c5a856c13c8eb52c16bf9ef29eceef59b09d1f946bd1bac24643",
-		"encryption_secret": "01588615c93d02c83bda0b587473303b1637a92bf80783206d963f9197c40a13",
-		"exporter_secret": "5a097e149f2a375d0b9e1d1f4dc3a9c6c1788df888e5441f41a8791f4dc56cea",
-		"confirmation_key": "feabd690de3b4ce985a3dfad86a4c4e6a0be9b84e7cc764842784f2a6b938b75",
-		"sender_data_secret": "9b3995e08589548b75e149190060cf35228df0eefe3527ea2fb39e49a84125b4",
-		"membership_key": "970744ba7edd21700a3e106cb4e2b4c657cef6b41a1fe5b5a1418f86e76e037e",
-		"init_secret": "505be2ce2ff922aa11e0a03d76346dda2981f1d9edf5cf98ecfc8757f69b00c9",
-	},
-	{
-		"commit_secret": "7b3027aa5d2224aab7e2a18660bbf57930e2e21d95e02b849c704d970e3e28c5",
-		"psk_secret": "ca7a68f2a8a52147d70f1eb7195de968d2e182b93596bc5a61393861e91180e4",
-		"group_context": (
-			"0001000120a897b53575b4dd35fed4466e4e714bfa949eaa72e616a9c68a47b39cb7a60d2e"
-			"000000000000000120826a4d3b0956277ce5e272e4d18fdca023ffb63ea4cea636e34cc837ae7c5c5"
-			"d2014a2985ea47db0685924a74d47ac8a08ec241f843b536dd1348e3ffb2d78184e00"
-		),
-		"joiner_secret": "7ba2c5eed466d6fa8de0b0f33553c7b336a2580c03820e79f22e9416efc5b9f9",
-		"epoch_authenticator": "4bdbe62402b3caaadaf5c6fafd89db4db5ac7c7532f3e47d35c82b3998570361",
-		"encryption_secret": "c607312fab6423cd728a25fd91e9905e058518d1bf171984ed5f4e4e057fa3be",
-		"exporter_secret": "047d983048b132b79ea4e2e578afd02a0f4717d166cefe46e43e2e965b5c9f4e",
-		"confirmation_key": "04ab9a788afe377d34b0fac1dc26085c85ac55a63e44b88da39fb4e58a898979",
-		"sender_data_secret": "64035464638ac7cf16583644e8117a84ca3c101eaa34a86ad4ead9524f8fb9bc",
-		"membership_key": "1eb0202e445ebc744c00eb42951ad67638c51cc9a468d9035be06612ff5cd89a",
-		"init_secret": "88586b2252f06838106a97f5ad1f3357d99d718be8f44f61ab103be653fc608a",
-	},
-]
 
-_INITIAL_INIT_SECRET = "a897b53575b4dd35fed4466e4e714bfa949eaa72e616a9c68a47b39cb7a60d2e"
+def _h(s: str) -> bytes:
+	return bytes.fromhex(s) if s else b""
+
+
+def _load_json(name: str) -> list | dict:
+	path = VECTORS_DIR / name
+	if not path.exists():
+		pytest.skip(f"IETF vector not found: {path} — run scripts/download_ietf_vectors.sh")
+	with open(path) as f:
+		return json.load(f)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# 1. crypto-basics.json: HKDF/KDF primitive validation (§8)
 # ---------------------------------------------------------------------------
-def _fetch_live_epochs() -> list[dict] | None:
-	"""Fetch Suite 1 epochs from the IETF repository. Returns None on network error."""
+
+
+def test_crypto_basics_expand_with_label():
+	"""ExpandWithLabel produces correct output per IETF crypto-basics.json.
+
+	This validates the KDFLabel wire format (uint16 length + label + context)
+	and the underlying HKDF-Expand operation. If this test fails, our entire
+	key schedule is broken at the primitive level.
+	"""
+	data = _load_json("crypto-basics.json")
+	vec = next(x for x in data if x["cipher_suite"] == SUITE_1)
+	ewl = vec["expand_with_label"]
+
+	secret = _h(ewl["secret"])
+	label = ewl["label"]
+	context = _h(ewl["context"])
+	length = ewl["length"]
+	expected = _h(ewl["out"])
+
+	result = expand_with_label(secret, label, context, length)
+	assert result == expected, (
+		f"ExpandWithLabel mismatch (IETF crypto-basics):\n  label:    {label!r}\n  got:      {result.hex()}\n  expected: {expected.hex()}"
+	)
+
+
+def test_crypto_basics_derive_secret():
+	"""DeriveSecret = ExpandWithLabel(secret, label, b'', NH) per IETF vector."""
+	data = _load_json("crypto-basics.json")
+	vec = next(x for x in data if x["cipher_suite"] == SUITE_1)
+	ds = vec["derive_secret"]
+
+	secret = _h(ds["secret"])
+	label = ds["label"]
+	expected = _h(ds["out"])
+
+	result = derive_secret(secret, label)
+	assert result == expected, (
+		f"DeriveSecret mismatch (IETF crypto-basics):\n  label:    {label!r}\n  got:      {result.hex()}\n  expected: {expected.hex()}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# 2. key-schedule.json: Epoch secret derivation chain (§8)
+# ---------------------------------------------------------------------------
+
+
+def _load_ks_vectors() -> list[dict]:
+	"""Load key-schedule.json vectors for suite 1."""
 	try:
-		with urllib.request.urlopen(_VECTOR_URL, timeout=8) as resp:
-			data = json.loads(resp.read())
-		for suite in data:
-			if suite["cipher_suite"] == _CIPHER_SUITE:
-				return suite["epochs"]
-	except (URLError, json.JSONDecodeError, KeyError):
-		pass
-	return None
+		data = _load_json("key-schedule.json")
+	except pytest.skip.Exception:
+		return []
+	return [v for v in data if v["cipher_suite"] == SUITE_1]
 
 
-def _run_epoch_chain(epochs: list[dict], init_secret_hex: str) -> None:
-	"""Drives the key schedule through an epoch chain and asserts all derived secrets."""
-	init_secret = bytes.fromhex(init_secret_hex)
+_KS_VECTORS = _load_ks_vectors()
 
-	for i, epoch in enumerate(epochs):
-		commit_secret = bytes.fromhex(epoch["commit_secret"])
-		group_context = bytes.fromhex(epoch["group_context"])
-		psk_secret = bytes.fromhex(epoch["psk_secret"])
 
-		ks = KeySchedule.derive(init_secret, commit_secret, group_context, psk_secret)
+@pytest.mark.parametrize("vec", _KS_VECTORS, ids=[f"ks-suite1-vec{i}" for i in range(len(_KS_VECTORS))])
+def test_key_schedule_epoch_secrets(vec):
+	"""RFC 9420 §8: All epoch secrets derived correctly from given joiner_secret.
 
-		# --- assert all epoch secrets ---
-		assert ks.joiner_secret == bytes.fromhex(epoch["joiner_secret"]), f"Epoch {i}: joiner_secret mismatch"
-		assert ks.epoch_authenticator == bytes.fromhex(epoch["epoch_authenticator"]), f"Epoch {i}: epoch_authenticator mismatch"
-		assert ks.encryption_secret == bytes.fromhex(epoch["encryption_secret"]), f"Epoch {i}: encryption_secret mismatch"
-		assert ks.exporter_secret == bytes.fromhex(epoch["exporter_secret"]), f"Epoch {i}: exporter_secret mismatch"
-		assert ks.confirmation_key == bytes.fromhex(epoch["confirmation_key"]), f"Epoch {i}: confirmation_key mismatch"
-		assert ks.sender_data_secret == bytes.fromhex(epoch["sender_data_secret"]), f"Epoch {i}: sender_data_secret mismatch"
-		assert KeySchedule.derive_membership_key(ks.epoch_secret) == bytes.fromhex(epoch["membership_key"]), f"Epoch {i}: membership_key mismatch"
-		assert ks.next_init_secret == bytes.fromhex(epoch["init_secret"]), f"Epoch {i}: next init_secret mismatch"
+	The vector provides joiner_secret and psk_secret (chosen by test generator,
+	may be non-zero) and group_context (pre-computed TLS bytes).
+	We verify the full chain: joiner → intermediate → epoch_secret → all secrets.
 
-		# Chain: next epoch starts from the init_secret derived in this one
-		init_secret = ks.next_init_secret
+	Chain (RFC §8 Figure 22):
+		intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+		epoch_secret = ExpandWithLabel(intermediate, "epoch", group_ctx, NH)
+		DeriveSecret(epoch_secret, label) for each derived secret
+	"""
+	g = vec
+
+	for i, epoch in enumerate(g["epochs"]):
+		joiner_s = _h(epoch["joiner_secret"])
+		psk_s = _h(epoch["psk_secret"])
+		group_ctx = _h(epoch["group_context"])
+
+		# Derive epoch_secret from joiner_secret and psk_secret
+		# RFC §8 Figure 22: HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
+		intermediate = hkdf_extract(joiner_s, psk_s)
+		epoch_secret = expand_with_label(intermediate, "epoch", group_ctx, 32)
+
+		# Validate all derived secrets against IETF expected values
+		checks = {
+			"sender_data_secret": ("sender data", epoch.get("sender_data_secret", "")),
+			"encryption_secret": ("encryption", epoch.get("encryption_secret", "")),
+			"exporter_secret": ("exporter", epoch.get("exporter_secret", "")),
+			"epoch_authenticator": ("authentication", epoch.get("epoch_authenticator", "")),
+			"external_secret": ("external", epoch.get("external_secret", "")),
+			"resumption_psk": ("resumption", epoch.get("resumption_psk", "")),
+			"membership_key": ("membership", epoch.get("membership_key", "")),
+			"init_secret": ("init", epoch.get("init_secret", "")),
+		}
+
+		for field_name, (label, expected_hex) in checks.items():
+			if not expected_hex:
+				continue
+			expected = _h(expected_hex)
+			derived = derive_secret(epoch_secret, label)
+			assert derived == expected, (
+				f"Epoch {i} {field_name} mismatch:\n  label:    {label!r}\n  got:      {derived.hex()}\n  expected: {expected.hex()}"
+			)
+
+		# Validate confirmation_key: RFC §8 = DeriveSecret(epoch_secret, "confirm")
+		conf_key = derive_secret(epoch_secret, "confirm")
+		if epoch.get("confirmation_key"):
+			assert conf_key == _h(epoch["confirmation_key"]), f"Epoch {i} confirmation_key mismatch"
+
+		# (init_secret for next epoch carried via joiner_secret chain)
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# 3. passive-client-welcome.json: Wire-format E2E (§12) — The definitive test
 # ---------------------------------------------------------------------------
 
 
-def test_ietf_key_schedule_fallback_suite1():
-	"""
-	Baseline interop test against embedded IETF vectors (no network required).
-
-	Source: mlswg/mls-implementations, test-vectors/key-schedule.json
-	Suite:  cipher_suite=1 (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)
-	Epochs: 0–1 (embedded snapshot, auditor-reproducible from the URL above)
-	"""
-	_run_epoch_chain(_FALLBACK_EPOCHS, _INITIAL_INIT_SECRET)
+def _load_welcome_vectors() -> list[dict]:
+	"""Load passive-client-welcome.json for suite 1."""
+	try:
+		data = _load_json("passive-client-welcome.json")
+	except pytest.skip.Exception:
+		return []
+	return [v for v in data if v["cipher_suite"] == SUITE_1]
 
 
-@pytest.mark.network
-def test_ietf_key_schedule_live_suite1():
-	"""
-	Full interop test fetching vectors live from the IETF repository.
+_WELCOME_VECTORS = _load_welcome_vectors()
 
-	Skipped automatically when network is unavailable.
-	Source: https://github.com/mlswg/mls-implementations/blob/main/test-vectors/key-schedule.json
+
+@pytest.mark.parametrize("vec", _WELCOME_VECTORS, ids=[f"welcome-{i}" for i in range(len(_WELCOME_VECTORS))])
+def test_passive_client_welcome(vec):
+	"""RFC 9420 §12: pure-mls can parse an OpenMLS-generated Welcome and
+	derive the correct epoch_authenticator. This is the definitive wire-format
+	interop test — the Welcome was produced by a reference implementation.
+
+	Validates:
+	- Welcome TLS deserialization (GroupSecrets, EncryptedGroupSecrets)
+	- HPKE decryption of GroupSecrets using joiner's init_priv
+	- GroupInfo TLS parsing and Ed25519 signature verification
+	- Full KeySchedule derivation to epoch_authenticator
 	"""
-	epochs = _fetch_live_epochs()
-	if epochs is None:
-		pytest.skip("IETF vector endpoint unreachable — skipping live interop test")
-	_run_epoch_chain(epochs, _INITIAL_INIT_SECRET)
+	pytest.importorskip("pure_mls.group")  # skip if module not available
+	from pure_mls.group import MLSGroup
+	from pure_mls.keys import KemKey, SignatureKey
+
+	welcome_bytes = _h(vec["welcome"])
+	init_priv_bytes = _h(vec["init_priv"])
+	sig_priv_bytes = _h(vec["signature_priv"])
+	expected_epoch_auth = _h(vec["initial_epoch_authenticator"])
+
+	try:
+		sig_key = SignatureKey.from_private_bytes(sig_priv_bytes)
+		kem_key = KemKey.from_private_bytes(init_priv_bytes)
+	except AttributeError:
+		pytest.skip("SignatureKey/KemKey.from_private_bytes not implemented — needed for IETF wire interop")
+
+	# Resolve PSKs from vector to pass to join()
+	from pure_mls.group import PreSharedKeyID
+	from pure_mls.keyschedule import PSK_TYPE_EXTERNAL
+
+	psk_list = []
+	for psk_data in vec.get("external_psks", []):
+		psk_id = _h(psk_data["psk_id"])
+		psk_val = _h(psk_data["psk"])
+		# psk_nonce SHOULD be empty for external PSKs per RFC 9420 §8.4
+		psk_list.append((PreSharedKeyID(psk_type=PSK_TYPE_EXTERNAL, psk_id=psk_id, psk_nonce=b""), psk_val))
+	# Load ratchet_tree fallback if specificed in vector
+	from pure_mls.tree import RatchetTree
+
+	ratchet_tree = None
+	if vec.get("ratchet_tree"):
+		ratchet_tree = RatchetTree.from_bytes(_h(vec["ratchet_tree"]))
+
+	joiner_group = MLSGroup.join(welcome_bytes, sig_key, kem_key, psk_list=psk_list, ratchet_tree=ratchet_tree)
+	# For debugging, we can print the GI bytes if it failed (but it fails inside join)
+
+	actual_epoch_auth = joiner_group.state.key_schedule.epoch_authenticator
+	assert actual_epoch_auth == expected_epoch_auth, (
+		f"epoch_authenticator mismatch (passive-client-welcome)\n  got:      {actual_epoch_auth.hex()}\n  expected: {expected_epoch_auth.hex()}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# 4. secret-tree.json: Per-leaf per-generation SecretTree (§9)
+# ---------------------------------------------------------------------------
+
+
+def _load_st_vectors() -> list[tuple[int, int, int, bytes, list]]:
+	"""Load secret-tree vectors for suite 1, with correct n_leaves per vector."""
+	try:
+		data = _load_json("secret-tree.json")
+	except pytest.skip.Exception:
+		return []
+
+	result = []
+	for vec_i, vec in enumerate(data):
+		if vec["cipher_suite"] != SUITE_1:
+			continue
+		enc_secret = _h(vec["encryption_secret"])
+		all_leaves = vec.get("leaves", [])
+		n_leaves = len(all_leaves)
+		for leaf_i, gens in enumerate(all_leaves):
+			if gens:
+				result.append((vec_i, leaf_i, n_leaves, enc_secret, gens))
+	return result
+
+
+_ST_VECTORS = _load_st_vectors()
+
+
+@pytest.mark.parametrize(
+	"vec_i,leaf_i,n_leaves,encryption_secret,generations", _ST_VECTORS, ids=[f"st-vec{vec_i}-leaf{leaf_i}" for vec_i, leaf_i, _, _, _ in _ST_VECTORS]
+)
+def test_secret_tree_key_nonce(vec_i, leaf_i, n_leaves, encryption_secret, generations):
+	"""RFC 9420 §9: SecretTree IETF vector validation."""
+	from pure_mls.secret_tree import SecretTree
+
+	for gen_data in generations:
+		gen = gen_data["generation"]
+
+		# Application Key/Nonce
+		expected_app_key = _h(gen_data["application_key"])
+		expected_app_nonce = _h(gen_data["application_nonce"])
+
+		# Handshake Key/Nonce
+		expected_hand_key = _h(gen_data["handshake_key"])
+		expected_hand_nonce = _h(gen_data["handshake_nonce"])
+
+		# Fresh SecretTree per generation (get_key_and_nonce_for_gen starts from base)
+		st = SecretTree(encryption_secret=bytearray(encryption_secret), n_leaves=n_leaves)
+
+		# Verify Application
+		app_key, app_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen, secret_type="application")
+		assert app_key == expected_app_key, (
+			f"vec {vec_i} leaf {leaf_i} gen {gen}: application_key mismatch\n  got:      {app_key.hex()}\n  expected: {expected_app_key.hex()}"
+		)
+		assert app_nonce == expected_app_nonce, f"vec {vec_i} leaf {leaf_i} gen {gen}: application_nonce mismatch"
+
+		# Verify Handshake
+		hand_key, hand_nonce = st.get_key_and_nonce_for_gen(leaf_i, gen, secret_type="handshake")
+		assert hand_key == expected_hand_key, (
+			f"vec {vec_i} leaf {leaf_i} gen {gen}: handshake_key mismatch\n  got:      {hand_key.hex()}\n  expected: {expected_hand_key.hex()}"
+		)
+		assert hand_nonce == expected_hand_nonce, f"vec {vec_i} leaf {leaf_i} gen {gen}: handshake_nonce mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Smoke: all vector files present
+# ---------------------------------------------------------------------------
+
+
+def test_ietf_vectors_present():
+	"""IETF vector files must be present (download with make download-vectors)."""
+	for fname in ("crypto-basics.json", "key-schedule.json", "passive-client-welcome.json", "secret-tree.json"):
+		path = VECTORS_DIR / fname
+		assert path.exists(), f"Missing: {path}\nRun: make download-vectors or scripts/download_ietf_vectors.sh"

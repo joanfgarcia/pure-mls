@@ -2,7 +2,8 @@ import os
 
 import pytest
 
-from pure_mls.tree import KeyPackage, LeafNode, ParentNode, RatchetTree
+from pure_mls.keys import KemKey, SignatureKey
+from pure_mls.tree import Capabilities, Credential, KeyPackage, LeafNode, ParentNode, RatchetTree
 
 
 def test_ratchet_tree_initialization() -> None:
@@ -15,8 +16,16 @@ def test_ratchet_tree_initialization() -> None:
 def test_ratchet_tree_insertion() -> None:
 	tree = RatchetTree(4)
 
-	kp = KeyPackage(identity_key_pub=os.urandom(32), init_key_pub=os.urandom(32))
-	leaf = LeafNode(key_package=kp)
+	sig = SignatureKey()
+	kem = KemKey()
+	kp = KeyPackage.create(
+		encryption_key=kem.public_bytes(),
+		init_key_pub=kem.public_bytes(),
+		signature_key=sig.public_bytes(),
+		identity=sig.public_bytes(),
+		sign_fn=sig.sign,
+	)
+	leaf = kp.leaf_node
 	parent = ParentNode(public_key=os.urandom(32), parent_hash=b"hash")
 
 	# Insert leaf at even index 0
@@ -31,8 +40,13 @@ def test_ratchet_tree_insertion() -> None:
 def test_ratchet_tree_constraints() -> None:
 	tree = RatchetTree(2)  # Size 3 [0, 1, 2]
 
-	leaf = LeafNode(key_package=KeyPackage(b"i", b"e"))
-	parent = ParentNode(public_key=b"p", parent_hash=b"h")
+	leaf = LeafNode(
+		encryption_key=b"i" * 32,
+		signature_key=b"s" * 32,
+		credential=Credential.basic(b"test"),
+		capabilities=Capabilities.default(),
+	)
+	parent = ParentNode(public_key=b"p" * 32, parent_hash=b"h" * 32)
 
 	with pytest.raises(ValueError):
 		tree.set_leaf(1, leaf)  # Needs even
