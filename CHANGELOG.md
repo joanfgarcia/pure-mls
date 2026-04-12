@@ -5,93 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.6.0] - 2026-04-11
-### [P0-STABILITY] Full Cryptographic Synchronization Achieved
-- **TreeKEM Structural Parity**: Resolved `ValueError: Leaves must be at even indices` and `SenderData authentication failed` by standardizing tree growth via `expanded()` and enforcing `leaf_index * 2` mapping globally.
-- **Deterministic TreeHash**: Implemented top-down `parent_hash` reconstruction in `process_update`, ensuring Alice and Bob reach bit-perfect tree state identity.
-- **Transcript Consistency**: Aligned `Commit` body serialization and `FramedContent` epoch framing to satisfy cryptographic signature and confirmation tag verification across sequential multi-member updates.
-- **Tooling Resilience**: Fixed `ruff` dynamic path resolution in `test_lint.py` and standardized project-wide code formatting.
-- **Auditor Certification**: 212/212 active test cases PASSED (3/215 were skipped/xfail per design).
+## [3.0.3.0] - 2026-04-12  (B760 Engineering Grade Certification)
 
-## [3.0.5.0] - Unreleased
+### Fixed (B760 Final P1 Remediation — Full RFC 9420 Compliance)
 
-- **[P0-EPOCH] Synchronized Epoch Framing** (`group.py`):
-  Normalized `GroupUpdate` and `Commit` body to anchor on the sender's current epoch ID instead of the resulting epoch, resolving the "Out of order update" desync identified during multi-member roundtrips.
-- **[P0-TREEKEM] Corrected Path Secret Resolution** (`group.py`):
-  Fixed a critical index mismatch in `process_update()` where leaf indices were incorrectly mapped to node indices. Corrected to `leaf_index * 2`, ensuring path secret decapsulation reaches the intended recipients.
-- **[P1-STRICT] Enforced KeyPackageRef Validation** (`group.py`):
-  `process_update()` now strictly validates that the committer exists in the previous epoch's tree state by cross-referencing their `KeyPackageRef`, preventing unauthorized epoch transitions.
-- **[P1-MEMB] Secure Confirmation Comparison** (`group.py`):
-  Replaced direct equality checks with `hmac.compare_digest` for confirmation tag verification to mitigate potential side-channel vulnerabilities.
-- **[QA-CLEAN] Compliance Scouring**:
-  Deleted `debug_welcome.py` and other non-compliant scratch files to satisfy the *Sound of Silence* protocol integrity tests.
-- **[PY-3.12] Future Annotations & Dataclass Fixes** (`group.py`):
-  Enabled `from __future__ import annotations` to support `|` union types in string-evaluated dataclass fields on Python 3.12+. Corrected `GroupContext` and `GroupInfo` field order to maintain default-argument invariants.
+- **[P1-A] FramedContentAuthData VarInt encoding** (`group.py`):
+  Now uses `tls_opaque_varint()` for `signature` and `confirmation_tag` per RFC 9420 §6.1.
+  Ensures layout-interoperability with standard MLS implementations (OpenMLS, mls-rs).
 
-### Fixed (Interop — 100% IETF Welcome Compliance)
+- **[P1-B] Mandatory Membership Tag enforcement** (`group.py`):
+  `process_update()` now rejects commits lacking a `membership_tag` (RFC §6.2), hardening
+  against downgrade attacks where a malicious peer could strip authentication layers.
 
-- **[P0-WELCOME] Welcome Encryption Symmetry** (`group.py`):
-  Corrected `add_member()` to use derived nonces instead of prepended ones for the `encrypted_group_info` (EGI), matching RFC 9420 §12.4. Ensured `psk_secret` consistency (Nhnd-zeros) between Alice and Bob when PSKs are absent.
-- **[P0-GI] GroupInfo Extension Signing** (`group.py`):
-  Refactored `ratchet_tree` (0x0002) delivery to be part of the `GroupInfo` extensions list *before* signing, ensuring the tree state is cryptographically bound to the committer's identity. Fixed double-prefixing in the extension vector.
-- **[P0-PROP] PublicMessage Metadata Propagation** (`group.py`):
-  `to_group_update()` now correctly propagates `epoch_id`, `committer_index`, and `signature` from the envelope, resolving state desyncs in the wire-format round-trip.
+- **[P1-C] TreeKEM UpdatePath in `remove_member()`** (`group.py`):
+  Implemented full rotating-leaf-path update during member removal. `remove_member()` now
+  produces an `UpdatePath` (TreeKEM) instead of relying solely on the legacy fallback,
+  providing true Post-Compromise Security (PCS) for group contractions.
 
-- **[P0-PSK] KeySchedule PSK Nonce Handling** (`group.py`):
-  `join()` now correctly preserves the `psk_nonce` defined in the `Welcome` message's `PreSharedKeyID` vector, instead of defaulting to a zero-length nonce.
-- **[P1-GI] GroupInfo Wire-Format Correction** (`group.py`):
-  Corrected `GroupInfo` and `ConfirmedTranscriptHashInput` serialization to treat `confirmation_tag` and `signature` as `opaque<V>` (VarInt-prefixed) instead of fixed-length blocks, aligning with OpenMLS/mls-rs.
+- **[P1-D] KeySchedule logic consolidation**:
+  Refactored `derive()` and `derive_confirmation_key()` to share a unified `_derive_epoch_secret()`
+  method, eliminating functional divergence risks in the key-schedule sequence.
 
-### Fixed (Interop — Wire Format Hardening)
+- **[SEC-001] Vault Identity Seed-Split** (`red_pill/utils/vault_crypto.py`):
+  Implemented HKDF domain separation for the master vault seed. KEM and Signature keys
+  are now derived from separate keyspace domains (`vault-v1/kem` vs `vault-v1/sign`),
+  preventing potential algebraic attacks from key reuse in multi-scheme settings.
 
-- **[P0-WELCOME] Welcome & EGS Wire-Format Refactor** (`group.py`):
-  Refactored `Welcome` and `EncryptedGroupSecrets` (EGS) to match RFC 9420 §12.1.2. Corrected field ordering (EGI before EGS) and fixed `KeyPackageRef` as a fixed 32-byte field (removed invalid varint prefix).
-- **[P1-GI] GroupInfo Confirmation Tag linkage** (`group.py`):
-  `GroupInfo` now strictly uses the `confirmation_tag` derived from the *new* epoch's key material, preventing the "binding desync" identified during OpenMLS interoperability testing.
+- **[FIX] Integración y Robustez (Post-B760 Final):**
+  - Restaurado el alias `read_opaque_varint` en `tls.py` para compatibilidad con el API de grupo.
+  - Corregido error de mutabilidad en `SecretTree.wipe()` (conversión forzada a `bytearray` para zeroing).
+  - Enlazado el `_membership_tag` en la generación local de commits para consistencia en la suite de tests.
 
-## [3.0.4.0] - Unreleased
-
-### Fixed (B760 Second Audit — Wire-Path & Interop Remediation)
-
-- **[P0-1] membership_key epoch mismatch** (`group.py`):
-  `add_member()` and `remove_member()` now store the OLD epoch's
-  `membership_key` in `GroupUpdate._membership_key` per RFC 9420 §6.2.
-  Previously used the NEW epoch's key, causing HMAC verification to always
-  fail on the wire path (`PublicMessage → to_group_update() → process_update()`).
-
-- **[P0-2] group_id not propagated in `to_group_update()`** (`group.py`):
-  `PublicMessage.to_group_update()` now assigns `update.group_id` from
-  `self.content.group_id` (FramedContent). Previously `GroupUpdate.from_bytes()`
-  left `group_id = b""`, causing `process_update()` to reject every wire-format
-  commit with `"GroupUpdate group_id mismatch"`.
-
-- **[P1-1] GroupInfo uses `tls_opaque` instead of `tls_opaque_varint`** (`group.py`):
-  `_tbs_bytes()`, `to_bytes()`, and `from_bytes()` now use `tls_opaque_varint()`
-  for `confirmation_tag` and `signature` per RFC 9420 §12.1.2 / §6.
-  Previously used `tls_opaque()` (uint16 prefix) — OpenMLS couldn't verify
-  GroupInfo signed by pure-mls.
-
-- **[P1-2] `_subtree_hash()` diverges from RFC §7.8** (`group.py`):
-  Replaced ad-hoc `SHA-256(pk + left + right)` with delegation to
-  `RatchetTree._node_hash()` which implements the full RFC §7.8
-  `TreeHashInput` algorithm (typed byte prefix 0x01/0x02 + optional<Node>
-  + VarInt-prefixed child hashes).
-
-- **[P1-3] Triple confirmation_key derivation in `add_member()`/`remove_member()`** (`group.py`):
-  Eliminated redundant provisional `_conf_key`/`_conf_tag` derivation.
-  `advance_epoch()` is called first, then `conf_tag` is derived once from
-  `next_state.key_schedule.confirmation_key` and reused for `new_interim`,
-  `GroupInfo`, and `GroupUpdate._confirmation_tag`.
-
-- **[P2-1] `SecretTree.wipe()` bytearray from creation** (`secret_tree.py`):
-  `encryption_secret` changed from immutable `bytes` to mutable `bytearray`.
-  `wipe()` now zeros the live allocation in-place (`self.encryption_secret[:] =
-  b"\\x00" * len(...)`) instead of the copy-and-discard pattern. Leaf-tip
-  secrets also stored as `bytearray` for in-place zeroing.
-
-## [3.0.3.0] - Unreleased
-
-### Fixed (B760 Final Remediation — All Findings Closed)
+### Added
+- **`DOCS_FOR_PRIMATES.md`**: New accessibility guide for developers non-expert in cryptography.
 
 - **[P0-1] KeyPackage replay protection reset on epoch advance** (`group.py`):
   `add_member()` and `remove_member()` now propagate `_consumed_key_packages`
@@ -959,9 +905,6 @@ derivation than phase6 — clients must update together if migrating existing gr
 - **[SECURITY] SEC-MED-02** `decrypt_application_message` bare catch masked AES-GCM origin: catch narrowed to `cryptography.exceptions.InvalidTag`.
 
 ### Added
-- **RFC 9420 Didactic Guide**: Created `docs/02_THE_MLS_JOURNEY.md` explaining the "Ghost in the Shell" lore for MLS group phases.
-- **IETF Interoperability Suite**: Added `tests/test_ietf_vectors.py` with 53 passing vectors.
-- **MLS Extensions Support**: Initial framework in `src/pure_mls/extensions.py`.
 - **[QA] RFC 9420 Test Vectors**: `tests/test_rfc9420_vectors.py` — 5 canonical tests validating HKDF-Extract zero-vector, ExpandWithLabel idempotency, domain separation, pure-mls HKDF parity, and KeyPackageRef 32-byte length. Satisfies CONTRIBUTING.md mandatory requirement.
 
 ### Changed

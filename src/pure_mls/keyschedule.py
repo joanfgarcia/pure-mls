@@ -53,7 +53,7 @@ class PreSharedKeyID:
 		)
 
 
-def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None, nh: int = 32) -> bytes:
+def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> bytes:
 	"""RFC 9420 §8.4: PSK chain derivation.
 
 	psk_list: list of (PreSharedKeyID, psk_value) tuples. When empty: PSKSecret = 0^Nh.
@@ -67,14 +67,14 @@ def _psk_secret(psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None, nh: 
 	PSKLabel = struct { PreSharedKeyID id; uint16 index; uint16 count; }
 	"""
 	if not psk_list:
-		return b"\x00" * nh
+		return b"\x00" * _NH
 
 	n = len(psk_list)
-	psk_secret_acc = b"\x00" * nh
+	psk_secret_acc = b"\x00" * _NH
 	for i, (psk_key_id, psk_value) in enumerate(psk_list):
-		psk_extracted = hkdf_extract(b"\x00" * nh, psk_value)
+		psk_extracted = hkdf_extract(b"\x00" * _NH, psk_value)
 		psk_label = psk_key_id.to_bytes() + struct.pack("!HH", i, n)
-		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, nh)
+		psk_input = expand_with_label(psk_extracted, "derived psk", psk_label, _NH)
 		psk_secret_acc = hkdf_extract(psk_input, psk_secret_acc)
 
 	return psk_secret_acc
@@ -102,6 +102,22 @@ class KeySchedule:
 	SIZE = 11 * 32  # 352 bytes (11 × 32)
 
 	@classmethod
+	def _derive_epoch_secret(
+		cls,
+		init_secret: bytes,
+		commit_secret: bytes,
+		group_context: bytes,
+		psk_list: list[tuple[PreSharedKeyID, bytes]] | None,
+	) -> tuple[bytes, bytes, bytes]:
+		"""Internal epoch derivation logic."""
+		raw = hkdf_extract(init_secret, commit_secret)
+		joiner_secret = expand_with_label(raw, "joiner", group_context, _NH)
+		psk_secret = _psk_secret(psk_list)
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
+		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
+		return epoch_secret, joiner_secret, intermediate
+
+	@classmethod
 	def derive(
 		cls,
 		init_secret: bytes,
@@ -124,20 +140,7 @@ class KeySchedule:
 			group_context:  TLS-encoded GroupContext for current epoch.
 			psk_list:       Optional list of PSK contributions [(PreSharedKeyID, psk_value)].
 		"""
-		# Step 1: joiner_secret
-		# raw = HKDF-Extract(salt=init_secret, IKM=commit_secret)
-		raw = hkdf_extract(init_secret, commit_secret)
-		# joiner_secret = ExpandWithLabel(raw, "joiner", GroupContext, Nh)
-		joiner_secret = expand_with_label(raw, "joiner", group_context, _NH)
-
-		# Step 2: intermediate = HKDF-Extract(salt=joiner_secret, IKM=psk_secret)
-		# (PSK injection: non-zero psk_secret = Extract chain per RFC §8.4)
-		psk_secret = _psk_secret(psk_list)
-		intermediate = hkdf_extract(joiner_secret, psk_secret)
-
-		# Step 3: epoch_secret = ExpandWithLabel(intermediate, "epoch", GroupContext, Nh)
-		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
-
+		epoch_secret, joiner_secret, intermediate = cls._derive_epoch_secret(init_secret, commit_secret, group_context, psk_list)
 		return cls._from_epoch_secret(epoch_secret, joiner_secret, intermediate)
 
 	@classmethod
@@ -154,11 +157,7 @@ class KeySchedule:
 		confirmation_tag before the final epoch advance, avoiding a
 		wasteful provisional KeySchedule.derive() call.
 		"""
-		raw = hkdf_extract(init_secret, commit_secret)
-		joiner_secret = expand_with_label(raw, "joiner", group_context, _NH)
-		psk_secret = _psk_secret(psk_list)
-		intermediate = hkdf_extract(joiner_secret, psk_secret)
-		epoch_secret = expand_with_label(intermediate, "epoch", group_context, _NH)
+		epoch_secret, _, _ = cls._derive_epoch_secret(init_secret, commit_secret, group_context, psk_list)
 		return derive_secret(epoch_secret, "confirm")
 
 	@classmethod
@@ -189,28 +188,27 @@ class KeySchedule:
 	# -------------------------------------------------------------------------
 
 	@staticmethod
-	def derive_welcome_key(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
-		"""RFC 9420 §12.4: welcome_key from joiner_secret + psk_secret.
-		intermediate = Extract(joiner_secret, psk_secret or 0^Nh)
+	def derive_welcome_key(joiner_secret: bytes) -> bytes:
+		"""RFC 9420 §12.4: welcome_key from intermediate_secret.
+
+		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret=0^32)
 		welcome_secret = DeriveSecret(intermediate, "welcome")
-		welcome_key = ExpandWithLabel(welcome_secret, "key", b"", 16)
+		welcome_key = EWL(welcome_secret, "key", b"", 16)  ← AES-128-GCM Nk=16
 		"""
-		if psk_secret is None:
-			psk_secret = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret)
+		# For the common case (no PSK): psk_secret = 0^32
+		psk_secret_0 = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "key", b"", 16)
 
 	@staticmethod
-	def derive_welcome_nonce(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
-		"""RFC 9420 §12.4: welcome_nonce from joiner_secret + psk_secret.
-		intermediate = Extract(joiner_secret, psk_secret or 0^Nh)
-		welcome_secret = DeriveSecret(intermediate, "welcome")
-		welcome_nonce = ExpandWithLabel(welcome_secret, "nonce", "", 12)
+	def derive_welcome_nonce(joiner_secret: bytes) -> bytes:
+		"""RFC 9420 §12.4: welcome_nonce from intermediate_secret.
+
+		Nn = 12 bytes (AES-128-GCM nonce length).
 		"""
-		if psk_secret is None:
-			psk_secret = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret)
+		psk_secret_0 = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "nonce", b"", 12)
 

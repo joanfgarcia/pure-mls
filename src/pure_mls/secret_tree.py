@@ -83,13 +83,18 @@ class SecretTree:
 	and advances the generation counter to enforce forward secrecy.
 	"""
 
-	encryption_secret: bytearray  # P2-1: mutable — allows in-place zeroing
+	encryption_secret: bytes | bytearray  # P2-1: mutable — allows in-place zeroing
 	n_leaves: int
 	_generations: dict[int, int] = field(default_factory=dict)
 	# Cache for the latest derived secret per leaf to optimize forward ratcheting
 	# (leaf_index) -> (generation, type, secret)
 	# P2-1: secret stored as bytearray for zeroing
 	_leaf_cache: dict[int, dict[str, tuple[int, bytearray]]] = field(default_factory=dict)
+
+	def __post_init__(self) -> None:
+		# Ensure encryption_secret is a mutable bytearray for secure zeroing
+		if not isinstance(self.encryption_secret, bytearray):
+			self.encryption_secret = bytearray(self.encryption_secret)
 
 	def _derive_leaf_node_secret(self, leaf_index: int) -> bytes:
 		"""Traverse §9.3 binary tree from root encryption_secret to leaf node."""
@@ -156,6 +161,7 @@ class SecretTree:
 
 	def wipe(self) -> None:
 		"""Securely zero all sensitive data (RFC 9420 §9)."""
+		assert isinstance(self.encryption_secret, bytearray)
 		self.encryption_secret[:] = b"\x00" * len(self.encryption_secret)
 		for leaf_data in self._leaf_cache.values():
 			for _gen, secret in leaf_data.values():

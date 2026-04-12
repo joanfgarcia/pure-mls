@@ -94,6 +94,10 @@ def read_opaque(buf: bytes, offset: int) -> tuple[bytes, int]:
 	return buf[offset : offset + length], offset + length
 
 
+# Alias for backward compatibility with tests
+read_opaque_varint = read_opaque
+
+
 def read_opaque16(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Decode opaque<V> with uint16 length prefix (non-standard / legacy)."""
 	(length,) = struct.unpack_from(">H", buf, offset)

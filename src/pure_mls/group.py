@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import hashlib
 import hmac
 import os
 import struct
 import warnings as _warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
@@ -16,28 +14,20 @@ from pure_mls.epoch import EpochState
 from pure_mls.hkdf import expand_with_label, hkdf_extract, varint_encode
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
-from pure_mls.keyschedule import KeySchedule, PreSharedKeyID, _psk_secret
-from pure_mls.proposals import (
-	AddProposal,
-	Commit,
-	ProposalOrRef,
-	PSKProposal,
-	proposal_from_bytes,
-)
+from pure_mls.keyschedule import KeySchedule
 from pure_mls.secret_tree import SecretTree, derive_sender_data_key, derive_sender_data_nonce
 from pure_mls.tls import (
-	ExtensionType,
 	_varint_decode,
-	read_extensions,
 	read_opaque,
 	read_opaque32,
+	read_opaque_varint,
 	read_u8,
 	read_u16,
 	read_u32,
 	read_u64,
-	tls_extensions,
 	tls_opaque,
 	tls_opaque32,
+	tls_opaque_varint,
 	tls_u8,
 	tls_u16,
 	tls_u32,
@@ -62,7 +52,6 @@ class GroupContext:
 	epoch: int
 	tree_hash: bytes
 	confirmed_transcript_hash: bytes
-	extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 	# Fixed for our single supported suite:
 	#   MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
@@ -91,7 +80,7 @@ class GroupContext:
 			+ self.tree_hash
 			+ tls_varint(len(self.confirmed_transcript_hash))
 			+ self.confirmed_transcript_hash
-			+ tls_extensions(self.extensions)
+			+ tls_varint(0)  # extensions<V> empty
 		)
 
 	@classmethod
@@ -104,17 +93,18 @@ class GroupContext:
 		if cipher_suite != cls._CIPHER_SUITE:
 			raise ValueError(f"Unsupported cipher suite: {cipher_suite:#06x}")
 		# opaque<V> fields use VarInt length prefix (RFC 9420 §8.1)
-		group_id, offset = read_opaque(data, offset)
+		group_id, offset = read_opaque_varint(data, offset)
 		epoch, offset = read_u64(data, offset)
-		tree_hash, offset = read_opaque(data, offset)
-		confirmed_transcript_hash, offset = read_opaque(data, offset)
-		extensions, offset = read_extensions(data, offset)
+		tree_hash, offset = read_opaque_varint(data, offset)
+		confirmed_transcript_hash, offset = read_opaque_varint(data, offset)
+		# skip extensions (VarInt length prefix)
+		if offset < len(data):
+			_, offset = read_opaque_varint(data, offset)
 		return cls(
 			group_id=group_id,
 			epoch=epoch,
 			tree_hash=tree_hash,
 			confirmed_transcript_hash=confirmed_transcript_hash,
-			extensions=extensions,
 		), offset
 
 	@classmethod
@@ -138,7 +128,6 @@ class GroupSecrets:
 
 	joiner_secret: bytes  # 32 bytes
 	path_secret: bytes | None = None  # optional — RFC §12.1.2 optional<PathSecret>
-	psks: list[PreSharedKeyID] = field(default_factory=list)
 
 	def to_bytes(self) -> bytes:
 
@@ -150,75 +139,53 @@ class GroupSecrets:
 			result += b"\x01" + tls_varint(len(actual_path)) + actual_path
 		else:
 			result += b"\x00"
-		# psk_ids vector: varint(len) + [PreSharedKeyID...].to_bytes()
-		psk_vec_bytes = b"".join(p.to_bytes() for p in self.psks)
-		result += tls_varint(len(psk_vec_bytes)) + psk_vec_bytes
+		# psk_ids vector = empty: varint(0)
+		result += b"\x00"
 		return result
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupSecrets":
 		offset = 0
-		joiner_secret, offset = read_opaque(data, offset)  # joiner_secret<V>
+		joiner_secret, offset = read_opaque_varint(data, offset)  # joiner_secret<V>
 		has_path = data[offset]
 		offset += 1
 		path_secret: bytes | None = None
 		if has_path:
-			path_secret, offset = read_opaque(data, offset)  # path_secret<V>
-		# psk_ids: varint(len) + records
-		psks = []
+			path_secret, offset = read_opaque_varint(data, offset)  # path_secret<V>
+		# psk_ids: varint(0) = skip
 		if offset < len(data):
-			psks_total_len, offset = _varint_decode(data, offset)
-			psks_end = offset + psks_total_len
-			while offset < psks_end:
-				# PreSharedKeyID from_bytes_at (to be verified if exists, or inline)
-				# Based on KeySchedule.PreSharedKeyID structure
-				psk_type = data[offset]
-				offset += 1
-				if psk_type == 1:  # EXTERNAL (only one we support here)
-					pid, offset = read_opaque(data, offset)
-					pnonce, offset = read_opaque(data, offset)
-					psks.append(PreSharedKeyID(psk_type=1, psk_id=pid, psk_nonce=pnonce))
-				else:  # RESUMPTION
-					usage = data[offset]
-					offset += 1
-					pgid, offset = read_opaque(data, offset)
-					pepoch = struct.unpack("!Q", data[offset : offset + 8])[0]
-					offset += 8
-					pnonce, offset = read_opaque(data, offset)
-					psks.append(PreSharedKeyID(psk_type=2, psk_id=b"", usage=usage, psk_group_id=pgid, psk_epoch=pepoch, psk_nonce=pnonce))
-		return cls(joiner_secret=joiner_secret, path_secret=path_secret, psks=psks)
+			_psk_count, _ = _varint_decode(data, offset)  # usually 0
+		return cls(joiner_secret=joiner_secret, path_secret=path_secret)
 
 
 @dataclass
 class EncryptedGroupSecrets:
-	"""
-	HPKE-encrypted GroupSecrets for a single joiner (RFC 9420 §12.4.3.1).
-	"""
+	"""RFC 9420 §12.1.2: HPKE-encrypted GroupSecrets for one recipient."""
 
 	new_member: bytes  # KeyPackageRef (32 bytes)
-	kem_output: bytes  # HPKE enc
+	kem_output: bytes  # HPKE kem_output (enc)
 	ciphertext: bytes  # HPKE ciphertext
 
 	def to_bytes(self) -> bytes:
-		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
-		return tls_opaque(self.new_member) + tls_opaque(self.kem_output) + tls_opaque(self.ciphertext)
+		"""Encode to varint-prefixed TLS wire format (RFC 9420 §12.1.2 + §5.1)."""
+
+		def vop(b: bytes) -> bytes:
+			return tls_varint(len(b)) + b
+
+		return vop(self.new_member) + vop(self.kem_output) + vop(self.ciphertext)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["EncryptedGroupSecrets", int]:
-		"""Parse from RFC 9420 §12.4.3.1 wire format."""
-		# KeyPackageRef is nominally fixed Nh bytes, but IETF vectors (OpenMLS)
-		# encode it as opaque<V> (with 1-byte length prefix usually).
-		new_member, offset = read_opaque(data, offset)
-		kem_output, offset = read_opaque(data, offset)
-		ciphertext, offset = read_opaque(data, offset)
+		"""Parse from varint-prefixed TLS wire format (RFC 9420 §12.1.2 + §5.1)."""
+		new_member, offset = read_opaque_varint(data, offset)  # kp_ref<V>
+		kem_output, offset = read_opaque_varint(data, offset)  # HPKECiphertext.kem_output<V>
+		ciphertext, offset = read_opaque_varint(data, offset)  # HPKECiphertext.ciphertext<V>
 		return cls(new_member=new_member, kem_output=kem_output, ciphertext=ciphertext), offset
 
 
 @dataclass
 class Welcome:
-	"""
-	Welcome Message (RFC 9420 §12.4.3.1).
-	Sent by committer to new members to provide group state.
+	"""RFC 9420 §12.1.2: Welcome message sent to new members.
 
 	Contains:
 	- HPKE-encrypted GroupSecrets for each joiner (keyed by KeyPackageRef)
@@ -226,42 +193,52 @@ class Welcome:
 
 	GroupInfo is sealed with AES-128-GCM using welcome_key derived from
 	joiner_secret via ExpandWithLabel(joiner_secret, 'welcome', b'', 16).
+	This follows RFC 9420 §12.1.2 exactly.
 	"""
 
-	cipher_suite: int
-	encrypted_group_secrets: list[EncryptedGroupSecrets]  # EncryptedGroupSecrets secrets<V>
-	encrypted_group_info: bytes  # opaque encrypted_group_info<V>
+	cipher_suite: int  # 0x0001
+	encrypted_group_secrets: list[EncryptedGroupSecrets]  # one per joiner
+	encrypted_group_info: bytes  # HPKE ciphertext of GroupInfo
 
 	_CIPHER_SUITE: int = 0x0001
 
 	def to_bytes(self) -> bytes:
-		"""Serialize to RFC 9420 §12.4.3.1 wire format."""
-		egs_bytes = b"".join(s.to_bytes() for s in self.encrypted_group_secrets)
-		return self.cipher_suite.to_bytes(2, "big") + tls_opaque(egs_bytes) + tls_opaque(self.encrypted_group_info)
+		"""Encode to MLS varint wire format (RFC 9420 §12.1.2)."""
+
+		secrets_bytes = b"".join(e.to_bytes() for e in self.encrypted_group_secrets)
+		return (
+			tls_u16(self._CIPHER_SUITE)
+			+ tls_varint(len(secrets_bytes))
+			+ secrets_bytes  # EGS<V> varint-prefixed
+			+ tls_varint(len(self.encrypted_group_info))
+			+ self.encrypted_group_info  # EGI<V>
+		)
 
 	@classmethod
-	def from_bytes(cls, data: bytes, offset: int = 0) -> "Welcome":
-		"""Parse from RFC 9420 §12.4.3.1 wire format."""
-		# Handle optional MLSMessage header (ProtocolVersion + WireFormat)
-		if len(data) >= (offset + 4) and data[offset : offset + 2] == b"\x00\x01":
-			wf = int.from_bytes(data[offset + 2 : offset + 4], "big")
-			if wf == 3:  # mls_welcome
-				offset += 4
+	def from_bytes(cls, data: bytes) -> "Welcome":
+		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper).
 
+		Format per RFC 9420 §12.1.2:
+		uint16 cipher_suite
+		EncryptedGroupSecrets<V>  -- varint-prefixed vector of EGS records
+		opaque encrypted_group_info<V> -- varint-prefixed EGI
+		"""
+		offset = 0
 		cipher_suite, offset = read_u16(data, offset)
-		egs_raw, offset = read_opaque(data, offset)
-		egi, offset = read_opaque(data, offset)
-
-		egs_list = []
-		egs_offset = 0
-		while egs_offset < len(egs_raw):
-			egs, egs_offset = EncryptedGroupSecrets.from_bytes(egs_raw, egs_offset)
-			egs_list.append(egs)
-
+		# EGS vector: varint length prefix
+		egs_total_len, offset = _varint_decode(data, offset)
+		egs_end = offset + egs_total_len
+		encrypted_group_secrets: list[EncryptedGroupSecrets] = []
+		while offset < egs_end:
+			egs, offset = EncryptedGroupSecrets.from_bytes(data, offset)
+			encrypted_group_secrets.append(egs)
+		# EGI: varint length prefix
+		egi_len, offset = _varint_decode(data, offset)
+		encrypted_group_info = data[offset : offset + egi_len]
 		return cls(
 			cipher_suite=cipher_suite,
-			encrypted_group_secrets=egs_list,
-			encrypted_group_info=egi,
+			encrypted_group_secrets=encrypted_group_secrets,
+			encrypted_group_info=encrypted_group_info,
 		)
 
 	@classmethod
@@ -299,7 +276,7 @@ class Welcome:
 		for egs in self.encrypted_group_secrets:
 			try:
 				gs_bytes = HPKE.open(init_key, egs.kem_output, egs.ciphertext, info=info)
-			except (InvalidTag, ValueError):
+			except InvalidTag:
 				continue
 			return GroupSecrets.from_bytes(gs_bytes)
 		return None
@@ -334,48 +311,51 @@ class GroupInfo:
 	"""
 
 	group_context: GroupContext
+	extensions_bytes: bytes  # empty: b"" → serialised as uint32(0)
 	confirmation_tag: bytes  # HMAC-SHA256(confirmation_key, transcript_hash)
 	signer: int  # committer leaf index
-	signature: bytes  # Ed25519(SignContent(TBS))
-	extensions: list[tuple[int, bytes]] = field(default_factory=list)
+	signature: bytes  # Ed25519(TBS)
 
 	# ------------------------------------------------------------------
 	# Serialisation helpers
 	# ------------------------------------------------------------------
 
 	def _tbs_bytes(self) -> bytes:
-		"""TBS = GroupContext + extensions<V> + confirmation_tag[Nh] + signer(uint32)."""
-		return self.group_context.to_bytes() + tls_extensions(self.extensions) + tls_opaque(self.confirmation_tag) + tls_u32(self.signer)
-
-	@classmethod
-	def from_bytes(cls, data: bytes) -> "GroupInfo":
-		"""Standard RFC 9420 parser."""
-		group_context, offset = GroupContext.from_bytes_at(data, 0)
-		extensions, offset = read_extensions(data, offset)
-		confirmation_tag, offset = read_opaque(data, offset)
-		signer, offset = read_u32(data, offset)
-		signature, offset = read_opaque(data, offset)
-
-		return cls(
-			group_context=group_context,
-			extensions=extensions,
-			confirmation_tag=confirmation_tag,
-			signer=signer,
-			signature=signature,
+		"""TBS = GroupContext + extensions<V> + confirmation_tag<V> + signer(uint32)."""
+		return (
+			self.group_context.to_bytes()
+			+ tls_u32(len(self.extensions_bytes))
+			+ self.extensions_bytes
+			+ tls_opaque(self.confirmation_tag)
+			+ tls_u32(self.signer)
 		)
 
 	def to_bytes(self) -> bytes:
 		"""Full wire encoding: TBS + signature<V>."""
 		return self._tbs_bytes() + tls_opaque(self.signature)
 
-	# ------------------------------------------------------------------
-	# Signing and verification (RFC 9420 §16.1 Domain Separation)
-	# ------------------------------------------------------------------
+	@classmethod
+	def from_bytes(cls, data: bytes) -> "GroupInfo":
+		group_context, offset = GroupContext.from_bytes_at(data, 0)
+		ext_len = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		extensions_bytes = data[offset : offset + ext_len]
+		offset += ext_len
+		confirmation_tag, offset = read_opaque(data, offset)
+		signer = int.from_bytes(data[offset : offset + 4], "big")
+		offset += 4
+		signature, offset = read_opaque(data, offset)
+		return cls(
+			group_context=group_context,
+			extensions_bytes=extensions_bytes,
+			confirmation_tag=confirmation_tag,
+			signer=signer,
+			signature=signature,
+		)
 
-	def _sign_content_bytes(self) -> bytes:
-		"""Wrap TBS in SignContent (label + content) for domain separation."""
-		label = b"MLS 1.0 GroupInfoTBS"
-		return tls_opaque(label) + tls_opaque(self._tbs_bytes())
+	# ------------------------------------------------------------------
+	# Signing and verification
+	# ------------------------------------------------------------------
 
 	@classmethod
 	def build_and_sign(
@@ -384,23 +364,26 @@ class GroupInfo:
 		confirmation_tag: bytes,
 		signer: int,
 		sig_key: "SignatureKey",
-		extensions: list[tuple[int, bytes]] | None = None,
 	) -> "GroupInfo":
-		"""Create a GroupInfo and sign it using SignContent domain separation."""
+		"""Create a GroupInfo and sign it with the committer's Ed25519 key."""
 		gi = cls(
 			group_context=group_context,
-			extensions=extensions or [],
+			extensions_bytes=b"",
 			confirmation_tag=confirmation_tag,
 			signer=signer,
-			signature=b"",
+			signature=b"",  # overwritten below after TBS computation
 		)
-		gi.signature = sig_key.sign(gi._sign_content_bytes())
+		gi.signature = sig_key.sign(gi._tbs_bytes())
 		return gi
 
 	def verify(self, committer_sig_key_bytes: bytes) -> bool:
-		"""VerifyEd25519 signature over SignContent-wrapped TBS."""
+		"""Verify the committer's Ed25519 signature over TBS.
+
+		Returns True if valid. Raises cryptography.exceptions.InvalidSignature on failure.
+		"""
+
 		pub = ed25519.Ed25519PublicKey.from_public_bytes(committer_sig_key_bytes)
-		pub.verify(self.signature, self._sign_content_bytes())
+		pub.verify(self.signature, self._tbs_bytes())
 		return True
 
 
@@ -425,7 +408,6 @@ def _make_group_context(
 	epoch_id: int,
 	tree: RatchetTree,
 	confirmed_transcript_hash: bytes,
-	extensions: list[tuple[int, bytes]] | None = None,
 ) -> GroupContext:
 	"""Build GroupContext for the given group state."""
 	tree_hash = tree.tree_hash()
@@ -434,7 +416,6 @@ def _make_group_context(
 		epoch=epoch_id,
 		tree_hash=tree_hash,
 		confirmed_transcript_hash=confirmed_transcript_hash,
-		extensions=extensions or [],
 	)
 
 
@@ -452,20 +433,37 @@ def _derive_next_path_secret(path_secret: bytes) -> bytes:
 
 
 def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
-	"""RFC 9420 §7.9: original_sibling_tree_hash = TreeHash(sibling) per §7.8.
+	"""RFC 9420 §7.8: recursive subtree hash for parent_hash computation.
 
-	Delegates to RatchetTree._node_hash() which implements the full
-	RFC 9420 §7.8 TreeHashInput algorithm (typed byte prefix 0x01/0x02,
-	optional<Node>, VarInt-prefixed child hashes).
+	- Blank node (None): SHA-256(b"")
+	- Leaf node:         SHA-256(KeyPackage.to_bytes())
+	- Parent node:       SHA-256(public_key + left_subtree_hash + right_subtree_hash)
 
-	P1-2 audit fix: previous implementation used ad-hoc SHA-256(kp.to_bytes())
-	and SHA-256(pk + left + right) which diverges from RFC §7.8 TreeHashInput.
+	index=-1 is the sentinel used by copath() for out-of-bounds siblings;
+	treated as a blank node (SHA-256(b"")).
+	Used as original_sibling_tree_hash in RFC 9420 §7.9 parent_hash computation.
 	"""
-	# Guard: index=-1 is the OOB sentinel from copath(); any invalid index = blank leaf
+	# Guard: index=-1 is the OOB sentinel from copath(); any invalid index = blank node
 	if index < 0 or index >= len(tree.nodes):
-		# RFC §7.8 blank leaf: SHA-256(0x01 || 0x00)
-		return hashlib.sha256(b"\x01\x00").digest()
-	return tree._node_hash(index)
+		return hashlib.sha256(b"").digest()
+	node = tree.get_node(index)
+	if index % 2 == 0:  # leaf
+		if node is None:
+			return hashlib.sha256(b"").digest()
+		assert isinstance(node, LeafNode)
+		return hashlib.sha256(node.key_package.to_bytes()).digest()
+	# Internal (parent) node — recurse into children
+	lvl = tree.level(index)
+	left = index - (1 << (lvl - 1))
+	right = index + (1 << (lvl - 1))
+	left_hash = _subtree_hash(tree, left)
+	right_hash = _subtree_hash(tree, right)
+	if node is None:
+		# Blank parent: hash of children hashes (no public key contribution)
+		return hashlib.sha256(left_hash + right_hash).digest()
+	assert isinstance(node, ParentNode)
+	# Non-blank parent: public key binds to both subtrees
+	return hashlib.sha256(node.public_key + left_hash + right_hash).digest()
 
 
 def _compute_parent_hash(
@@ -519,7 +517,7 @@ def _compute_confirmed_transcript_hash_input(
 
 	wire_format(u16) + FramedContent + opaque signature<V>
 	"""
-	return tls_u16(0x0001) + framed_content_bytes + tls_opaque(signature)
+	return tls_u16(0x0001) + framed_content_bytes + tls_opaque_varint(signature)
 
 
 def _compute_confirmed_transcript_hash(
@@ -552,59 +550,92 @@ def _up_info(group_context_bytes: bytes) -> bytes:
 
 @dataclass
 class GroupUpdate:
-	"""RFC 9420 §12.1.1: Commit message (RFC compliant).
+	"""RFC 9420 §12.1.1: Commit message (simplified Commit + FramedContent).
 
-	Wraps a formal Commit object with epoch/signature/tag metadata.
+	In full RFC 9420 a Commit is wrapped in an AuthenticatedContent with a
+	FramedContent + Signature. For v1.0 we encode the essential fields in a
+	compact TLS format that includes epoch_id, tree, encrypted_commit_secrets,
+	committer_index and the Ed25519 signature.
+
+	Wire format (big-endian, TLS-style):
+		uint64  epoch_id
+		opaque<V>  tree_bytes          (uint32-prefixed tree serialization)
+		uint32  secrets_count
+		[for each secret:]
+			opaque<V>  kp_ref           (32-byte KeyPackageRef)
+			opaque<V>  enc_ct           (kem_output + ciphertext concatenated)
+		uint32  committer_index
+		opaque<V>  signature            (Ed25519 64 bytes)
 	"""
 
 	epoch_id: int
+	tree: RatchetTree
+	encrypted_commit_secrets: dict[bytes, bytes]
 	committer_index: int
 	signature: bytes
-	commit: Commit | None = None
 	group_id: bytes = b""
-	# Internal caches for validation & propagation
-	tree: "RatchetTree" | None = None
-	encrypted_commit_secrets: dict[bytes, bytes] = field(default_factory=dict)
+	# RFC 9420 §12.1.1: UpdatePath (TreeKEM) — present when committer uses full TreeKEM
+	update_path: "UpdatePath | None" = None
+	# RFC 9420 §6.2 context fields — carried for PublicMessage construction
+	# Set by add_member(); None when GroupUpdate is deserialized from wire.
 	_group_ctx: "GroupContext | None" = None
 	_confirmation_key: bytes | None = None
 	_epoch_authenticator: bytes | None = None
 	_membership_key: bytes | None = None
 	_transcript_hash: bytes | None = None
+	# P0-02: confirmation_tag = HMAC(confirmation_key, transcript_hash) — set by add_member() for receiver-side verification
 	_confirmation_tag: bytes | None = None
 	_membership_tag: bytes | None = None
 
-	@property
-	def update_path(self) -> UpdatePath | None:
-		"""RFC 9420 §12.1.1: Optional UpdatePath from the underlying Commit."""
-		if self.commit is None or self.commit.update_path_bytes is None:
-			return None
-		up, _ = UpdatePath.from_bytes(self.commit.update_path_bytes)
-		return up
-
 	def _body_bytes(self) -> bytes:
-		"""The unsigned Commit body (RFC 9420 wire format)."""
-		if self.commit is None:
-			# Fallback for remove_member shim if no Commit is built
-			return b""
-		return self.commit.to_bytes()
+		"""The unsigned Commit body (epoch + tree + secrets + committer_index + optional update_path)."""
+		tree_raw = self.tree.to_bytes()
+		secrets_parts = b""
+		for kp_ref, enc_ct in sorted(self.encrypted_commit_secrets.items()):
+			secrets_parts += tls_opaque(kp_ref) + tls_opaque(enc_ct)
+		n = len(self.encrypted_commit_secrets)
+		res = tls_u64(self.epoch_id) + tls_opaque32(tree_raw) + tls_u32(n) + secrets_parts + tls_u32(self.committer_index)
+		if self.update_path is not None:
+			res += b"\x01" + tls_opaque32(self.update_path.to_bytes())
+		else:
+			res += b"\x00"
+		return res
 
 	def to_bytes(self) -> bytes:
-		"""Serialize GroupUpdate to TLS-style wire format (Commit body only)."""
-		return self._body_bytes()
+		"""Serialize GroupUpdate to TLS-style wire format."""
+		return self._body_bytes() + tls_opaque(self.signature)
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupUpdate":
-		"""Parse GroupUpdate (Commit body). Epoch/Index/Signature are handled by PublicMessage."""
-		# This is a bit tricky: RFC Commit doesn't have epoch_id inside it.
-		# The epoch_id comes from the FramedContent.
-		# For legacy compat/simplification, we assume PublicMessage.from_bytes
-		# will populate the metadata after parsing this body.
-		commit, _ = Commit.from_bytes(data, 0)
+		"""Deserialize a GroupUpdate from TLS wire format."""
+		offset = 0
+		epoch_id, offset = read_u64(data, offset)
+		tree_raw, offset = read_opaque32(data, offset)
+		tree = RatchetTree.from_bytes(tree_raw)
+		secrets_count, offset = read_u32(data, offset)
+		encrypted_secrets: dict[bytes, bytes] = {}
+		for _ in range(secrets_count):
+			kp_ref, offset = read_opaque(data, offset)
+			enc_ct, offset = read_opaque(data, offset)
+			encrypted_secrets[kp_ref] = enc_ct
+		committer_index, offset = read_u32(data, offset)
+
+		# optional update_path
+		has_up = data[offset]
+		offset += 1
+		update_path = None
+		if has_up:
+			up_bytes, offset = read_opaque32(data, offset)
+			update_path, _ = UpdatePath.from_bytes(up_bytes, 0)
+
+		signature, offset = read_opaque(data, offset)
 		return cls(
-			epoch_id=0,  # to be set by PublicMessage
-			commit=commit,
-			committer_index=0,  # to be set by PublicMessage
-			signature=b"",  # to be set by PublicMessage
+			epoch_id=epoch_id,
+			tree=tree,
+			encrypted_commit_secrets=encrypted_secrets,
+			committer_index=committer_index,
+			signature=signature,
+			update_path=update_path,
 		)
 
 
@@ -802,11 +833,11 @@ class FramedContent:
 	def to_bytes(self) -> bytes:
 		# RFC 9420 §6.1: group_id<V> and authenticated_data<V> are VarInt-prefixed
 		return (
-			tls_opaque(self.group_id)
+			tls_opaque_varint(self.group_id)
 			+ tls_u64(self.epoch)
 			+ tls_u8(0x01)  # SenderType = member
 			+ tls_u32(self.sender_leaf_index)
-			+ tls_opaque(self.authenticated_data)
+			+ tls_opaque_varint(self.authenticated_data)
 			+ tls_u8(self.CONTENT_TYPE_COMMIT)
 			+ tls_opaque32(self.content)
 		)
@@ -814,13 +845,13 @@ class FramedContent:
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "FramedContent":
 		offset = 0
-		group_id, offset = read_opaque(data, offset)  # opaque group_id<V>
+		group_id, offset = read_opaque_varint(data, offset)  # opaque group_id<V>
 		epoch, offset = read_u64(data, offset)
 		sender_type, offset = read_u8(data, offset)
 		if sender_type != 0x01:
 			raise ValueError(f"Unsupported SenderType: {sender_type:#04x}")
 		sender_leaf_index, offset = read_u32(data, offset)
-		authenticated_data, offset = read_opaque(data, offset)  # opaque authenticated_data<V>
+		authenticated_data, offset = read_opaque_varint(data, offset)  # opaque authenticated_data<V>
 		content_type, offset = read_u8(data, offset)
 		if content_type != cls.CONTENT_TYPE_COMMIT:
 			raise ValueError(f"Unsupported ContentType: {content_type:#04x}")
@@ -842,12 +873,12 @@ class FramedContentAuthData:
 	confirmation_tag: bytes
 
 	def to_bytes(self) -> bytes:
-		return tls_opaque(self.signature) + tls_opaque(self.confirmation_tag)
+		return tls_opaque_varint(self.signature) + tls_opaque_varint(self.confirmation_tag)
 
 	@classmethod
 	def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["FramedContentAuthData", int]:
-		signature, offset = read_opaque(data, offset)
-		confirmation_tag, offset = read_opaque(data, offset)
+		signature, offset = read_opaque_varint(data, offset)
+		confirmation_tag, offset = read_opaque_varint(data, offset)
 		return cls(signature=signature, confirmation_tag=confirmation_tag), offset
 
 
@@ -918,10 +949,6 @@ class PublicMessage:
 
 	def to_group_update(self) -> "GroupUpdate":
 		update = GroupUpdate.from_bytes(self.content.content)
-		update.epoch_id = self.content.epoch
-		update.committer_index = self.content.sender_leaf_index
-		update.signature = self.auth.signature
-		update.group_id = self.content.group_id
 		update._confirmation_tag = self.auth.confirmation_tag
 		update._membership_tag = self.membership_tag
 		return update
@@ -939,7 +966,6 @@ class MLSGroup:
 		my_index: int,
 		my_sig_key: SignatureKey,
 		my_kem_key: KemKey,
-		my_kp_ref: bytes,
 		interim_transcript_hash: bytes = b"",
 	):
 		self._consumed_key_packages: set[bytes] = set()
@@ -947,15 +973,12 @@ class MLSGroup:
 		self.my_index = my_index
 		self.my_sig_key = my_sig_key
 		self.my_kem_key = my_kem_key
-		self.my_kp_ref = my_kp_ref
 		self._secret_tree: SecretTree | None = None
 		# P0-A: prior epoch confirmed_transcript_hash used as HPKE info domain separator
 		# in group_ctx_pre (add_member) and group_ctx (process_update).
 		# Initialized to b"" for genesis (epoch 0) and propagated through each epoch transition.
 		# NOT serialized in EpochState.to_bytes() — lives only in the running MLSGroup instance.
 		self.interim_transcript_hash: bytes = interim_transcript_hash
-		# RFC 9420 §12.2: store for by_reference proposal resolution
-		self.proposal_store: dict[bytes, bytes] = {}
 
 	@property
 	def group_id(self) -> bytes:
@@ -980,7 +1003,7 @@ class MLSGroup:
 		if self._secret_tree is None:
 			n_leaves = (len(self.state.tree.nodes) + 1) // 2
 			self._secret_tree = SecretTree(
-				encryption_secret=bytearray(self.state.key_schedule.encryption_secret),  # P2-1: mutable for in-place wipe
+				encryption_secret=self.state.key_schedule.encryption_secret,
 				n_leaves=n_leaves,
 			)
 		return self._secret_tree
@@ -1014,18 +1037,9 @@ class MLSGroup:
 		genesis_ctx = _make_group_context(group_id, 0, tree, b"")
 		state = EpochState.genesis(group_id, tree, group_context_bytes=genesis_ctx.to_bytes())
 		# P0-A: genesis interim_transcript_hash = b"" (epoch 0 has no prior commit)
-		return cls(
-			state,
-			my_index=0,
-			my_sig_key=creator_sig_key,
-			my_kem_key=creator_kem_key,
-			my_kp_ref=_make_kp_ref(kp),
-			interim_transcript_hash=b"",
-		)
+		return cls(state, my_index=0, my_sig_key=creator_sig_key, my_kem_key=creator_kem_key, interim_transcript_hash=b"")
 
-	def add_member(
-		self, key_package: KeyPackage, psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None
-	) -> tuple["MLSGroup", Welcome, GroupUpdate]:
+	def add_member(self, key_package: KeyPackage) -> tuple["MLSGroup", Welcome, GroupUpdate]:
 		"""
 		Adds a new member, generating a Commit and advancing the Epoch.
 		Returns the updated Group, the Welcome for the joiner, and the Update for peers.
@@ -1038,9 +1052,20 @@ class MLSGroup:
 			raise ValueError("KeyPackage Replay: This KeyPackage has already been used in this instance.")
 		self._consumed_key_packages.add(kp_ref)
 
-		# 1. Expand tree and add the new member
-		new_tree = self.state.tree.expanded(self.state.tree.num_leaves + 1)
-		new_leaf_idx = (new_tree.num_leaves - 1) * 2
+		# 1. Expand tree by 1 leaf
+		new_num_leaves = self.state.tree.num_leaves + 1
+		new_tree = RatchetTree(num_leaves=new_num_leaves)
+
+		# Copy existing nodes (simplification)
+		for i, node in enumerate(self.state.tree.nodes):
+			if node is not None:
+				if isinstance(node, LeafNode):
+					new_tree.set_leaf(i, node)
+				elif isinstance(node, ParentNode):
+					new_tree.set_parent(i, node)
+
+		# Insert the new leaf using the joiner's LeafNode directly
+		new_leaf_idx = (new_num_leaves - 1) * 2
 		new_tree.set_leaf(new_leaf_idx, key_package.leaf_node)
 
 		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
@@ -1054,8 +1079,8 @@ class MLSGroup:
 		leaf_path_secret = os.urandom(32)
 
 		# Build direct_path and copath for the committer's leaf
-		direct = new_tree.direct_path(self.my_index * 2)
-		cop = new_tree.copath(self.my_index * 2)
+		direct = new_tree.direct_path(self.my_index)
+		cop = new_tree.copath(self.my_index)
 
 		# Derive path secrets bottom-up (innermost → outermost/root)
 		_path_secrets: list[bytes] = []
@@ -1078,7 +1103,7 @@ class MLSGroup:
 			identity=self.my_sig_key.public_bytes(),
 			sign_fn=self.my_sig_key.sign,
 		)
-		new_tree.set_leaf(self.my_index * 2, new_committer_kp.leaf_node)
+		new_tree.set_leaf(self.my_index, new_committer_kp.leaf_node)
 
 		# Build UpdatePath: encrypt each path_secret to copath resolution members
 		# and compute parent_hash per RFC 9420 §7.9
@@ -1122,25 +1147,34 @@ class MLSGroup:
 
 		update_path = UpdatePath(leaf_key_package=new_committer_kp, nodes=update_path_nodes)
 
-		# 3. Assemble Proposals (RFC 9420 §12)
-		props = []
-		# Add new member
-		props.append(ProposalOrRef(value=AddProposal(key_package.to_bytes()).to_bytes()))
-		# Add PSKs
-		if psk_list:
-			for p_id, _ in psk_list:
-				props.append(ProposalOrRef(value=PSKProposal(psk_id=p_id.psk_id, psk_nonce=p_id.psk_nonce).to_bytes()))
+		# Legacy encrypted_secrets: also seal commit_secret directly to each leaf
+		# so that process_update() fallback works for peers without UpdatePath support.
+		encrypted_secrets: dict[bytes, bytes] = {}
+		for i, node in enumerate(new_tree.nodes):
+			if isinstance(node, LeafNode) and i != self.my_index:
+				pk = node.public_key
+				enc, ct = HPKE.seal(pk, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
+				kp_ref = _make_kp_ref(node.key_package)
+				encrypted_secrets[kp_ref] = enc + ct
 
-		commit = Commit(proposals=props, update_path_bytes=update_path.to_bytes())
+		# 3. Advance the epoch — RFC §8.2 two-pass transcript hash (P1-A)
+		# STATE-02: deterministic canonical ordering by KP ref for transcript stability
 
-		# 4. Advance the epoch — RFC §8.2 two-pass transcript hash (P1-A)
 		# P1-A: Build FramedContent BEFORE computing the transcript hash.
+		# The unsigned body and FramedContent only depend on epoch/tree/secrets — not on transcript_hash.
+		_unsigned_body = (
+			tls_u64(new_epoch_id)
+			+ tls_opaque32(new_tree.to_bytes())
+			+ tls_u32(len(encrypted_secrets))
+			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_secrets.items()))
+			+ tls_u32(self.my_index)
+		)
 		_framed_for_tbs = FramedContent(
 			group_id=self.group_id,
 			epoch=self.state.epoch_id,
 			sender_leaf_index=self.my_index,
 			authenticated_data=b"",
-			content=commit.to_bytes(),
+			content=_unsigned_body,
 		)
 		framed_content_bytes = _framed_for_tbs.to_bytes()
 
@@ -1153,21 +1187,28 @@ class MLSGroup:
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
 		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
-		# P1-3 consolidated: advance epoch first, then derive conf_tag once
-		# (removes redundant provisional _conf_key + _conf_tag derivation)
+		# Phase 1: derive confirmation_key with provisional ctx
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
+		)
+
+		# Phase 2: compute confirmation_tag with NEW epoch key
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
+
+		# Compute NEW interim_transcript_hash to store in state
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+
+		# Final epoch advance
 		new_ctx_signed = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
 			new_tree,
 			group_context=new_ctx_signed.to_bytes(),
-			psk_list=psk_list,
 		)
-
-		# Single conf_tag derivation from canonical next_state key
-		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-
-		# Compute NEW interim_transcript_hash to store in state
-		new_interim = _compute_interim_transcript_hash(transcript_hash, conf_tag)
 
 		# 4. Build RFC-compliant Welcome  (P0-B: RFC §12.4 ordering)
 		#
@@ -1180,37 +1221,32 @@ class MLSGroup:
 		# This ensures join() can open EGS with _egs_info(welcome.encrypted_group_info)
 		# and get the same symmetric HPKE info, matching OpenMLS wire format.
 
-		# 4b. Encrypt GroupInfo → encrypted_group_info (egi)
-		joiner_secret = next_state.key_schedule.joiner_secret
-		psk_secret = _psk_secret(psk_list)  # Correct Nhnd-zeros if psk_list is missing
-		welcome_key = KeySchedule.derive_welcome_key(joiner_secret, psk_secret)
-		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret, psk_secret)  # RFC 9420 §12.4
-
-		# P1-3: RFC 9420 §12.4.3 — ratchet tree delivered inside GroupInfo extensions
-		# as ExtensionType.RATCHET_TREE (0x0002).
-		# Tree already includes its own VarInt vector prefix in new_tree.to_bytes()
-		tree_raw = new_tree.to_bytes()
-		gi_extensions: list[tuple[int, bytes]] = [(int(ExtensionType.RATCHET_TREE), tree_raw)]
-
 		# 4a. Build + sign GroupInfo
+		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		gi_group_ctx = _make_group_context(self.group_id, next_state.epoch_id, new_tree, transcript_hash)
 		group_info = GroupInfo.build_and_sign(
 			group_context=gi_group_ctx,
 			confirmation_tag=conf_tag,
 			signer=self.my_index,
 			sig_key=self.my_sig_key,
-			extensions=gi_extensions,
 		)
 
-		gi_plaintext = group_info.to_bytes()
+		# 4b. Encrypt GroupInfo → encrypted_group_info (egi)
+		joiner_secret = next_state.key_schedule.joiner_secret
+		welcome_key = KeySchedule.derive_welcome_key(joiner_secret)
+		welcome_nonce_enc = KeySchedule.derive_welcome_nonce(joiner_secret)  # RFC 9420 §12.4
+		# P1-3: RFC 9420 §12.4.3 — ratchet tree delivered inside GroupInfo extensions
+		# as ExtensionType 0x0004, VarInt-prefixed
+		tree_raw = new_tree.to_bytes()
+		ext_data = tls_opaque_varint(tree_raw)  # extension data = opaque<V> tree
+		ext_entry = tls_u16(0x0004) + tls_opaque_varint(ext_data)  # type(u16) + data<V>
+		ext_vec = tls_opaque_varint(ext_entry)  # extensions<V>
+		gi_plaintext = group_info.to_bytes() + ext_vec
 		gi_ct = AESGCM(welcome_key).encrypt(welcome_nonce_enc, gi_plaintext, b"")
-		egi = gi_ct  # No prepending — nonce is derived by joiner from GS (RFC 9420 §12.4)
+		egi = welcome_nonce_enc + gi_ct  # nonce(12) || ciphertext
 
 		# 4c. Seal GroupSecrets with RFC §12.4 info = EncryptWithLabel("Welcome", egi)
-		group_secrets = GroupSecrets(
-			joiner_secret=next_state.key_schedule.joiner_secret,
-			psks=[p[0] for p in psk_list] if psk_list else [],
-		)
+		group_secrets = GroupSecrets(joiner_secret=next_state.key_schedule.joiner_secret)
 		gs_enc, gs_ct = HPKE.seal(
 			key_package.init_key_pub,
 			group_secrets.to_bytes(),
@@ -1229,32 +1265,31 @@ class MLSGroup:
 			encrypted_group_info=egi,
 		)
 
+		_conf_tag_sender = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
 		update = GroupUpdate(
-			epoch_id=self.state.epoch_id,
+			epoch_id=next_state.epoch_id,
 			group_id=self.group_id,
-			commit=commit,
+			tree=new_tree,
+			encrypted_commit_secrets=encrypted_secrets,
 			committer_index=self.my_index,
 			signature=signature,
-			tree=new_tree,
+			update_path=update_path,
 			_group_ctx=new_ctx_signed,
 			_confirmation_key=next_state.key_schedule.confirmation_key,
 			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
-			_membership_key=self.state.key_schedule.membership_key,  # P0-1: old-epoch key per RFC §6.2
+			_membership_key=next_state.key_schedule.membership_key,
 			_transcript_hash=transcript_hash,
-			_confirmation_tag=conf_tag,  # P1-3: single derivation used for all
+			_confirmation_tag=_conf_tag_sender,  # P0-02: carried for receiver-side verification
 		)
+
+		# P1-B: Attach membership_tag to local update for verification consistency
+		auth_content_tbs = _make_framed_content_tbs(old_ctx, _framed_for_tbs)
+		update._membership_tag = hmac.new(self.state.key_schedule.membership_key, auth_content_tbs, "sha256").digest()
 
 		# Return mutated self (my_kem_key is now the fresh TreeKEM leaf key)
 		# P0-A: propagate interim_transcript_hash to new epoch for next commit's HPKE info
 		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
-		new_group = MLSGroup(
-			next_state,
-			self.my_index,
-			self.my_sig_key,
-			new_committer_kem,
-			my_kp_ref=_make_kp_ref(new_committer_kp),
-			interim_transcript_hash=new_interim,
-		)
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, interim_transcript_hash=new_interim)
 		new_group._consumed_key_packages = set(self._consumed_key_packages)  # P0-1: propagate replay protection across epoch
 		return new_group, welcome, update
 
@@ -1262,17 +1297,13 @@ class MLSGroup:
 		"""RFC 9420 §12.1.1: Remove a member from the group.
 
 		1. Blank the target leaf and its direct path (RatchetTree.remove_leaf).
-		2. Generate fresh commit_secret (TreeKEM path secret for new epoch).
-		3. Encrypt commit_secret for all remaining members.
+		2. Generate fresh leaf_path_secret and build UpdatePath (TreeKEM).
+		3. Encrypt commit_secret (root of UpdatePath) for all remaining members.
 		4. Two-pass transcript hash to produce confirmation_tag.
 		5. Sign the commit and return (new_group, update).
 
-		Args:
-			target_leaf_index: The *node array* index (must be even) of the leaf to remove.
-
-		Returns:
-			(new_group, update) where new_group is the committer's post-remove state
-			and update is the GroupUpdate for distribution to remaining members.
+		This implementation provides Post-Compromise Security (P1-C) by
+		rotating the committer's leaf key and node keys along the direct path.
 		"""
 		if target_leaf_index == self.my_index:
 			raise ValueError("Cannot remove yourself — use leave() or let another member remove you")
@@ -1283,17 +1314,71 @@ class MLSGroup:
 		new_tree = self.state.tree.remove_leaf(target_leaf_index)
 		new_epoch_id = self.epoch_id + 1
 
-		# Step 2: Fresh commit secret for the new epoch
-		commit_secret = os.urandom(32)
+		# Step 2: TreeKEM UpdatePath (RFC 9420 §12.1.1)
+		# Rotate committer's leaf key and derive path secrets bottom-up
+		leaf_path_secret = os.urandom(32)
+		direct = new_tree.direct_path(self.my_index)
+		cop = new_tree.copath(self.my_index)
 
-		# Step 3: Encrypt commit_secret for remaining members
+		_path_secrets: list[bytes] = []
+		current_secret = leaf_path_secret
+		for _ in direct:
+			current_secret = _derive_next_path_secret(current_secret)
+			_path_secrets.append(current_secret)
+
+		# commit_secret is the root of the update path (last secret in chain)
+		commit_secret: bytes = _path_secrets[-1] if _path_secrets else leaf_path_secret
+
+		# Build fresh committer leaf KeyPackage with new KEM key
+		new_committer_kem = KemKey()
+		new_committer_kp = KeyPackage.create(
+			encryption_key=new_committer_kem.public_bytes(),
+			init_key_pub=KemKey().public_bytes(),
+			signature_key=self.my_sig_key.public_bytes(),
+			identity=self.my_sig_key.public_bytes(),
+			sign_fn=self.my_sig_key.sign,
+		)
+		new_tree.set_leaf(self.my_index, new_committer_kp.leaf_node)
+
+		# Build UpdatePath nodes and compute parent hashes outer-to-inner
+		_parent_hashes: list[bytes] = [b""] * len(direct)
+		_node_pubs: list[bytes] = []
+		for ps in _path_secrets:
+			_node_secret = _derive_path_node_key(ps)
+			_kem_node = KemKey.from_secret(_node_secret)
+			_node_pubs.append(_kem_node.public_bytes())
+
+		for node_i in range(len(direct) - 1, -1, -1):
+			dp_idx, cop_idx = direct[node_i], cop[node_i]
+			ph_above = _parent_hashes[node_i + 1] if node_i + 1 < len(direct) else b""
+			_ph = _compute_parent_hash(_node_pubs[node_i], ph_above, _subtree_hash(new_tree, cop_idx))
+			_parent_hashes[node_i] = _ph
+			new_tree.set_parent(dp_idx, ParentNode(public_key=_node_pubs[node_i], parent_hash=_ph))
+
 		# RFC 9420 §12.4.1: provisional GroupContext uses the OLD confirmed_transcript_hash.
 		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.interim_transcript_hash)
+
+		# Encrypt each path secret to the resolutions of the respective copath nodes
+		update_path_nodes: list[UpdatePathNode] = []
+		for (dp_idx, cop_idx, ps), _new_pub in zip(zip(direct, cop, _path_secrets), _node_pubs):
+			resolved = new_tree.resolution(cop_idx)
+			ctexts: list[HPKECiphertext] = []
+			for res_idx in resolved:
+				res_node = new_tree.get_node(res_idx)
+				if res_node is None:
+					continue
+				enc, ct = HPKE.seal(res_node.public_key, ps, info=_up_info(group_ctx_pre.to_bytes()))
+				ctexts.append(HPKECiphertext(kem_output=enc, ciphertext=ct))
+			update_path_nodes.append(UpdatePathNode(new_public_key=_new_pub, encrypted_path_secret=ctexts))
+
+		update_path = UpdatePath(leaf_key_package=new_committer_kp, nodes=update_path_nodes)
+
+		# legacy fallback: also seal commit_secret directly to each remaining leaf (P1-FALLBACK)
 		encrypted_commit_secrets: dict[bytes, bytes] = {}
 		for leaf_idx in range(0, len(new_tree.nodes), 2):
 			node = new_tree.get_node(leaf_idx)
-			if node is None or leaf_idx == self.my_index * 2:
-				continue  # skip blank leaves and self
+			if node is None or leaf_idx == self.my_index:
+				continue
 			if not isinstance(node, LeafNode):
 				continue
 			kp_ref = _make_kp_ref(node.key_package)
@@ -1301,14 +1386,17 @@ class MLSGroup:
 			encrypted_commit_secrets[kp_ref] = enc + ct
 
 		# Step 4: Build unsigned commit body for FramedContent
-		_n = len(encrypted_commit_secrets)
-		unsigned_body = (
-			tls_u64(self.state.epoch_id)
-			+ tls_opaque32(new_tree.to_bytes())
-			+ tls_u32(_n)
-			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_commit_secrets.items()))
-			+ tls_u32(self.my_index)
+		# P1-C: now includes the full UpdatePath in the body serialization
+		update = GroupUpdate(
+			epoch_id=new_epoch_id,
+			tree=new_tree,
+			encrypted_commit_secrets=encrypted_commit_secrets,
+			committer_index=self.my_index,
+			signature=b"",  # set later
+			update_path=update_path,
+			group_id=self.group_id,
 		)
+		unsigned_body = update._body_bytes()
 
 		framed_content = FramedContent(
 			group_id=self.group_id,
@@ -1323,12 +1411,25 @@ class MLSGroup:
 		old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
 		tbs = _make_framed_content_tbs(old_ctx, framed_content)
 		signature = self.my_sig_key.sign(tbs)
+		update.signature = signature
 
 		# P1-TH & P1-CTH: Transcript Hash Sequence
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
 		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
-		# P1-3 consolidated: advance epoch first, then derive conf_tag once
+		# Phase 1: derive confirmation_key
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
+		)
+
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+
+		# Final GroupContext + epoch advance
 		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
@@ -1336,59 +1437,38 @@ class MLSGroup:
 			group_context=new_ctx.to_bytes(),
 		)
 
-		# Single conf_tag derivation from canonical next_state key
-		conf_tag = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
+		# Store context values needed by wrap_commit()
+		update._group_ctx = new_ctx
+		update._confirmation_key = next_state.key_schedule.confirmation_key
+		update._epoch_authenticator = next_state.key_schedule.epoch_authenticator
+		update._membership_key = next_state.key_schedule.membership_key
+		update._transcript_hash = transcript_hash
+		update._confirmation_tag = _conf_tag
 
-		# Compute NEW interim_transcript_hash to store in MLSGroup
-		new_interim = _compute_interim_transcript_hash(transcript_hash, conf_tag)
+		# P1-B: Attach membership_tag to local update for verification consistency
+		auth_content_tbs = _make_framed_content_tbs(old_ctx, framed_content)
+		update._membership_tag = hmac.new(self.state.key_schedule.membership_key, auth_content_tbs, "sha256").digest()
 
-		update = GroupUpdate(
-			epoch_id=self.state.epoch_id,
-			tree=new_tree,
-			encrypted_commit_secrets=encrypted_commit_secrets,
-			committer_index=self.my_index,
-			signature=signature,
-			group_id=self.group_id,
-			_group_ctx=new_ctx,
-			_confirmation_key=next_state.key_schedule.confirmation_key,
-			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
-			_membership_key=self.state.key_schedule.membership_key,  # P0-1: old-epoch key per RFC §6.2
-			_transcript_hash=transcript_hash,
-			_confirmation_tag=conf_tag,  # P1-3: single derivation
-		)
-
-		self._wipe_secret_tree()  # P2-N1: forward secrecy — zeroize old epoch before transition
-		new_group = MLSGroup(
-			next_state, self.my_index, self.my_sig_key, self.my_kem_key, my_kp_ref=self.my_kp_ref, interim_transcript_hash=new_interim
-		)
-		new_group._consumed_key_packages = set(self._consumed_key_packages)  # P0-1: propagate replay protection across epoch
+		self._wipe_secret_tree()
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
+		new_group._consumed_key_packages = set(self._consumed_key_packages)
 		return new_group, update
 
 	@classmethod
-	def join(
-		cls,
-		welcome: "Welcome" | bytes,
-		my_sig_key: SignatureKey,
-		my_kem_key: KemKey,
-		psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None,
-		ratchet_tree: RatchetTree | None = None,
-	) -> "MLSGroup":
+	def join(cls, welcome: "Welcome | bytes", my_sig_key: SignatureKey, my_kem_key: KemKey) -> "MLSGroup":
 		"""
 		Initializes a Group from a Welcome message (RFC 9420 §12.1.2).
 		Decrypts GroupSecrets and reconstructs the EpochState.
 
 		Accepts either a Welcome object or raw TLS wire-format bytes.
-		If the Welcome message does not contain a ratchet_tree extension,
-		one MUST be provided via the ratchet_tree argument.
 		"""
-		# (Logic remains same until tree parsing...)
 		# Auto-detect: if raw bytes, parse as Welcome TLS wire format
 		if isinstance(welcome, (bytes, bytearray)):
 			try:
 				welcome = Welcome.from_bytes(welcome)
 			except Exception as exc:
 				raise ValueError(f"Failed to parse Welcome TLS bytes: {exc}") from exc
-		# RFC 9420 §12.4.3.1: find our EncryptedGroupSecrets by trying each (KPRef match).
+		# RFC 9420 §12.1.2: find our EncryptedGroupSecrets by trying each (KPRef match).
 		# For single-joiner cases, take the only entry. For multi-joiner, try each.
 		gs_bytes_raw: bytes | None = None
 		egs_match: EncryptedGroupSecrets | None = None
@@ -1403,56 +1483,42 @@ class MLSGroup:
 				continue
 		if gs_bytes_raw is None or egs_match is None:
 			raise ValueError("No EncryptedGroupSecrets could be decrypted with the provided KEM key")
-
-		# 1.5 Parse GroupSecrets and resolve PSKs (RFC 9420 §12.4.2)
 		gs = GroupSecrets.from_bytes(gs_bytes_raw)
 
-		# Resolve PSKs indicated in the Welcome message
-		resolved_psks = []
-		if gs.psks:
-			if psk_list is None:
-				raise ValueError("Welcome message requires PSKs, but none were provided")
-			psk_map = {pid.psk_id: val for pid, val in psk_list}
-			for psk_id in gs.psks:
-				if psk_id.psk_id not in psk_map:
-					raise ValueError(f"Required PSK {psk_id.psk_id.hex()} not found in provided psk_list")
-				resolved_psks.append((psk_id, psk_map[psk_id.psk_id]))
+		# 2. Derive welcome_key from joiner_secret and decrypt GroupInfo (AES-GCM)
+		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret)
+		gi_payload_raw = welcome.encrypted_group_info
+		if len(gi_payload_raw) < 12:
+			raise ValueError("encrypted_group_info too short")
+		gi_nonce_bytes, gi_ct = gi_payload_raw[:12], gi_payload_raw[12:]
+		gi_bytes = AESGCM(welcome_key_dec).decrypt(gi_nonce_bytes, gi_ct, b"")
 
-		# 2. Derive welcome_key/nonce from joiner_secret + psk_secret and decrypt GroupInfo
-		psk_secret = _psk_secret(resolved_psks)
-		welcome_key_dec = KeySchedule.derive_welcome_key(gs.joiner_secret, psk_secret)
-		welcome_nonce_dec = KeySchedule.derive_welcome_nonce(gs.joiner_secret, psk_secret)
-
-		gi_ct = welcome.encrypted_group_info
-		try:
-			gi_bytes = AESGCM(welcome_key_dec).decrypt(welcome_nonce_dec, gi_ct, b"")
-		except Exception as exc:
-			raise ValueError(f"Failed to decrypt GroupInfo: {exc}")
-
-		# 3. Parse signed GroupInfo + ratchet_tree extension (RFC §12.4.3)
+		# 3. Parse signed GroupInfo + ratchet_tree extension (P1-3: RFC §12.4.3)
 		gi = GroupInfo.from_bytes(gi_bytes)
 		gi_ctx = gi.group_context
-
-		# Parse extensions to find ratchet_tree
+		gi_bytes_len = len(gi.to_bytes())
+		# Parse extensions vector: opaque<V> containing Extension entries
 		tree: RatchetTree | None = None
-		for ext_type, ext_data in gi.extensions:
-			if ext_type == ExtensionType.RATCHET_TREE:
-				# ratchet_tree is optional<Node> ratchet_tree<V>
-				tree = RatchetTree.from_bytes(ext_data)
-				break
-
-		# Fallback to provided tree if extension is missing
+		ext_vec_data, ext_end = read_opaque_varint(gi_bytes, gi_bytes_len)
+		ext_offset = 0
+		while ext_offset < len(ext_vec_data):
+			ext_type, ext_offset = read_u16(ext_vec_data, ext_offset)
+			ext_body, ext_offset = read_opaque_varint(ext_vec_data, ext_offset)
+			if ext_type == 0x0004:  # ratchet_tree
+				tree_data, _ = read_opaque_varint(ext_body, 0)
+				tree = RatchetTree.from_bytes(tree_data)
 		if tree is None:
-			tree = ratchet_tree
-
-		if tree is None:
-			raise ValueError("ratchet_tree extension absent from GroupInfo and no external tree provided")
+			# Fallback: try legacy format (raw opaque append for backward compat)
+			try:
+				tree_bytes, _ = read_opaque(gi_bytes, gi_bytes_len)
+				tree = RatchetTree.from_bytes(tree_bytes)
+			except Exception:
+				raise ValueError("ratchet_tree extension absent from GroupInfo")
 
 		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
-		# signer is a leaf index, map to node index (leaf_index * 2)
-		committer_node = tree.get_node(gi.signer * 2)
+		committer_node = tree.get_node(gi.signer)
 		if not isinstance(committer_node, LeafNode):
-			raise ValueError(f"GroupInfo.signer ({gi.signer}) leaf node not found at expected index {gi.signer * 2}")
+			raise ValueError(f"GroupInfo.signer ({gi.signer}) is not a leaf node")
 		try:
 			gi.verify(committer_node.signature_key)
 		except Exception as exc:
@@ -1460,33 +1526,24 @@ class MLSGroup:
 
 		# 5. RFC 9420: discover joiner leaf index by scanning tree for our signature key
 		my_sig_pub = my_sig_key.public_bytes()
-		node_index: int | None = None
+		my_index: int | None = None
 		for i, node in enumerate(tree.nodes):
 			if i % 2 == 0 and isinstance(node, LeafNode):
 				if hmac.compare_digest(node.signature_key, my_sig_pub):
-					node_index = i
+					my_index = i
 					break
-		if node_index is None:
+		if my_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")
-		my_index = node_index // 2
-		# P0-Join: Reconstruct our KeyPackage to get our KeyPackageRef
-		my_leaf_node = tree.get_node(node_index)
-		if not isinstance(my_leaf_node, LeafNode):
-			raise ValueError("Unexpectedly found non-leaf node during join registration")
-		my_kp_ref = _make_kp_ref(my_leaf_node.key_package)
 
-		# 8.4 Key Schedule
-		# intermediate_secret = HKDF-Extract(joiner_secret, psk_secret)
-		# For Suite 1 (the only one we support in this test), Nh = 32.
-		_nh = 32 if welcome.cipher_suite == 1 else 32
-		psk_sec = _psk_secret(resolved_psks, _nh)
-		intermediate = hkdf_extract(gs.joiner_secret, psk_sec)
-
-		# epoch_secret = HKDF-Expand-Label(intermediate_secret, "epoch", GroupContext, Nh)
-		epoch_secret = expand_with_label(intermediate, "epoch", gi_ctx.to_bytes(), _nh)
-
-		# Derive the full epoch key schedule from the epoch_secret
-		# Ref: RFC 9420 §8.4 / Figure 22
+		# 6. Reconstruct KeySchedule from joiner_secret (RFC 9420 §8 Figure 22)
+		# RFC 9420 §8: epoch_secret MUST be bound to the GroupContext (group_id, epoch, tree_hash,
+		# confirmed_transcript_hash). Using b"" here produces keys identical across different groups
+		# — P1-02 / P0-01 mirror. Use gi_ctx.to_bytes() (already parsed above).
+		# NOTE: psk injection via _psk_secret([]) = 0^32 (no PSKs in Welcome flow by default)
+		psk_zeros = b"\x00" * 32
+		intermediate = hkdf_extract(gs.joiner_secret, psk_zeros)  # joiner=salt, psk_secret=IKM
+		# P1-02 fix: use gi_ctx.to_bytes() for GroupContext domain separation
+		epoch_secret = expand_with_label(intermediate, "epoch", gi_ctx.to_bytes(), 32)
 		ks = KeySchedule._from_epoch_secret(epoch_secret, gs.joiner_secret, intermediate)
 
 		state = EpochState(
@@ -1497,9 +1554,8 @@ class MLSGroup:
 		)
 
 		# P1-N4: RFC 9420 §12.4.3.1 — joiner MUST verify confirmation_tag in GroupInfo
-		# Calculated as HMAC(confirmation_key, confirmed_transcript_hash)
-		expected_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, hashlib.sha256).digest()
-		if not hmac.compare_digest(gi.confirmation_tag, expected_tag):
+		_expected_conf_tag = hmac.new(ks.confirmation_key, gi_ctx.confirmed_transcript_hash, "sha256").digest()
+		if not hmac.compare_digest(_expected_conf_tag, gi.confirmation_tag):
 			raise ValueError("GroupInfo confirmation_tag verification failed — forged Welcome or epoch mismatch (P1-N4)")
 
 		# RFC 9420 §12.4.3: compute interim_transcript_hash using GroupInfo.confirmation_tag
@@ -1509,115 +1565,69 @@ class MLSGroup:
 			my_index=my_index,
 			my_sig_key=my_sig_key,
 			my_kem_key=my_kem_key,
-			my_kp_ref=my_kp_ref,
 			interim_transcript_hash=new_interim,
 		)
 
-	def process_update(self, update: GroupUpdate, psk_list: list[tuple[PreSharedKeyID, bytes]] | None = None) -> "MLSGroup":
+	def process_update(self, update: GroupUpdate) -> "MLSGroup":
 		"""
-		Process a Commit from another member (RFC 9420 §12).
-		Reconstructs the next tree and advances local state.
+		Process a Commit from another member.
+		Advances local state using the new tree and decrypted commit_secret.
 		"""
 		if update.group_id != self.group_id:
 			raise ValueError(f"GroupUpdate group_id mismatch: {update.group_id!r} != {self.group_id!r}")
-		if update.epoch_id != self.state.epoch_id:
-			raise ValueError(f"Out of order update: expected epoch {self.state.epoch_id}, got {update.epoch_id}")
-		# Note: epoch_id validation is handled in PublicMessage wrapper but we verify here for safety
-		# (PublicMessage in pure-mls currently sets it to 0 in from_bytes, we fix it later in the wrapper)
+		if update.epoch_id != self.epoch_id + 1:
+			raise ValueError("Out of order update")
 
-		# 1. Parse Commit and resolve proposals
-		commit = update.commit
-		if commit is None:
-			raise ValueError("Update message missing Commit object")
-		new_tree = self.state.tree.expanded(self.state.tree.num_leaves)  # copy current
-		resolved_psks = []
+		committer_node = self.state.tree.get_node(update.committer_index)
+		if not isinstance(committer_node, LeafNode):
+			raise ValueError("Invalid committer index")
 
-		for por in commit.proposals:
-			# Resolution of ProposalOrRef
-			prop_data = None
-			if por.value:
-				prop_data = por.value
-			elif por.reference:
-				if por.reference not in self.proposal_store:
-					raise ValueError(f"Proposal reference {por.reference.hex()} not found in store")
-				prop_data = self.proposal_store[por.reference]
+		# 1. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
+		my_kp = self.state.tree.get_node(self.my_index)
+		if not isinstance(my_kp, LeafNode):
+			raise ValueError("My leaf node not found in tree")
+		# RFC 9420 §12.4.1: provisional GroupContext uses OLD confirmed_transcript_hash for HPKE
+		group_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, self.interim_transcript_hash)
+		my_kp_ref = _make_kp_ref(my_kp.key_package)
 
-			if prop_data:
-				prop, _ = proposal_from_bytes(prop_data)
-				if isinstance(prop, AddProposal):
-					# Expand tree and add member
-					new_tree = new_tree.expanded(new_tree.num_leaves + 1)
-					new_leaf_idx = (new_tree.num_leaves - 1) * 2
-					kp = KeyPackage.from_bytes(prop.key_package_bytes)
-					new_tree.set_leaf(new_leaf_idx, kp.leaf_node)
-				elif isinstance(prop, PSKProposal):
-					# Resolve PSK
-					found = False
-					if psk_list:
-						for p_id, val in psk_list:
-							if p_id.psk_id == prop.psk_id:
-								resolved_psks.append((p_id, val))
-								found = True
-								break
-					if not found:
-						raise ValueError(f"Required PSK {prop.psk_id.hex()} not provided for resolution")
-
-		# 2. Re-verify/Apply UpdatePath
-		# In RFC 9420, Commit.path contains the committer's new leaf/path.
-		# our Commit object stores it in update_path_bytes.
 		commit_secret: bytes | None = None
 
-		# P1-A: provisional GroupContext for HPKE (uses OLD confirmed_transcript_hash)
-		if update.tree is None:
-			raise ValueError("Update message missing RatchetTree")
-		provisional_ctx = _make_group_context(self.group_id, self.state.epoch_id + 1, update.tree, self.interim_transcript_hash)
+		# TreeKEM path: find our position in the copath and decrypt the path secret
+		if update.update_path is not None and len(update.update_path.nodes) > 0:
+			direct = update.tree.direct_path(update.committer_index)
+			cop = update.tree.copath(update.committer_index)
+			for node_i, (dp_idx, cop_idx, up_node) in enumerate(zip(direct, cop, update.update_path.nodes)):
+				resolved = update.tree.resolution(cop_idx)
+				if self.my_index in resolved:
+					pos = resolved.index(self.my_index)
+					if pos < len(up_node.encrypted_path_secret):
+						ct = up_node.encrypted_path_secret[pos]
+						path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=_up_info(group_ctx.to_bytes()))
+						# Derive remaining path secrets to reach the root (commit_secret)
+						_ps = path_secret
+						for _ in range(len(direct) - node_i - 1):
+							_ps = _derive_next_path_secret(_ps)
+						commit_secret = _ps
+						break
+				if commit_secret is not None:
+					break
 
-		if commit.update_path_bytes:
-			update_path, _ = UpdatePath.from_bytes(commit.update_path_bytes)
-			# Apply updated leaf
-			new_tree.set_leaf(update.committer_index * 2, update_path.leaf_key_package.leaf_node)
-
-			# Decrypt path secret if we are in the resolution of one of the nodes
-			direct = new_tree.direct_path(update.committer_index * 2)
-			cop = new_tree.copath(update.committer_index * 2)
-
-			# Reconstruct parent hashes for the direct path to ensure TreeHash parity
-			_parent_hashes_v: dict[int, bytes] = {}
-			for node_i in range(len(direct) - 1, -1, -1):
-				dp_idx, cop_idx = direct[node_i], cop[node_i]
-				ph_above = _parent_hashes_v[node_i + 1] if node_i + 1 < len(direct) else b""
-				node_up = update_path.nodes[node_i]
-				_ph = _compute_parent_hash(node_up.new_public_key, ph_above, _subtree_hash(new_tree, cop_idx))
-				_parent_hashes_v[node_i] = _ph
-				new_tree.set_parent(dp_idx, ParentNode(public_key=node_up.new_public_key, parent_hash=_ph))
-
-			# Decrypt path secret if we are in the resolution of one of the nodes
-			for i, (dp_idx, cop_idx) in enumerate(zip(direct, cop)):
-				node_up = update_path.nodes[i]
-				# Try to decrypt if we are in the resolution of cop_idx
-				res = new_tree.resolution(cop_idx)
-				if (self.my_index * 2) in res:
-					# Find our ciphertext
-					my_pos = res.index(self.my_index * 2)
-					ct = node_up.encrypted_path_secret[my_pos]
-					# Decrypt path_secret
-					path_secret = HPKE.open(self.my_kem_key, ct.kem_output, ct.ciphertext, info=_up_info(provisional_ctx.to_bytes()))
-
-					# Ratchet up to get commit_secret
-					curr = path_secret
-					for _ in range(i + 1, len(update_path.nodes)):
-						curr = _derive_next_path_secret(curr)
-					commit_secret = curr
-
+		# Fallback: legacy encrypted_commit_secrets
 		if commit_secret is None:
-			if self.my_kp_ref not in update.encrypted_commit_secrets:
-				raise ValueError("Not invited to this epoch: my KeyPackageRef not found in commit secrets")
-			enc_ct = update.encrypted_commit_secrets[self.my_kp_ref]
+			if my_kp_ref not in update.encrypted_commit_secrets:
+				raise ValueError("Not invited to this epoch (KeyPackageRef not found in commit)")
+			enc_ct = update.encrypted_commit_secrets[my_kp_ref]
 			enc, ct_bytes = enc_ct[:32], enc_ct[32:]
-			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=_up_info(provisional_ctx.to_bytes()))
+			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=_up_info(group_ctx.to_bytes()))
 
 		# 2. Recompute transcript hash using RFC §8.2 two-pass chain (P1-NEW-1)
-		_unsigned_body_v = update.to_bytes()
+		_unsigned_body_v = (
+			tls_u64(update.epoch_id)
+			+ tls_opaque32(update.tree.to_bytes())
+			+ tls_u32(len(update.encrypted_commit_secrets))
+			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(update.encrypted_commit_secrets.items()))
+			+ tls_u32(update.committer_index)
+		)
 		_framed_v = FramedContent(
 			group_id=self.group_id,
 			epoch=self.state.epoch_id,
@@ -1630,9 +1640,6 @@ class MLSGroup:
 		# 3. Verify Signature
 		try:
 			old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
-			committer_node = self.state.tree.get_node(update.committer_index * 2)
-			if not isinstance(committer_node, LeafNode):
-				raise ValueError(f"Committer node {update.committer_index} is blank or not a leaf")
 			sig_key_bytes = committer_node.signature_key
 			public_key = ed25519.Ed25519PublicKey.from_public_bytes(sig_key_bytes)
 			tbs = _make_framed_content_tbs(old_ctx, _framed_v)
@@ -1643,17 +1650,19 @@ class MLSGroup:
 			raise ValueError(f"Malformed update signature: {exc}") from exc
 
 		# P1-N2: Verify membership_tag — proves sender was a group member (RFC §6.2)
-		if update._membership_tag is not None:
-			expected_mem_tag = hmac.new(self.state.key_schedule.membership_key, tbs, "sha256").digest()
-			if not hmac.compare_digest(expected_mem_tag, update._membership_tag):
-				raise ValueError("Membership tag mismatch — sender is not a current group member (P1-N2)")
+		# Enforced: membership_tag MUST be present on received commits to prevent downgrades (P1-B).
+		if update._membership_tag is None:
+			raise ValueError("RFC §6.2: membership_tag absent — refusing non-member commit")
+		expected_mem_tag = hmac.new(self.state.key_schedule.membership_key, tbs, "sha256").digest()
+		if not hmac.compare_digest(expected_mem_tag, update._membership_tag):
+			raise ValueError("Membership tag mismatch")
 
 		# P1-TH & P1-CTH: Transcript Hash Sequence
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes_v, update.signature)
 		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
 
 		# Phase 1: derive confirmation_key
-		_provisional_ctx = _make_group_context(self.group_id, self.state.epoch_id + 1, new_tree, transcript_hash)
+		_provisional_ctx = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
 		_conf_key = KeySchedule.derive_confirmation_key(
 			init_secret=self.state.key_schedule.init_secret,
 			commit_secret=commit_secret,
@@ -1672,16 +1681,18 @@ class MLSGroup:
 
 		# Compute NEW interim_transcript_hash to store in MLSGroup
 		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+		group_ctx_verify = _make_group_context(self.group_id, update.epoch_id, update.tree, transcript_hash)
+
 		# 4. Final epoch advance
-		group_ctx_verify = _make_group_context(self.group_id, self.state.epoch_id + 1, new_tree, transcript_hash)
 		next_state = self.state.advance_epoch(
 			commit_secret,
-			new_tree,
+			update.tree,
 			group_context=group_ctx_verify.to_bytes(),
 		)
 
 		self._wipe_secret_tree()  # forward secrecy: zeroize old epoch SecretTree before transition
-		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, my_kp_ref=self.my_kp_ref, interim_transcript_hash=new_interim)
+		# P0-A: return new MLSGroup with transcript_hash propagated for next commit
+		return MLSGroup(next_state, self.my_index, self.my_sig_key, self.my_kem_key, interim_transcript_hash=new_interim)
 
 	def encrypt_application_message(self, plaintext: bytes) -> bytes:
 		"""RFC 9420 §9: Encrypt an application message using SecretTree (per-leaf, per-generation).
@@ -1788,13 +1799,7 @@ class MLSGroup:
 			cth = data[offset : offset + cth_len]
 			offset += cth_len
 
-		# P1-KP: Recalculate my_kp_ref from the state tree to ensure consistency
-		my_leaf = state.tree.get_node(idx * 2)
-		my_kp_ref = b""
-		if isinstance(my_leaf, LeafNode):
-			my_kp_ref = _make_kp_ref(my_leaf.key_package)
-
-		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, my_kp_ref=my_kp_ref, interim_transcript_hash=cth)
+		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=cth)
 
 		# P1-3: Deserialize consumed key packages if present
 		if offset < len(data):
