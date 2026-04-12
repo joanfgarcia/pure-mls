@@ -1,7 +1,7 @@
 [project]
 name = "pure-mls"
-version = "3.0.3.1"
-description = "Add your description here"
+version = "3.0.4.0"
+description = "Pure Python MLS implementation with CLI. Still maturing the application messaging CLI commands."
 readme = "README.md"
 authors = [
     { name = "Joan F Garcia", email = "joanfgarcia@gmail.com" }

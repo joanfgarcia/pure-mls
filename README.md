@@ -47,13 +47,13 @@ pure-mls/
     └── test_e2e_grpc.py    # E2E Backend Swarm (Proto Hub)
 ```
 ## 📚 Documentation & Guides
-We believe in making cryptography accessible. If mathematical algorithms and RFCs feel daunting, you can read our Colloquial Guides, available in multiple languages:
-- 🇺🇸 [The Human Guide to MLS: The Journey (EN)](docs/02_MLS_JOURNEY_EN.md)
-- 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](docs/02_MLS_JOURNEY_ES.md)
-
-If you strictly prefer sarcasm, brutal honesty, and brevity, we also have:
+We believe in making cryptography accessible. For a fast, pragmatic, and irreverent introduction to MLS, check our Primate Survival Guide:
 - 🦍 [The Primate Survival Guide to pure-mls (EN)](docs/03_MLS_FOR_PRIMATES_EN.md)
 - 🦍 [Guía del Primate Sobreviviendo a pure-mls (ES)](docs/03_MLS_FOR_PRIMATES_ES.md)
+
+For a deeper dive into the architecture, mathematics, and philosophy of the protocol, explore the Human Journey:
+- 🇺🇸 [The Human Guide to MLS: The Journey (EN)](docs/02_MLS_JOURNEY_EN.md)
+- 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](docs/02_MLS_JOURNEY_ES.md)
 
 *Contributors: We welcome translations! Feel free to PR your language following the `02_MLS_JOURNEY_XX.md` format.*
 
