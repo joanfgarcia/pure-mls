@@ -46,6 +46,12 @@ pure-mls/
     ├── test_e2e_webrtc.py  # E2E Data Channels P2P (aiortc)
     └── test_e2e_grpc.py    # E2E Backend Swarm (Proto Hub)
 ```
+## 📚 Documentation & Guides
+We believe in making cryptography accessible. If mathematical algorithms and RFCs feel daunting, you can read our Colloquial Guides, available in multiple languages:
+- 🇺🇸 [The Human Guide to MLS: The Journey (EN)](docs/02_MLS_JOURNEY_EN.md)
+- 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](docs/02_MLS_JOURNEY_ES.md)
+
+*Contributors: We welcome translations! Feel free to PR your language following the `02_MLS_JOURNEY_XX.md` format.*
 
 ## 🔌 API Quickstart
 The central state machine is `MLSGroup`. Install it in your brain:
