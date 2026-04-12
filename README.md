@@ -51,6 +51,10 @@ We believe in making cryptography accessible. If mathematical algorithms and RFC
 - 🇺🇸 [The Human Guide to MLS: The Journey (EN)](docs/02_MLS_JOURNEY_EN.md)
 - 🇪🇸 [La Guía Humana de MLS: El Viaje (ES)](docs/02_MLS_JOURNEY_ES.md)
 
+If you strictly prefer sarcasm, brutal honesty, and brevity, we also have:
+- 🦍 [The Primate Survival Guide to pure-mls (EN)](docs/03_MLS_FOR_PRIMATES_EN.md)
+- 🦍 [Guía del Primate Sobreviviendo a pure-mls (ES)](docs/03_MLS_FOR_PRIMATES_ES.md)
+
 *Contributors: We welcome translations! Feel free to PR your language following the `02_MLS_JOURNEY_XX.md` format.*
 
 ## 🔌 API Quickstart
