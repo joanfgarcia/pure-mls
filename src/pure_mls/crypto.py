@@ -27,9 +27,9 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	node = tree.get_node(index)
 	if index % 2 == 0:  # leaf
 		if node is None:
-			return hashlib.sha256(b"").digest()
+			return hashlib.sha256(b"\x01\x00").digest()
 		assert isinstance(node, LeafNode)
-		return hashlib.sha256(node.key_package.to_bytes()).digest()
+		return hashlib.sha256(b"\x01\x01" + node.to_bytes()).digest()
 
 	lvl = tree.level(index)
 	child_dist = 1 << (lvl - 1)
@@ -39,13 +39,10 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	right_hash = _subtree_hash(tree, right)
 
 	if node is None:
-		return hashlib.sha256(left_hash + right_hash).digest()
+		return hashlib.sha256(b"\x02\x00" + tls_opaque_varint(left_hash) + tls_opaque_varint(right_hash)).digest()
 
 	assert isinstance(node, ParentNode)
-	assert node.public_key is not None
-
-	parent_node_bytes = tls_opaque(node.public_key) + tls_opaque(node.parent_hash) + tls_opaque(node.unmerged_leaves_bytes())
-	return hashlib.sha256(parent_node_bytes + left_hash + right_hash).digest()
+	return hashlib.sha256(b"\x02\x01" + node.to_bytes() + tls_opaque_varint(left_hash) + tls_opaque_varint(right_hash)).digest()
 
 
 def _compute_parent_hash(new_public_key: bytes, parent_hash_of_parent: bytes, original_sibling_tree_hash: bytes) -> bytes:
