@@ -7,7 +7,7 @@ from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
 
-def main():
+def main() -> None:
 	parser = argparse.ArgumentParser(description="Pure-MLS Command Line Interface", prog="pure-mls")
 	subparsers = parser.add_subparsers(dest="command", help="commands")
 	subparsers.required = True

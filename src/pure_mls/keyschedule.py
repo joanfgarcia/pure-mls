@@ -4,6 +4,7 @@ import struct
 from dataclasses import dataclass
 
 from pure_mls.hkdf import derive_secret, expand_with_label, hkdf_extract, varint_encode
+from pure_mls.tls import read_opaque_varint, read_u8, read_u64
 
 _NH = 32  # SHA-256 hash length
 
@@ -47,9 +48,26 @@ class PreSharedKeyID:
 			+ struct.pack("B", self.usage)
 			+ varint_encode(len(self.psk_group_id))
 			+ self.psk_group_id
-			+ struct.pack("!Q", self.psk_epoch)
+			+ struct.pack(">Q", self.psk_epoch)
 			+ varint_encode(len(self.psk_nonce))
 			+ self.psk_nonce
+		)
+
+	@classmethod
+	def from_bytes_at(cls, data: bytes, offset: int) -> tuple["PreSharedKeyID", int]:
+		psk_type, offset = read_u8(data, offset)
+		if psk_type == PSK_TYPE_EXTERNAL:
+			psk_id, offset = read_opaque_varint(data, offset)
+			psk_nonce, offset = read_opaque_varint(data, offset)
+			return cls(psk_type=psk_type, psk_id=psk_id, psk_nonce=psk_nonce), offset
+		# resumption
+		usage, offset = read_u8(data, offset)
+		psk_group_id, offset = read_opaque_varint(data, offset)
+		psk_epoch, offset = read_u64(data, offset)
+		psk_nonce, offset = read_opaque_varint(data, offset)
+		return (
+			cls(psk_type=psk_type, psk_id=b"", psk_nonce=psk_nonce, usage=usage, psk_group_id=psk_group_id, psk_epoch=psk_epoch),
+			offset,
 		)
 
 
@@ -188,27 +206,28 @@ class KeySchedule:
 	# -------------------------------------------------------------------------
 
 	@staticmethod
-	def derive_welcome_key(joiner_secret: bytes) -> bytes:
+	def derive_welcome_key(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
 		"""RFC 9420 §12.4: welcome_key from intermediate_secret.
 
-		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret=0^32)
+		intermediate_secret = Extract(salt=joiner_secret, IKM=psk_secret)
 		welcome_secret = DeriveSecret(intermediate, "welcome")
-		welcome_key = EWL(welcome_secret, "key", b"", 16)  ← AES-128-GCM Nk=16
+		welcome_key = EWL(welcome_secret, "key", b"", 16)
 		"""
-		# For the common case (no PSK): psk_secret = 0^32
-		psk_secret_0 = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		if psk_secret is None:
+			psk_secret = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "key", b"", 16)
 
 	@staticmethod
-	def derive_welcome_nonce(joiner_secret: bytes) -> bytes:
+	def derive_welcome_nonce(joiner_secret: bytes, psk_secret: bytes | None = None) -> bytes:
 		"""RFC 9420 §12.4: welcome_nonce from intermediate_secret.
 
 		Nn = 12 bytes (AES-128-GCM nonce length).
 		"""
-		psk_secret_0 = b"\x00" * _NH
-		intermediate = hkdf_extract(joiner_secret, psk_secret_0)
+		if psk_secret is None:
+			psk_secret = b"\x00" * _NH
+		intermediate = hkdf_extract(joiner_secret, psk_secret)
 		welcome_s = derive_secret(intermediate, "welcome")
 		return expand_with_label(welcome_s, "nonce", b"", 12)
 

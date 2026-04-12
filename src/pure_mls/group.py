@@ -335,6 +335,8 @@ class GroupInfo:
 	signer: int  # committer leaf index
 	signature: bytes  # Ed25519(TBS)
 
+	_raw_data: bytes = field(default=b"", repr=False, init=False)
+
 	# ------------------------------------------------------------------
 	# Serialisation helpers
 	# ------------------------------------------------------------------

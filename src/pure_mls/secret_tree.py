@@ -64,13 +64,15 @@ def _get_path(target_leaf_index: int, n_leaves: int) -> list[str]:
 	root_node = _root(n_leaves)
 	path = []
 	curr = target_node
-	while curr != root_node:
+	depth = 0
+	while curr != root_node and depth < 32:
 		p = _parent(curr, n_leaves)
 		if curr == _left(p):
 			path.append("left")
 		else:
 			path.append("right")
 		curr = p
+		depth += 1
 	path.reverse()
 	return path
 

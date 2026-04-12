@@ -123,11 +123,7 @@ class LeafNode:
 		)
 
 	def _tbs_bytes(self, group_id: bytes = b"", leaf_index: int = 0) -> bytes:
-		"""LeafNodeTBS per RFC 9420 §7.2.
-
-		For key_package source: no group_id / leaf_index.
-		For update / commit source: includes group_id and leaf_index.
-		"""
+		"""LeafNodeTBS per RFC 9420 §7.2."""
 		tbs = (
 			tls_u16(_CIPHER_SUITE)
 			+ tls_opaque(self.encryption_key)
@@ -197,9 +193,9 @@ class LeafNode:
 
 	@classmethod
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["LeafNode", int]:
-		# encryption_key: opaque<V>
+		# encryption_key: HPKEPublicKey (opaque<V>)
 		encryption_key, offset = read_opaque(data, offset)
-		# signature_key: opaque<V>
+		# signature_key: SignaturePublicKey (opaque<V>)
 		signature_key, offset = read_opaque(data, offset)
 
 		credential, offset = Credential.from_bytes_at(data, offset)
@@ -385,14 +381,12 @@ class ParentNode:
 	parent_hash: bytes  # RFC 9420 §7.9 parent_hash (32 bytes)
 	unmerged_leaves: list[int] = field(default_factory=list)  # uint32 leaf indices
 
+	def unmerged_leaves_bytes(self) -> bytes:
+		return b"".join(tls_u32(i) for i in self.unmerged_leaves)
+
 	def to_bytes(self) -> bytes:
-		"""RFC 9420 §7.3 TLS encoding."""
-		unmerged = b"".join(tls_u32(i) for i in self.unmerged_leaves)
-		return (
-			tls_opaque(self.public_key)  # HPKEPublicKey encryption_key<V>
-			+ tls_opaque(self.parent_hash)  # opaque parent_hash<V>
-			+ tls_opaque(unmerged)  # uint32 unmerged_leaves<V> (RFC 9420 §3.3 uses VarInt prefix for vectors)
-		)
+		"""RFC 9420 §7.3 encoding: public_key<V> + parent_hash<V> + control_field<V>."""
+		return tls_opaque(self.public_key) + tls_opaque(self.parent_hash) + tls_opaque(self.unmerged_leaves_bytes())
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "ParentNode":
@@ -402,6 +396,7 @@ class ParentNode:
 
 	@classmethod
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["ParentNode", int]:
+		"""RFC 9420 §7.3 deserialization."""
 		public_key, offset = read_opaque(data, offset)
 		parent_hash, offset = read_opaque(data, offset)
 		# RFC 9420 §7.3 unmerged_leaves<V> uses VarInt prefix
@@ -541,6 +536,7 @@ class RatchetTree:
 		"""Internal: parse the raw (already de-prefixed) optional<Node>[] bytes."""
 		nodes: list[LeafNode | ParentNode | None] = []
 		i = 0
+		node_idx = 0
 		while i < len(raw):
 			present = raw[i]
 			i += 1
@@ -552,15 +548,18 @@ class RatchetTree:
 				node_type = raw[i]
 				i += 1
 				if node_type == 0x01:
+					print(f"DEBUG: Node {node_idx} is LEAF. Type-relative hex={raw[i : i + 64].hex()}")
 					leaf, i = LeafNode.from_bytes_at(raw, i)
 					nodes.append(leaf)
 				elif node_type == 0x02:
+					print(f"DEBUG: Node {node_idx} is PARENT. Type-relative hex={raw[i : i + 64].hex()}")
 					parent, i = ParentNode.from_bytes_at(raw, i)
 					nodes.append(parent)
 				else:
 					raise ValueError(f"Unknown node type: {node_type:#04x}")
 			else:
 				raise ValueError(f"Invalid presence byte in RatchetTree: {present:#04x}")
+			node_idx += 1
 		num_leaves = (len(nodes) + 1) // 2
 		tree = cls(num_leaves)
 		tree.nodes = nodes
@@ -585,10 +584,10 @@ class RatchetTree:
 
 	def level(self, index: int) -> int:
 		"""RFC 9420 Appendix C: level(x) = number of trailing 1-bits."""
-		if index & 0x01 == 0:
+		if index < 0 or (index & 0x01 == 0):
 			return 0
 		k = 0
-		while (index >> k) & 0x01 == 1:
+		while (index >> k) & 0x01 == 1 and k < 32:
 			k += 1
 		return k
 
@@ -613,8 +612,7 @@ class RatchetTree:
 		p = x ^ ((0x01 << k) | (b << (k + 1)))
 		while p >= w:
 			pk = self.level(p)
-			pb = (p >> (pk + 1)) & 0x01
-			p = p ^ ((0x01 << pk) | (pb << (pk + 1)))
+			p = p ^ ((0x01 << pk) | (((p >> (pk + 1)) & 0x01) << (pk + 1)))
 		return p
 
 	def _sibling(self, x: int) -> int:
@@ -671,8 +669,10 @@ class RatchetTree:
 			x = p
 		return copath
 
-	def resolution(self, index: int) -> list[int]:
+	def resolution(self, index: int, _depth: int = 0) -> list[int]:
 		"""RFC 9420 §7.2: resolution(x) = non-blank subtree members."""
+		if _depth > 32:
+			raise RuntimeError(f"Infinite recursion in resolution for index {index}")
 		if index < 0 or index >= len(self.nodes):
 			return []
 		node = self.nodes[index]
@@ -682,7 +682,7 @@ class RatchetTree:
 		left = index - (1 << (lvl - 1))
 		right = index + (1 << (lvl - 1))
 		if self.nodes[index] is None:
-			return self.resolution(left) + self.resolution(right)
+			return self.resolution(left, _depth + 1) + self.resolution(right, _depth + 1)
 		unmerged = node.unmerged_leaves if isinstance(node, ParentNode) else []
 		return [index] + list(unmerged)
 
@@ -697,6 +697,8 @@ class RatchetTree:
 
 	def _node_hash(self, index: int) -> bytes:
 		"""Internal recursive helper for tree_hash."""
+		if index < 0 or index >= len(self.nodes):
+			return hashlib.sha256(b"\x00").digest()  # treat as blank leaf
 		node = self.nodes[index]
 		w = len(self.nodes)
 
@@ -716,8 +718,11 @@ class RatchetTree:
 
 			# LBBT: If right child is out of bounds, ratchet down the left path
 			# of the right subtree until we hit a node that exists.
-			while right_idx >= w:
+			while right_idx >= w and lvl > 0:
 				lvl_r = self.level(right_idx)
+				if lvl_r == 0:
+					right_idx -= 1
+					break
 				right_idx = right_idx - (1 << (lvl_r - 1))
 
 			left_h = self._node_hash(left_idx)

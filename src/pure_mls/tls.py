@@ -139,7 +139,20 @@ def _varint_decode(buf: bytes, offset: int) -> tuple[int, int]:
 	elif prefix == 2:
 		v = ((first & 0x3F) << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3]
 		return v, offset + 4
-	raise ValueError("Invalid varint prefix 0b11")
+	elif prefix == 3:
+		# 8-byte varint (64-bit)
+		v = (
+			((first & 0x3F) << 56)
+			| (buf[offset + 1] << 48)
+			| (buf[offset + 2] << 40)
+			| (buf[offset + 3] << 32)
+			| (buf[offset + 4] << 24)
+			| (buf[offset + 5] << 16)
+			| (buf[offset + 6] << 8)
+			| buf[offset + 7]
+		)
+		return v, offset + 8
+	raise ValueError("Actually impossible due to & 0x3")
 
 
 def tls_varint(n: int) -> bytes:
@@ -150,7 +163,9 @@ def tls_varint(n: int) -> bytes:
 		return ((n | 0x4000) & 0xFFFF).to_bytes(2, "big")
 	elif n <= 0x3FFFFFFF:
 		return ((n | 0x80000000) & 0xFFFFFFFF).to_bytes(4, "big")
-	raise ValueError(f"VarInt out of range: {n}")
+	elif n <= 0x3FFFFFFFFFFFFFFF:
+		return ((n | 0xC000000000000000) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
+	raise ValueError(f"VarInt out of range (max 62 bits): {n}")
 
 
 def read_vector16(buf: bytes, offset: int) -> tuple[bytes, int]:

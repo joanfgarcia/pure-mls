@@ -28,6 +28,8 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 	if index % 2 == 0:  # leaf
 		if node is None:
 			return hashlib.sha256(b"").digest()
+		from pure_mls.tree import LeafNode
+		assert isinstance(node, LeafNode)
 		return hashlib.sha256(node.key_package.to_bytes()).digest()
 
 	lvl = tree.level(index)
@@ -39,6 +41,10 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 
 	if node is None:
 		return hashlib.sha256(left_hash + right_hash).digest()
+
+	from pure_mls.tree import ParentNode
+	assert isinstance(node, ParentNode)
+	assert node.public_key is not None
 
 	parent_node_bytes = tls_opaque(node.public_key) + tls_opaque(node.parent_hash) + tls_opaque(node.unmerged_leaves_bytes())
 	return hashlib.sha256(parent_node_bytes + left_hash + right_hash).digest()
