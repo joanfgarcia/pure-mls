@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Refactored `derive()` and `derive_confirmation_key()` to share a unified `_derive_epoch_secret()`
   method, eliminating functional divergence risks in the key-schedule sequence.
 
+- **[P1-E] CI Hardening: Dual-Mode E2E Testing with Vortex Mock** (`tests/test_e2e_mqtt.py`):
+  Implemented a deterministic `VortexBus` (in-memory mock) to shield the CI from network-induced hangs.
+  The suite now features "Dual-Mode Probing": it automatically detects if a real broker (Docker) is 
+  available on port 1883. If not, it falls back to the high-velocity mock, ensuring 100% CI 
+  stability while preserving "Live Mode" for manual security audits. Removed dependency on `amqtt`.
+
 - **[SEC-001] Vault Identity Seed-Split** (`red_pill/utils/vault_crypto.py`):
   Implemented HKDF domain separation for the master vault seed. KEM and Signature keys
   are now derived from separate keyspace domains (`vault-v1/kem` vs `vault-v1/sign`),

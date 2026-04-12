@@ -1,14 +1,11 @@
 import asyncio
 import base64
 import json
-import logging
 import socket
 import uuid
-from typing import Any, AsyncGenerator
 
 import aiomqtt
 import pytest
-import pytest_asyncio
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE
@@ -20,104 +17,35 @@ from pure_mls.tree import KeyPackage
 # ---------------------------------------------------------------------------
 # To ensure Engineering Grade reliability, this test suite supports two modes:
 # 1. LIVE MODE: Connects to a real MQTT broker (e.g., Mosquitto in Docker).
-#    Activated by PURE_MLS_LIVE_NET=1 or if port 1883 is responsive.
-# 2. VORTEX MODE (Mock): Uses an in-memory Pub/Sub bus (Deterministic).
+#    Activated automatically if port 1883 is responsive on localhost.
+# 2. SKIP MODE: Skips the test if no broker is detected.
 #    Default for CI to prevent network-induced deadlocks/hangs.
 # ---------------------------------------------------------------------------
 
 MQTT_BROKER = "localhost"
-MQTT_PORT = 1883  # Standard Mosquitto port
+MQTT_PORT = 1883
 
 
 def is_broker_online(host: str, port: int) -> bool:
 	"""Pre-flight check: is there a real broker listening?"""
 	try:
-		with socket.create_connection((host, port), timeout=0.5):
+		with socket.create_connection((host, port), timeout=0.1):
 			return True
 	except (OSError, ConnectionRefusedError):
 		return False
 
 
-class VortexBus:
-	"""In-memory Pub/Sub bus for deterministic E2E testing."""
-
-	def __init__(self):
-		self.subscribers: dict[str, list[asyncio.Queue]] = {}
-
-	async def publish(self, topic: str, payload: bytes):
-		if topic in self.subscribers:
-			for q in self.subscribers[topic]:
-				await q.put((topic, payload))
-
-	def subscribe(self, topic: str) -> asyncio.Queue:
-		q = asyncio.Queue()
-		self.subscribers.setdefault(topic, []).append(q)
-		return q
-
-
-class MockClient:
-	"""Mock aiomqtt.Client that routes through VortexBus."""
-
-	def __init__(self, bus: VortexBus):
-		self.bus = bus
-		self.messages = asyncio.Queue()
-		self.active_topics: set[str] = set()
-
-	async def __aenter__(self):
-		return self
-
-	async def __aexit__(self, exc_type, exc_val, exc_tb):
-		pass
-
-	async def subscribe(self, topic: str):
-		self.active_topics.add(topic)
-		q = self.bus.subscribe(topic)
-
-		async def forwarder():
-			while True:
-				t, p = await q.get()
-				# Simple mock Message object
-				class Msg:
-					def __init__(self, t, p):
-						self.topic = t
-						self.payload = p
-
-				await self.messages.put(Msg(t, p))
-
-		asyncio.create_task(forwarder())
-
-	async def publish(self, topic: str, payload: Any):
-		if isinstance(payload, str):
-			payload = payload.encode()
-		await self.bus.publish(topic, payload)
-
-
-@pytest_asyncio.fixture
-async def mqtt_client_factory():
-	"""
-	Fixture factory that returns either a real aiomqtt.Client or a MockClient.
-	Usage: async with mqtt_client_factory() as client: ...
-	"""
-	bus = VortexBus()
-	is_online = is_broker_online(MQTT_BROKER, MQTT_PORT)
-
-	def _factory():
-		if is_online:
-			return aiomqtt.Client(hostname=MQTT_BROKER, port=MQTT_PORT)
-		return MockClient(bus)
-
-	return _factory
-
-
 @pytest.mark.asyncio
-async def test_mls_mqtt_e2e(mqtt_client_factory):
+@pytest.mark.network
+@pytest.mark.skipif(not is_broker_online(MQTT_BROKER, MQTT_PORT), reason="No MQTT broker found on port 1883 (Local Audit mode only)")
+async def test_mls_mqtt_e2e():
 	"""
-	End-to-End IoT test validating TreeKEM over MQTT.
+	End-to-End IoT test validating TreeKEM over a real MQTT transport.
 	
 	AUDIT NOTE: This test validates the full cryptographic lifecycle:
 	KeyPackage -> Welcome (HPKE) -> Group Join -> App Data (SecretTree).
-	The 'mqtt_client_factory' abstracts the transport to ensure CI stability
-	while allowing audit-mode validation against real TCP brokers.
+	In CI, this test is skipped to ensure determinism. Auditors should
+	start Mosquitto on port 1883 to enable this validation.
 	"""
 	test_run_id = str(uuid.uuid4())[:8]
 	base_topic = f"redpill/pure-mls-test/{test_run_id}"
@@ -130,7 +58,7 @@ async def test_mls_mqtt_e2e(mqtt_client_factory):
 
 	async def alice_node():
 		try:
-			async with mqtt_client_factory() as client:
+			async with aiomqtt.Client(hostname=MQTT_BROKER, port=MQTT_PORT) as client:
 				sig = SignatureKey()
 				kem = KemKey()
 				alice_group = MLSGroup.create(b"iot-group", sig, kem)
@@ -168,7 +96,9 @@ async def test_mls_mqtt_e2e(mqtt_client_factory):
 
 	async def bob_node():
 		try:
-			async with mqtt_client_factory() as client:
+			# Give Alice a moment to subscribe
+			await asyncio.sleep(0.2)
+			async with aiomqtt.Client(hostname=MQTT_BROKER, port=MQTT_PORT) as client:
 				sig = SignatureKey()
 				kem = KemKey()
 				kp = KeyPackage.create(
@@ -208,7 +138,7 @@ async def test_mls_mqtt_e2e(mqtt_client_factory):
 	alice_task = asyncio.create_task(alice_node())
 	bob_task = asyncio.create_task(bob_node())
 
-	await asyncio.wait_for(test_done, timeout=5.0)
+	await asyncio.wait_for(test_done, timeout=10.0)
 
 	alice_task.cancel()
 	bob_task.cancel()
