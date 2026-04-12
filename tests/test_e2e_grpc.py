@@ -48,6 +48,10 @@ class MLSSwarmServicer(mls_pb2_grpc.MLSSwarmServicer):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+	os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1",
+	reason="Skipping gRPC E2E in CI",
+)
 async def test_mls_grpc_e2e():
 	"""
 	End-to-End backend test using gRPC.

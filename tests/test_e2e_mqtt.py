@@ -12,32 +12,24 @@ from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
+import os
+
 # ---------------------------------------------------------------------------
 # Sovereign Audit Protocol: Dual-Mode Testing
 # ---------------------------------------------------------------------------
 # To ensure Engineering Grade reliability, this test suite supports two modes:
-# 1. LIVE MODE: Connects to a real MQTT broker (e.g., Mosquitto in Docker).
-#    Activated automatically if port 1883 is responsive on localhost.
-# 2. SKIP MODE: Skips the test if no broker is detected.
-#    Default for CI to prevent network-induced deadlocks/hangs.
+# 1. LIVE MODE: Connects to a real MQTT broker.
+# 2. SKIP MODE: Skips the test in CI/GitHub Actions to prevent hangs.
 # ---------------------------------------------------------------------------
 
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
-
-
-def is_broker_online(host: str, port: int) -> bool:
-	"""Pre-flight check: is there a real broker listening?"""
-	try:
-		with socket.create_connection((host, port), timeout=0.1):
-			return True
-	except (OSError, ConnectionRefusedError):
-		return False
+SKIP_E2E = os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1"
 
 
 @pytest.mark.asyncio
 @pytest.mark.network
-@pytest.mark.skipif(not is_broker_online(MQTT_BROKER, MQTT_PORT), reason="No MQTT broker found on port 1883 (Local Audit mode only)")
+@pytest.mark.skipif(SKIP_E2E, reason="Skipping E2E Network test in CI environment (Set PURE_MLS_FORCE_E2E=1 to over-ride)")
 async def test_mls_mqtt_e2e():
 	"""
 	End-to-End IoT test validating TreeKEM over a real MQTT transport.

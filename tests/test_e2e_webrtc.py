@@ -21,7 +21,10 @@ class MockSignaler:
 
 @pytest.mark.asyncio
 @pytest.mark.network
-@pytest.mark.skip(reason="Flaky in CI environment")
+@pytest.mark.skipif(
+	os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_MLS_FORCE_E2E") != "1",
+	reason="Skipping WebRTC E2E in CI",
+)
 async def test_mls_webrtc_e2e():
 	"""
 	End-to-End P2P test using aiortc (WebRTC Data Channels).
