@@ -1530,7 +1530,7 @@ class MLSGroup:
 		for i, node in enumerate(tree.nodes):
 			if i % 2 == 0 and isinstance(node, LeafNode):
 				if hmac.compare_digest(node.signature_key, my_sig_pub):
-					my_index = i
+					my_index = i // 2
 					break
 		if my_index is None:
 			raise ValueError("My leaf not found in GroupInfo tree — mismatched identity key")

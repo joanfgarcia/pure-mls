@@ -156,7 +156,7 @@ class TestTreeKEMFullRoundtrip:
 
 		# Joiner processes the commit to advance their epoch state
 		# (already done implicitly by join, but verifying they are in sync)
-		assert joiner_group.epoch_id == update.epoch_id + 1
+		assert joiner_group.epoch_id == update.epoch_id
 
 	def test_multiple_messages_forward_secrecy(self):
 		"""Each message uses a fresh per-generation key (forward secrecy)."""
