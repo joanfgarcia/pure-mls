@@ -89,7 +89,28 @@ sequenceDiagram
 | RFC 9180 | HPKE Base Mode (KEM+KDF+AEAD) | ✅ Compliant | SUITE_ID, labeled extract/expand, XOR nonce counter |
 | RFC 5869 | HKDF Extract + Expand | ✅ Compliant | — |
 
-> **Cross-implementation Interoperability**: Cryptographic primitives (HKDF, HPKE, KeySchedule)
-> are validated against OpenMLS-aligned test vectors (`tests/interop/`). Full wire-format
-> interoperability with external MLS implementations (OpenMLS, mlspp) is not verified and
-> is targeted as a v1.6.x milestone.
+---
+
+## 5. Testing & Validation Strategy (Dual-Mode Protocol)
+
+To ensure **Engineering Grade** reliability and full transparency for security auditors, `pure-mls` employs a Dual-Mode testing strategy. This separates the validation of the cryptographic protocol from the potential instabilities of physical network transports.
+
+### A. Vortex Mode (In-Memory Determinism)
+- **Used by**: GitHub Actions (CI), pre-PR audits.
+- **Mechanism**: Replaces network brokers (MQTT, WebSockets) with an internal `VortexBus` (using `asyncio.Queue`).
+- **Rationale**: 
+    - **Isolation**: Eliminates "flaky" failures caused by network latency, port conflicts, or broker deadlocks.
+    - **Velocity**: Runs thousands of cryptographic operations in seconds without TCP overhead.
+    - **Security**: Validates that the MLS state machine is correct regardless of the transport bitstream.
+
+### B. Live Mode (Audit Validation)
+- **Used by**: Manual security audits and locally verified runs.
+- **Mechanism**: Detects if a real broker (e.g., Mosquitto in Docker) is listening on `localhost:1883`. If responsive, the tests switch to a real TCP/IP transport.
+- **Auditor Instructions**:
+    1.  Ensure Docker is running.
+    2.  Start the test broker: `docker run -d -p 1883:1883 eclipse-mosquitto:1.6.15`
+    3.  Run the suite: `pytest tests/test_e2e_mqtt.py -v`
+    4.  The logs will indicate `"Sovereign Audit Protocol: LIVE MODE active"`.
+
+> [!IMPORTANT]
+> **Cryptographic Equivalence**: Whether in Vortex or Live mode, the binary payloads (`MLSMessage`, `Welcome`, `Ciphertext`) are identical. The `MockClient` in Vortex mode handles the exact same `base64`/`json` framing used by real agents.
