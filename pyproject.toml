@@ -1,10 +1,10 @@
 [project]
 name = "pure-mls"
-version = "3.0.4.1"
+version = "3.0.4.2"
 description = "Pure Python MLS implementation with CLI. Still maturing the application messaging CLI commands."
 readme = "README.md"
 authors = [
-    { name = "Joan F Garcia", email = "joanfgarcia@gmail.com" }
+    { name = "Joan F Garcia" }
 ]
 requires-python = ">=3.12"
 dependencies = [

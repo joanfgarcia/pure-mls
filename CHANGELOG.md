@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4.2] - 2026-04-12 (Privacy Hotfix)
+### Security
+- **Privacy Update**: Removed author email from `pyproject.toml` metadata to prevent scraping from PyPI.
+
 ## [3.0.4.1] - 2026-04-12 (PyPI Link Hotfix)
 ### Fixed
 - **PyPI Page Rendering**: Replaced relative paths inside `README.md` with absolute GitHub repository URLs so that users browsing `pypi.org` can successfully click and read the markdown documentation.
