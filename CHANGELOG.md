@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3.1] - 2026-04-12  (CI Hardening & Infinite Loop Remediation)
+
+### Fixed
+- **[CI-01] Infinite collection hang in `3rdparty/`**: 
+  Configured `pytest` (`pyproject.toml`) to explicitly exclude `3rdparty/` from test discovery. 
+  Prevents `pytest` from importing the OpenMLS interop runner at collect-time, which 
+  contained a blocking `while` loop waiting for network ports, causing CI deadlocks.
+  
+- **[TreeKEM-01] Infinite loop in `SecretTree` navigation** (`group.py`):
+  Fixed a critical index-derivation bug in `MLSGroup.join()` where `my_index` was being 
+  set to the **Node Index** (0, 2, 4...) instead of the **Leaf Index** (0, 1, 2...). 
+  This caused the `SecretTree` to traverse into invalid node indices, triggering an 
+  infinite `while curr != root_node` loop during application message encryption.
+
+- **[TreeKEM-02] Test assertion synchronization**:
+  Updated `test_treekem.py` and `test_wire_format.py` to match current architectural 
+  realities (epoch-id persistence and removal of legacy `.commit` nested attribute).
+
+### Changed
+- **Linter Hardening**: Updated `pyproject.toml` with strict `asyncio_mode` and 
+  `testpaths` to ensure deterministic execution of the test suite.
+
 ## [3.0.3.0] - 2026-04-12  (B760 Engineering Grade Certification)
 
 ### Fixed (B760 Final P1 Remediation — Full RFC 9420 Compliance)
