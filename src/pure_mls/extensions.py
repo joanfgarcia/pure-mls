@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from typing import List
 
 from pure_mls.tls import (
+	_varint_decode as tls_varint_decode,
+)
+from pure_mls.tls import (
 	read_extensions,
 	read_opaque,
 	read_u8,
@@ -59,20 +62,20 @@ class Capabilities:
 	def from_bytes_at(cls, data: bytes, offset: int = 0) -> tuple["Capabilities", int]:
 		"""Context-aware parsing matching OpenMLS wire format."""
 
-		# RFC 9420 §7.2: Capabilities vectors have range <0..255>, meaning 1st byte is length (uint8).
-		# OpenMLS and standard MLS implementations follow this TLS 1.3 convention.
-		def read_u8_vec(buf: bytes, off: int) -> tuple[List[int], int]:
-			length, off = read_u8(buf, off)
+		def read_varint_vec(buf: bytes, off: int) -> tuple[List[int], int]:
+			length, off = tls_varint_decode(buf, off)
 			raw = buf[off : off + length]
-			# Elements are uint16 as per RFC 9420 Appendix B
+			# Elements are uint16 as per RFC 9420 Appendix B and OpenMLS impl
 			values = [int.from_bytes(raw[i : i + 2], "big") for i in range(0, len(raw), 2)]
 			return values, off + length
 
-		versions, offset = read_u8_vec(data, offset)
-		ciphersuites, offset = read_u8_vec(data, offset)
-		extensions, offset = read_u8_vec(data, offset)
-		proposals, offset = read_u8_vec(data, offset)
-		credentials, offset = read_u8_vec(data, offset)
+		# In pure_mls.tls, _varint_decode is the partner to tls_varint
+
+		versions, offset = read_varint_vec(data, offset)
+		ciphersuites, offset = read_varint_vec(data, offset)
+		extensions, offset = read_varint_vec(data, offset)
+		proposals, offset = read_varint_vec(data, offset)
+		credentials, offset = read_varint_vec(data, offset)
 		return cls(versions, ciphersuites, extensions, proposals, credentials), offset
 
 	@classmethod

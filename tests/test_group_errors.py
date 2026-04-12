@@ -90,7 +90,6 @@ def test_process_update_errors():
 	_ctx1 = _make_group_context(group.group_id, epoch_id, tree, transcript_hash)
 	_fc1 = FramedContent(group_id=group.group_id, epoch=epoch_id, sender_leaf_index=0, authenticated_data=b"", content=_body1)
 	_tbs1 = _make_framed_content_tbs(_ctx1, _fc1)
-	from pure_mls.proposals import Commit
 
 	update = GroupUpdate(
 		epoch_id=epoch_id,
@@ -99,7 +98,13 @@ def test_process_update_errors():
 		committer_index=0,
 		signature=sig.sign(_tbs1),
 		group_id=group.group_id,
-		commit=Commit(proposals=[]),
+		update_path=None,
+		_group_ctx=None,
+		_confirmation_key=b"",
+		_epoch_authenticator=b"",
+		_membership_key=b"",
+		_transcript_hash=b"",
+		_confirmation_tag=b"",
 	)
 
 	# No KPRef for my leaf -> raises ValueError (feature branch validates signature first)
@@ -154,7 +159,13 @@ def test_process_update_errors():
 		committer_index=0,
 		signature=sig.sign(_tbs2),
 		group_id=b"g1",
-		commit=Commit(proposals=[]),
+		update_path=None,
+		_group_ctx=None,
+		_confirmation_key=b"",
+		_epoch_authenticator=b"",
+		_membership_key=b"",
+		_transcript_hash=b"",
+		_confirmation_tag=b"",
 	)
 
 	with pytest.raises((ValueError, InvalidTag)):
@@ -170,7 +181,13 @@ def test_process_update_errors():
 		committer_index=1,
 		signature=b"",
 		group_id=b"g1",
-		commit=Commit(proposals=[]),
+		update_path=None,
+		_group_ctx=None,
+		_confirmation_key=b"",
+		_epoch_authenticator=b"",
+		_membership_key=b"",
+		_transcript_hash=b"",
+		_confirmation_tag=b"",
 	)
 	with pytest.raises(ValueError, match="Invalid committer index|Out of order update|negative shift count"):
 		group.process_update(update_parent)
