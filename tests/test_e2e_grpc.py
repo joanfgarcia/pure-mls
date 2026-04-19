@@ -7,8 +7,8 @@ import grpc
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "protos"))
-import mls_pb2
-import mls_pb2_grpc
+import mls_pb2  # type: ignore
+import mls_pb2_grpc  # type: ignore
 
 from pure_mls.group import MLSGroup, Welcome
 from pure_mls.hpke import HPKE

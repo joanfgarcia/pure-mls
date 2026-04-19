@@ -25,7 +25,7 @@ _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "tests.protos.mls_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-	DESCRIPTOR._loaded_options = None
+	DESCRIPTOR._loaded_options = None  # type: ignore[attr-defined]
 	_globals["_JOINREQUEST"]._serialized_start = 35
 	_globals["_JOINREQUEST"]._serialized_end = 87
 	_globals["_JOINRESPONSE"]._serialized_start = 89

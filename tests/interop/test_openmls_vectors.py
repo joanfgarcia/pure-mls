@@ -93,7 +93,7 @@ _HKDF_TC3 = {
 	],
 )
 def test_hkdf_extract_rfc5869(tc: dict) -> None:
-	"""HKDF-Extract must match RFC 5869 PRK vectors exactly."""
+	# type: ignore[arg-type]
 	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)
 	assert prk == tc["prk"], f"PRK mismatch: {prk.hex()} != {tc['prk'].hex()}"
 
@@ -107,7 +107,7 @@ def test_hkdf_extract_rfc5869(tc: dict) -> None:
 	],
 )
 def test_hkdf_expand_rfc5869(tc: dict) -> None:
-	"""HKDF-Expand must match RFC 5869 OKM vectors exactly."""
+	# type: ignore[arg-type]
 	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)
 	okm = hkdf_expand(prk, tc["info"], tc["length"], hashlib.sha256)
 	assert okm == tc["okm"], f"OKM mismatch: {okm.hex()} != {tc['okm'].hex()}"
@@ -148,7 +148,12 @@ _EXPAND_CASES = [
 
 # Pre-compute expected values so the tests are self-contained using VarInt encoding
 for _tc in _EXPAND_CASES:
-	_tc["expected"] = expand_with_label(_tc["secret"], _tc["label"].decode(), _tc["context"], _tc["length"])
+	_tc["expected"] = expand_with_label(
+		_tc["secret"],  # type: ignore[arg-type]
+		_tc["label"].decode(),  # type: ignore[attr-defined]
+		_tc["context"],  # type: ignore[arg-type]
+		_tc["length"],  # type: ignore[arg-type]
+	)
 
 
 @pytest.mark.parametrize(

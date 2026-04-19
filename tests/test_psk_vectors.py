@@ -8,7 +8,7 @@ from pure_mls.keyschedule import PSK_TYPE_EXTERNAL, PreSharedKeyID, _psk_secret
 
 # ── IETF Test Vectors (cipher_suite=1 = MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) ──
 
-VECTORS_CS1 = [
+VECTORS_CS1: list[dict] = [
 	# 0 PSKs
 	{
 		"psks": [],

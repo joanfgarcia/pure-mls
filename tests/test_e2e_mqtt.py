@@ -28,7 +28,7 @@ SKIP_E2E = os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("PURE_M
 @pytest.mark.asyncio
 @pytest.mark.network
 @pytest.mark.skipif(SKIP_E2E, reason="Skipping E2E Network test in CI environment (Set PURE_MLS_FORCE_E2E=1 to over-ride)")
-async def test_mls_mqtt_e2e():
+async def test_mls_mqtt_e2e(mqtt_broker):
 	"""
 	End-to-End IoT test validating TreeKEM over a real MQTT transport.
 

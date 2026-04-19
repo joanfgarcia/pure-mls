@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4.3] - 2026-04-19 (Test Suite Stabilization)
+### Added
+- **Automated MQTT Broker**: Integrated an internal `amqtt` broker lifecycle via `pytest-asyncio` session fixtures. Removes external dependencies and manual background processes for E2E tests.
+
+### Fixed
+- **Mypy Type Safety**: Resolved 22 type errors in test vectors and core CLI. Added missing type stubs for `protobuf` and `grpcio`.
+- **Linting Compliance**: Enforced "Sound of Silence" (Tabs only) across all test scripts used for auditing and infrastructure.
+- **gRPC E2E Stability**: Fixed import desyncs in generated protobuf tests.
+
 ## [3.0.4.2] - 2026-04-12 (Privacy Hotfix)
 ### Security
 - **Privacy Update**: Removed author email from `pyproject.toml` metadata to prevent scraping from PyPI.
