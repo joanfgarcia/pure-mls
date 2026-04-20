@@ -1,23 +1,26 @@
 import asyncio
+
 import pytest
 import pytest_asyncio
 from amqtt.broker import Broker
+
 
 @pytest.fixture(scope="function")
 def mqtt_broker_config():
 	"""Returns the standard configuration for the test broker."""
 	return {
-		'listeners': {
-			'default': {
-				'type': 'tcp',
-				'bind': '127.0.0.1:1883',
+		"listeners": {
+			"default": {
+				"type": "tcp",
+				"bind": "127.0.0.1:1883",
 			}
 		},
-		'sys_interval': 10,
-		'auth': {
-			'allow-anonymous': True,
-		}
+		"sys_interval": 10,
+		"auth": {
+			"allow-anonymous": True,
+		},
 	}
+
 
 @pytest_asyncio.fixture(scope="function")
 async def mqtt_broker(mqtt_broker_config):
@@ -27,10 +30,10 @@ async def mqtt_broker(mqtt_broker_config):
 	"""
 	broker = Broker(mqtt_broker_config)
 	await broker.start()
-	
+
 	# Small delay to ensure the listener is ready
 	await asyncio.sleep(0.5)
-	
+
 	yield broker
-	
+
 	await broker.shutdown()
