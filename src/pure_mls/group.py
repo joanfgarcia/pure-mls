@@ -676,9 +676,7 @@ class MLSMessage:
 			# Full RFC mode: proper confirmation_tag + membership_tag
 			pm = PublicMessage.from_group_update(
 				commit,
-				group_ctx=commit._group_ctx,
 				confirmation_key=commit._confirmation_key,
-				membership_key=commit._membership_key,
 				transcript_hash=commit._transcript_hash,
 				old_group_ctx=commit._old_group_ctx,
 			)
@@ -888,9 +886,7 @@ class PublicMessage:
 	def from_group_update(
 		cls,
 		update: "GroupUpdate",
-		group_ctx: "GroupContext",
 		confirmation_key: bytes,
-		membership_key: bytes,
 		transcript_hash: bytes,
 		old_group_ctx: "GroupContext",
 	) -> "PublicMessage":

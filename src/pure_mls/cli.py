@@ -2,7 +2,7 @@ import argparse
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
-from pure_mls.group import MLSGroup, GroupUpdate, MLSMessage
+from pure_mls.group import MLSGroup, MLSMessage
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
