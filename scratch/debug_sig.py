@@ -1,6 +1,6 @@
-import os
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from pure_mls.group import MLSGroup, GroupUpdate
+
+from pure_mls.group import MLSGroup, MLSMessage
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
@@ -22,7 +22,6 @@ alice = MLSGroup.create(b"test_group", sig_alice, kem_alice)
 new_alice, welcome, commit = alice.add_member(kp_bob)
 
 # Try applying the commit directly to alice (this should fail with out of order, or we can just test wrap/unwrap)
-from pure_mls.group import MLSMessage
 
 wrapped = MLSMessage.wrap_commit(commit)
 unwrapped = wrapped.unwrap_commit()

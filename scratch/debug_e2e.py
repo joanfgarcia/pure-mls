@@ -1,6 +1,6 @@
-import os
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from pure_mls.group import MLSGroup, GroupUpdate, MLSMessage
+
+from pure_mls.group import MLSGroup, MLSMessage
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
@@ -58,7 +58,7 @@ unwrapped_commit = msg.unwrap_commit()
 try:
 	bob = bob.apply_commit(unwrapped_commit)
 	print("SUCCESS: Bob applied commit!")
-except Exception as e:
+except Exception:
 	import traceback
 
 	traceback.print_exc()
