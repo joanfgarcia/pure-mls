@@ -548,11 +548,11 @@ class RatchetTree:
 				node_type = raw[i]
 				i += 1
 				if node_type == 0x01:
-					print(f"DEBUG: Node {node_idx} is LEAF. Type-relative hex={raw[i : i + 64].hex()}")
+					pass  # print(f"DEBUG: Node {node_idx} is LEAF. Type-relative hex={raw[i : i + 64].hex()}")
 					leaf, i = LeafNode.from_bytes_at(raw, i)
 					nodes.append(leaf)
 				elif node_type == 0x02:
-					print(f"DEBUG: Node {node_idx} is PARENT. Type-relative hex={raw[i : i + 64].hex()}")
+					pass  # print(f"DEBUG: Node {node_idx} is PARENT. Type-relative hex={raw[i : i + 64].hex()}")
 					parent, i = ParentNode.from_bytes_at(raw, i)
 					nodes.append(parent)
 				else:

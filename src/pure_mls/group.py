@@ -557,6 +557,7 @@ class GroupUpdate:
 	# RFC 9420 §6.2 context fields — carried for PublicMessage construction
 	# Set by add_member(); None when GroupUpdate is deserialized from wire.
 	_group_ctx: "GroupContext | None" = None
+	_old_group_ctx: "GroupContext | None" = None
 	_confirmation_key: bytes | None = None
 	_epoch_authenticator: bytes | None = None
 	_membership_key: bytes | None = None
@@ -669,6 +670,7 @@ class MLSMessage:
 		"""Wrap a GroupUpdate (Commit) in an MLSMessage envelope as RFC PublicMessage."""
 		if (
 			commit._group_ctx is not None
+			and commit._old_group_ctx is not None
 			and commit._confirmation_key is not None
 			and commit._epoch_authenticator is not None
 			and commit._membership_key is not None
@@ -681,6 +683,7 @@ class MLSMessage:
 				confirmation_key=commit._confirmation_key,
 				membership_key=commit._membership_key,
 				transcript_hash=commit._transcript_hash,
+				old_group_ctx=commit._old_group_ctx,
 			)
 		else:
 			# P0-2: Deserialized GroupUpdate carries no epoch context — cannot produce
@@ -892,6 +895,7 @@ class PublicMessage:
 		confirmation_key: bytes,
 		membership_key: bytes,
 		transcript_hash: bytes,
+		old_group_ctx: "GroupContext",
 	) -> "PublicMessage":
 		"""Wrap a GroupUpdate as a RFC 9420 PublicMessage.
 
@@ -902,8 +906,8 @@ class PublicMessage:
 		"""
 		commit_body = update.to_bytes()
 		framed = FramedContent(
-			group_id=group_ctx.group_id,
-			epoch=update.epoch_id,
+			group_id=old_group_ctx.group_id,
+			epoch=old_group_ctx.epoch,
 			sender_leaf_index=update.committer_index,
 			authenticated_data=b"",
 			content=commit_body,
@@ -918,16 +922,18 @@ class PublicMessage:
 		)
 
 		# RFC 9420 §6.2: membership_key = ExpandWithLabel(epoch_authenticator, 'membership', b'', 32)
-		# membership key from KeySchedule (P0-MK)
-		# PublicMessageTBS must match _make_framed_content_tbs
-		public_msg_tbs = _make_framed_content_tbs(group_ctx, framed)
-		mem_tag = hmac.new(membership_key, public_msg_tbs, "sha256").digest()
+		# Use the membership_tag pre-computed by add_member/update_key (which correctly uses the OLD membership_key)
+		mem_tag = update._membership_tag
+		if mem_tag is None:
+			raise ValueError("GroupUpdate is missing _membership_tag")
 
 		return cls(content=framed, auth=auth, membership_tag=mem_tag)
 
 	def to_group_update(self) -> "GroupUpdate":
 		update = GroupUpdate.from_bytes(self.content.content)
+		update.signature = self.auth.signature
 		update._confirmation_tag = self.auth.confirmation_tag
+		update.group_id = self.content.group_id
 		update._membership_tag = self.membership_tag
 		return update
 
@@ -1140,19 +1146,22 @@ class MLSGroup:
 
 		# P1-A: Build FramedContent BEFORE computing the transcript hash.
 		# The unsigned body and FramedContent only depend on epoch/tree/secrets — not on transcript_hash.
-		_unsigned_body = (
-			tls_u64(new_epoch_id)
-			+ tls_opaque32(new_tree.to_bytes())
-			+ tls_u32(len(encrypted_secrets))
-			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(encrypted_secrets.items()))
-			+ tls_u32(self.my_index)
+		update = GroupUpdate(
+			epoch_id=new_epoch_id,
+			tree=new_tree,
+			encrypted_commit_secrets=encrypted_secrets,
+			committer_index=self.my_index,
+			signature=b"",
+			update_path=update_path,
+			group_id=self.group_id,
 		)
+
 		_framed_for_tbs = FramedContent(
 			group_id=self.group_id,
 			epoch=self.state.epoch_id,
 			sender_leaf_index=self.my_index,
 			authenticated_data=b"",
-			content=_unsigned_body,
+			content=update._body_bytes(),
 		)
 		framed_content_bytes = _framed_for_tbs.to_bytes()
 
@@ -1160,6 +1169,7 @@ class MLSGroup:
 		old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
 		tbs = _make_framed_content_tbs(old_ctx, _framed_for_tbs)
 		signature = self.my_sig_key.sign(tbs)
+		update.signature = signature
 
 		# P1-TH & P1-CTH: Transcript Hash Sequence
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
@@ -1245,21 +1255,14 @@ class MLSGroup:
 		)
 
 		_conf_tag_sender = hmac.new(next_state.key_schedule.confirmation_key, transcript_hash, "sha256").digest()
-		update = GroupUpdate(
-			epoch_id=next_state.epoch_id,
-			group_id=self.group_id,
-			tree=new_tree,
-			encrypted_commit_secrets=encrypted_secrets,
-			committer_index=self.my_index,
-			signature=signature,
-			update_path=update_path,
-			_group_ctx=new_ctx_signed,
-			_confirmation_key=next_state.key_schedule.confirmation_key,
-			_epoch_authenticator=next_state.key_schedule.epoch_authenticator,
-			_membership_key=next_state.key_schedule.membership_key,
-			_transcript_hash=transcript_hash,
-			_confirmation_tag=_conf_tag_sender,  # P0-02: carried for receiver-side verification
-		)
+
+		update._group_ctx = new_ctx_signed
+		update._old_group_ctx = old_ctx
+		update._confirmation_key = next_state.key_schedule.confirmation_key
+		update._epoch_authenticator = next_state.key_schedule.epoch_authenticator
+		update._membership_key = next_state.key_schedule.membership_key
+		update._transcript_hash = transcript_hash
+		update._confirmation_tag = _conf_tag_sender
 
 		# P1-B: Attach membership_tag to local update for verification consistency
 		auth_content_tbs = _make_framed_content_tbs(old_ctx, _framed_for_tbs)
@@ -1419,6 +1422,7 @@ class MLSGroup:
 
 		# Store context values needed by wrap_commit()
 		update._group_ctx = new_ctx
+		update._old_group_ctx = old_ctx
 		update._confirmation_key = next_state.key_schedule.confirmation_key
 		update._epoch_authenticator = next_state.key_schedule.epoch_authenticator
 		update._membership_key = next_state.key_schedule.membership_key
@@ -1562,6 +1566,7 @@ class MLSGroup:
 		)
 
 		update._group_ctx = new_ctx
+		update._old_group_ctx = old_ctx
 		update._confirmation_key = next_state.key_schedule.confirmation_key
 		update._epoch_authenticator = next_state.key_schedule.epoch_authenticator
 		update._membership_key = next_state.key_schedule.membership_key
@@ -1779,19 +1784,12 @@ class MLSGroup:
 			commit_secret = HPKE.open(self.my_kem_key, enc, ct_bytes, info=_up_info(group_ctx.to_bytes()))
 
 		# 2. Recompute transcript hash using RFC §8.2 two-pass chain (P1-NEW-1)
-		_unsigned_body_v = (
-			tls_u64(update.epoch_id)
-			+ tls_opaque32(update.tree.to_bytes())
-			+ tls_u32(len(update.encrypted_commit_secrets))
-			+ b"".join(tls_opaque(k) + tls_opaque(v) for k, v in sorted(update.encrypted_commit_secrets.items()))
-			+ tls_u32(update.committer_index)
-		)
 		_framed_v = FramedContent(
 			group_id=self.group_id,
 			epoch=self.state.epoch_id,
 			sender_leaf_index=update.committer_index,
 			authenticated_data=b"",
-			content=_unsigned_body_v,
+			content=update._body_bytes(),
 		)
 		framed_content_bytes_v = _framed_v.to_bytes()
 
@@ -1813,7 +1811,7 @@ class MLSGroup:
 			raise ValueError("RFC §6.2: membership_tag absent — refusing non-member commit")
 		expected_mem_tag = hmac.new(self.state.key_schedule.membership_key, tbs, "sha256").digest()
 		if not hmac.compare_digest(expected_mem_tag, update._membership_tag):
-			raise ValueError("Membership tag mismatch")
+			raise ValueError(f"Membership tag mismatch: expected {expected_mem_tag.hex()} != got {update._membership_tag.hex()}")
 
 		# P1-TH & P1-CTH: Transcript Hash Sequence
 		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes_v, update.signature)

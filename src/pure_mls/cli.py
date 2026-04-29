@@ -2,7 +2,7 @@ import argparse
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
-from pure_mls.group import MLSGroup, GroupUpdate
+from pure_mls.group import MLSGroup, GroupUpdate, MLSMessage
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
 
@@ -101,7 +101,7 @@ def main() -> None:
 		with open(args.out_welcome, "wb") as f:
 			f.write(welcome.to_bytes())
 		with open(args.out_commit, "wb") as f:
-			f.write(commit.to_bytes())
+			f.write(MLSMessage.wrap_commit(commit).to_bytes())
 		print(f"Added member! State updated at {out_state}.")
 		print(f"Distribute {args.out_welcome} to the new member, and {args.out_commit} to existing members.")
 
@@ -130,7 +130,7 @@ def main() -> None:
 		with open(out_state, "wb") as f:
 			f.write(new_group.to_bytes())
 		with open(args.out_commit, "wb") as f:
-			f.write(commit.to_bytes())
+			f.write(MLSMessage.wrap_commit(commit).to_bytes())
 		print(f"Removed member {args.leaf_index}! State updated at {out_state}.")
 		print(f"Distribute {args.out_commit} to the remaining members.")
 
@@ -144,7 +144,7 @@ def main() -> None:
 		with open(out_state, "wb") as f:
 			f.write(new_group.to_bytes())
 		with open(args.out_commit, "wb") as f:
-			f.write(commit.to_bytes())
+			f.write(MLSMessage.wrap_commit(commit).to_bytes())
 		print(f"Key rotated! State updated at {out_state}.")
 		print(f"Distribute {args.out_commit} to all members.")
 
@@ -152,7 +152,8 @@ def main() -> None:
 		with open(args.group_state, "rb") as f:
 			group = MLSGroup.from_bytes(f.read())
 		with open(args.commit, "rb") as f:
-			commit = GroupUpdate.from_bytes(f.read())
+			msg = MLSMessage.from_bytes(f.read())
+			commit = msg.unwrap_commit()
 
 		new_group = group.apply_commit(commit)
 
