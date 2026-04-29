@@ -94,7 +94,7 @@ _HKDF_TC3 = {
 )
 def test_hkdf_extract_rfc5869(tc: dict) -> None:
 	# type: ignore[arg-type]
-	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)
+	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)  # type: ignore[arg-type]
 	assert prk == tc["prk"], f"PRK mismatch: {prk.hex()} != {tc['prk'].hex()}"
 
 
@@ -108,8 +108,8 @@ def test_hkdf_extract_rfc5869(tc: dict) -> None:
 )
 def test_hkdf_expand_rfc5869(tc: dict) -> None:
 	# type: ignore[arg-type]
-	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)
-	okm = hkdf_expand(prk, tc["info"], tc["length"], hashlib.sha256)
+	prk = hkdf_extract(tc["salt"], tc["ikm"], hashlib.sha256)  # type: ignore[arg-type]
+	okm = hkdf_expand(prk, tc["info"], tc["length"], hashlib.sha256)  # type: ignore[arg-type]
 	assert okm == tc["okm"], f"OKM mismatch: {okm.hex()} != {tc['okm'].hex()}"
 
 

@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 import pytest_asyncio
-from amqtt.broker import Broker
+from amqtt.broker import Broker  # type: ignore[import-untyped]
 
 
 @pytest.fixture(scope="function")
