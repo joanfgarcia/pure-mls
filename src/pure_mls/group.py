@@ -1434,6 +1434,148 @@ class MLSGroup:
 		new_group._consumed_key_packages = set(self._consumed_key_packages)
 		return new_group, update
 
+	def update_key(self) -> tuple["MLSGroup", "GroupUpdate"]:
+		"""RFC 9420 §12.1.2: Update the committer's leaf key.
+
+		This provides Post-Compromise Security (PCS) by generating a fresh
+		leaf key and rotating all nodes along the direct path.
+		"""
+		new_num_leaves = self.state.tree.num_leaves
+		new_tree = RatchetTree(num_leaves=new_num_leaves)
+		for i, node in enumerate(self.state.tree.nodes):
+			if node is not None:
+				if isinstance(node, LeafNode):
+					new_tree.set_leaf(i, node)
+				elif isinstance(node, ParentNode):
+					new_tree.set_parent(i, node)
+
+		new_epoch_id = self.epoch_id + 1
+
+		# Step 2: TreeKEM UpdatePath (RFC 9420 §12.1.1)
+		my_node_idx = 2 * self.my_index
+		leaf_path_secret = os.urandom(32)
+		direct = new_tree.direct_path(my_node_idx)
+		cop = new_tree.copath(my_node_idx)
+
+		_path_secrets: list[bytes] = []
+		current_secret = leaf_path_secret
+		for _ in direct:
+			current_secret = _derive_next_path_secret(current_secret)
+			_path_secrets.append(current_secret)
+
+		commit_secret: bytes = _path_secrets[-1] if _path_secrets else leaf_path_secret
+
+		new_committer_kem = KemKey()
+		new_committer_kp = KeyPackage.create(
+			encryption_key=new_committer_kem.public_bytes(),
+			init_key_pub=KemKey().public_bytes(),
+			signature_key=self.my_sig_key.public_bytes(),
+			identity=self.my_sig_key.public_bytes(),
+			sign_fn=self.my_sig_key.sign,
+		)
+		new_tree.set_leaf(my_node_idx, new_committer_kp.leaf_node)
+
+		_parent_hashes: list[bytes] = [b""] * len(direct)
+		_node_pubs: list[bytes] = []
+		for ps in _path_secrets:
+			_node_secret = _derive_path_node_key(ps)
+			_kem_node = KemKey.from_secret(_node_secret)
+			_node_pubs.append(_kem_node.public_bytes())
+
+		for node_i in range(len(direct) - 1, -1, -1):
+			dp_idx, cop_idx = direct[node_i], cop[node_i]
+			ph_above = _parent_hashes[node_i + 1] if node_i + 1 < len(direct) else b""
+			_ph = _compute_parent_hash(_node_pubs[node_i], ph_above, _subtree_hash(new_tree, cop_idx))
+			_parent_hashes[node_i] = _ph
+			new_tree.set_parent(dp_idx, ParentNode(public_key=_node_pubs[node_i], parent_hash=_ph))
+
+		group_ctx_pre = _make_group_context(self.group_id, new_epoch_id, new_tree, self.interim_transcript_hash)
+
+		update_path_nodes: list[UpdatePathNode] = []
+		for (dp_idx, cop_idx, ps), _new_pub in zip(zip(direct, cop, _path_secrets), _node_pubs):
+			resolved = new_tree.resolution(cop_idx)
+			ctexts: list[HPKECiphertext] = []
+			for res_idx in resolved:
+				res_node = new_tree.get_node(res_idx)
+				if res_node is None:
+					continue
+				enc, ct = HPKE.seal(res_node.public_key, ps, info=_up_info(group_ctx_pre.to_bytes()))
+				ctexts.append(HPKECiphertext(kem_output=enc, ciphertext=ct))
+			update_path_nodes.append(UpdatePathNode(new_public_key=_new_pub, encrypted_path_secret=ctexts))
+
+		update_path = UpdatePath(leaf_key_package=new_committer_kp, nodes=update_path_nodes)
+		encrypted_commit_secrets: dict[bytes, bytes] = {}
+		for leaf_idx in range(0, len(new_tree.nodes), 2):
+			node = new_tree.get_node(leaf_idx)
+			if node is None or leaf_idx == my_node_idx:
+				continue
+			if not isinstance(node, LeafNode):
+				continue
+			kp_ref = _make_kp_ref(node.key_package)
+			enc, ct = HPKE.seal(node.public_key, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
+			encrypted_commit_secrets[kp_ref] = enc + ct
+
+		update = GroupUpdate(
+			epoch_id=new_epoch_id,
+			tree=new_tree,
+			encrypted_commit_secrets=encrypted_commit_secrets,
+			committer_index=self.my_index,
+			signature=b"",
+			update_path=update_path,
+			group_id=self.group_id,
+		)
+		unsigned_body = update._body_bytes()
+
+		framed_content = FramedContent(
+			group_id=self.group_id,
+			epoch=self.state.epoch_id,
+			sender_leaf_index=self.my_index,
+			authenticated_data=b"",
+			content=unsigned_body,
+		)
+		framed_content_bytes = framed_content.to_bytes()
+
+		old_ctx = _make_group_context(self.group_id, self.state.epoch_id, self.state.tree, self.interim_transcript_hash)
+		tbs = _make_framed_content_tbs(old_ctx, framed_content)
+		signature = self.my_sig_key.sign(tbs)
+		update.signature = signature
+
+		confirmed_input = _compute_confirmed_transcript_hash_input(framed_content_bytes, signature)
+		transcript_hash = _compute_confirmed_transcript_hash(self.interim_transcript_hash, confirmed_input)
+
+		_provisional_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		_conf_key = KeySchedule.derive_confirmation_key(
+			init_secret=self.state.key_schedule.init_secret,
+			commit_secret=commit_secret,
+			group_context=_provisional_ctx.to_bytes(),
+			psk_list=None,
+		)
+
+		_conf_tag = hmac.new(_conf_key, transcript_hash, "sha256").digest()
+		new_interim = _compute_interim_transcript_hash(transcript_hash, _conf_tag)
+
+		new_ctx = _make_group_context(self.group_id, new_epoch_id, new_tree, transcript_hash)
+		next_state = self.state.advance_epoch(
+			commit_secret,
+			new_tree,
+			group_context=new_ctx.to_bytes(),
+		)
+
+		update._group_ctx = new_ctx
+		update._confirmation_key = next_state.key_schedule.confirmation_key
+		update._epoch_authenticator = next_state.key_schedule.epoch_authenticator
+		update._membership_key = next_state.key_schedule.membership_key
+		update._transcript_hash = transcript_hash
+		update._confirmation_tag = _conf_tag
+
+		auth_content_tbs = _make_framed_content_tbs(old_ctx, framed_content)
+		update._membership_tag = hmac.new(self.state.key_schedule.membership_key, auth_content_tbs, "sha256").digest()
+
+		self._wipe_secret_tree()
+		new_group = MLSGroup(next_state, self.my_index, self.my_sig_key, new_committer_kem, interim_transcript_hash=new_interim)
+		new_group._consumed_key_packages = set(self._consumed_key_packages)
+		return new_group, update
+
 	@classmethod
 	def join(
 		cls,
@@ -1577,6 +1719,10 @@ class MLSGroup:
 			my_kem_key=my_kem_key,
 			interim_transcript_hash=new_interim,
 		)
+
+	def apply_commit(self, commit: "GroupUpdate") -> "MLSGroup":
+		"""Alias for process_update to align with standard RFC terminology."""
+		return self.process_update(commit)
 
 	def process_update(self, update: GroupUpdate) -> "MLSGroup":
 		"""
