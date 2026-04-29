@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.5.0] - 2026-04-29 (Dynamic Swarm and Protocol Stabilization)
+### Added
+- **pure-mls CLI**: Expanded command-line interface to support the full group lifecycle: `update-key`, `remove-member`, and `apply-commit`. The CLI can now be used as a standalone general-purpose tool to orchestrate secure MLS sessions.
+- **E2E Tooling**: Added extensive `verify_cli.sh` End-to-End bash scripts demonstrating and verifying the complete RFC 9420 lifecycle (create, add, update, remove) guaranteeing state convergence across peers.
+
+### Fixed
+- **Commit Signature Verification (Forgery Error)**: Resolved a critical signature mismatch bug during Epoch transitions. Unsigned Commits (TBS) were manually concatenated in `add_member` and `process_update`, omitting `update_path` elements. All commit signatures are now deterministically built using `GroupUpdate._body_bytes()` ensuring byte-perfect symmetry and correct `membership_tag` derivation across the Swarm.
+- **Wire Format Test Assertions**: Aligned `test_wrap_commit_produces_public_message` assertions to strictly conform to RFC 9420, validating that `FramedContent` indicates the sending epoch rather than the destination epoch.
+- **Linting & Hygiene**: Removed debug scaffolding and unused imports/arguments to maintain the "Sound of Silence" policy across `group.py` and `cli.py`.
+
 ## [3.0.4.3] - 2026-04-19 (Test Suite Stabilization)
 ### Added
 - **Automated MQTT Broker**: Integrated an internal `amqtt` broker lifecycle via `pytest-asyncio` session fixtures. Removes external dependencies and manual background processes for E2E tests.
@@ -25,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.0.4.0] - 2026-04-12 (CLI Implementation & Pedagogical Overhaul)
 
 ### Added
-- **pure-mls CLI**: Complete command-line interface for the MLS group lifecycle (`keygen`, `create-group`, `add-member`, `join-group`) facilitating terminal-based protocol interaction.
+- **pure-mls CLI**: Complete command-line interface for the MLS group lifecycle (`keygen`, `create-group`, `add-member`, `join-group`, `update-key`, `remove-member`, `apply-commit`) facilitating terminal-based protocol interaction.
 - **Pedagogical Documentation**: Added comprehensive, multi-language colloquial guides (`02_MLS_JOURNEY_*`) and Grok's "Primate Survival Guides" (`03_MLS_FOR_PRIMATES_*`) to conceptualize cryptography for non-experts.
 
 ### Changed
