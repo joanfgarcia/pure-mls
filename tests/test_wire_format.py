@@ -324,7 +324,7 @@ def test_wrap_commit_produces_public_message(alice_bob_group):
 	_, _, _, update = alice_bob_group
 	msg = MLSMessage.wrap_commit(update)
 	pm = PublicMessage.from_bytes(msg.body)
-	assert pm.content.epoch == update.epoch_id
+	assert pm.content.epoch == update.epoch_id - 1
 	assert pm.auth.signature == update.signature
 
 

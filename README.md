@@ -78,8 +78,12 @@ alice_next, welcome, update = alice_group.add_member(bob_kp)
 # 4. Bob decrypts the Welcome (sealed with HPKE to his KEM key) and joins
 bob_group = MLSGroup.join(welcome, bob_sig, bob_kem)
 
+# 5. Alice removes Bob from the group
+alice_next_epoch, remove_commit = alice_next.remove_member(bob_group.committer_index)
+
 # The Underlying Mathematical Truth:
 assert alice_next.application_key == bob_group.application_key
+assert alice_next_epoch.application_key != bob_group.application_key  # Bob is out!
 ```
 
 ## License
