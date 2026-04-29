@@ -356,18 +356,15 @@ class GroupInfo:
 
 	@classmethod
 	def from_bytes(cls, data: bytes) -> "GroupInfo":
-		print(f"DEBUG: GroupInfo FULL hex={data.hex()}")
 		group_context, offset = GroupContext.from_bytes_at(data, 0)
 		ext_len, offset = _varint_decode(data, offset)
 		extensions_bytes = data[offset : offset + ext_len]
 		offset += ext_len
 
-		# print(f"DEBUG: Pre-CTag byte={data[offset]:#04x}")
 		confirmation_tag, offset = read_opaque(data, offset)
 
 		signer_raw = data[offset : offset + 4]
 		signer = int.from_bytes(signer_raw, "big")
-		print(f"DEBUG: GI_SIGNER hex={signer_raw.hex()} val={signer} ctag_len={len(confirmation_tag)}")
 		offset += 4
 		signature, offset = read_opaque(data, offset)
 		obj = cls(
