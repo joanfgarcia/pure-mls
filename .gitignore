@@ -12,3 +12,13 @@ wheels/
 # Digests and Code Dumps
 *DIGEST*.txt
 scratch/
+
+# Test Artifacts
+*.commit
+*.priv
+*.pub
+*.state
+*.welcome
+*.bin
+*.orig
+*.rej
