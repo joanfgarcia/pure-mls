@@ -1908,9 +1908,13 @@ class MLSGroup:
 			raise ValueError("Application message decryption failed: authentication tag mismatch")
 
 	def to_bytes(self) -> bytes:
-		"""Serializes the full state + my private keys (Danger Zone)."""
+		"""Serializes the full state + my private keys (Danger Zone).
+
+		WARNING: This exports the committer's identity and KEM private keys in plaintext.
+		Do NOT store the output on disk without strong symmetric encryption (e.g. AES-GCM).
+		"""
 		state_bytes = self.state.to_bytes()
-		cth = self.interim_transcript_hash
+		interim_th = self.interim_transcript_hash
 		# P1-3: Serialize _consumed_key_packages to prevent replay attacks after restart
 		consumed_list = sorted(list(self._consumed_key_packages))
 		consumed_bytes = b"".join(tls_opaque(ref) for ref in consumed_list)
@@ -1920,8 +1924,8 @@ class MLSGroup:
 			+ self.my_kem_key.private_bytes()
 			+ len(state_bytes).to_bytes(4, "big")
 			+ state_bytes
-			+ len(cth).to_bytes(2, "big")
-			+ cth
+			+ len(interim_th).to_bytes(2, "big")
+			+ interim_th
 			+ tls_opaque32(consumed_bytes)
 		)
 
@@ -1938,14 +1942,14 @@ class MLSGroup:
 		offset += 4
 		state = EpochState.from_bytes(data[offset : offset + s_len])
 		offset += s_len
-		cth = b""
+		interim_th = b""
 		if offset < len(data):  # backward-compat guard
-			cth_len = int.from_bytes(data[offset : offset + 2], "big")
+			interim_th_len = int.from_bytes(data[offset : offset + 2], "big")
 			offset += 2
-			cth = data[offset : offset + cth_len]
-			offset += cth_len
+			interim_th = data[offset : offset + interim_th_len]
+			offset += interim_th_len
 
-		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=cth)
+		group = cls(state, my_index=idx, my_sig_key=sig_key, my_kem_key=kem_key, interim_transcript_hash=interim_th)
 
 		# P1-3: Deserialize consumed key packages if present
 		if offset < len(data):

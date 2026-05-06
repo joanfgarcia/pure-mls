@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Corrected a critical bug where `add_member` was passing the leaf index instead of the node index (`2 * leaf_index`) to `RatchetTree.direct_path()`. This caused silent TreeKEM derivation failures when the committer's leaf index was > 0.
 - **[P2-Hygiene] Type safety and memory optimization** (`group.py`):
   Removed `Any` imports in favor of explicit typings (`object` for fallback args), declared `_VERSION` and `_CIPHER_SUITE` as `ClassVar[int]`, and added `__slots__ = True` via `@dataclass(slots=True)` to hot-path primitives (`GroupUpdate`, `FramedContent`) reducing memory pressure in highly concurrent swarms.
+- **[P1-NEW-4 & P2-3] Security warnings and variable hygiene** (`group.py`):
+  Added explicit plaintext-export warnings to `MLSGroup.to_bytes()` docstrings to prevent accidental mishandling of local group state on disk, and renamed the obfuscated `cth` variable to `interim_th` for clarity during serialization.
 
 ## [3.0.5.0] - 2026-04-29 (Dynamic Swarm and Protocol Stabilization)
 - **E2E Tooling**: Added extensive `verify_cli.sh` End-to-End bash scripts demonstrating and verifying the complete RFC 9420 lifecycle (create, add, update, remove) guaranteeing state convergence across peers.
