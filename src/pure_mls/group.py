@@ -304,7 +304,7 @@ class Welcome:
 def WelcomeInfo(*args: object, **kwargs: object) -> "Welcome":
 	"""Deprecated factory. Use Welcome directly."""
 	_warnings.warn("WelcomeInfo is deprecated; use Welcome directly.", DeprecationWarning, stacklevel=2)
-	return Welcome(*args, **kwargs)
+	return Welcome(*args, **kwargs)  # type: ignore[arg-type]
 
 
 # GroupInfo (RFC 9420 §12.1.2) — signed by the committer
