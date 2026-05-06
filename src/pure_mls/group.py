@@ -418,10 +418,6 @@ class GroupInfo:
 		tbs = self._tbs_bytes()
 
 		# Check for local serialization mismatch if we have raw parity
-		if hasattr(self, "_raw_data"):
-			raw_prefix = self._raw_data[: len(tbs)]
-			if tbs != raw_prefix:
-				pass  # Debug branch removed for clean commit
 
 		# SignerContent { opaque label<V>; opaque content<V>; }
 		label_str = b"MLS 1.0 GroupInfoTBS"

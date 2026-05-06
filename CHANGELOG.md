@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.5.1] - Unreleased
 ### Fixed (B760 Audit)
+- **[P1-NEW-5] Dead `pass` debug branch removed from `GroupInfo.verify()`** (`group.py`):
+  Enforced the "Sound of Silence" policy by eliminating a latent debug branch (`if hasattr(self, "_raw_data"):`) that was masking serialization diagnostics.
 - **[P1-NEW-8] LBBT `direct_path` node index inconsistency in `add_member`** (`group.py`):
   Corrected a critical bug where `add_member` was passing the leaf index instead of the node index (`2 * leaf_index`) to `RatchetTree.direct_path()`. This caused silent TreeKEM derivation failures when the committer's leaf index was > 0.
 
