@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from pure_mls.crypto import _compute_parent_hash, _egs_info, _subtree_hash, _up_info
 from pure_mls.epoch import EpochState
-from pure_mls.hkdf import expand_with_label, hkdf_extract, varint_encode
+from pure_mls.hkdf import expand_with_label, hkdf_extract
 from pure_mls.hpke import HPKE
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.keyschedule import KeySchedule, PreSharedKeyID, _psk_secret
@@ -290,7 +290,7 @@ class Welcome:
 		Returns GroupSecrets on success, None if no matching entry found.
 		"""
 		label = b"MLS 1.0 Welcome"
-		info = varint_encode(len(label)) + label + varint_encode(len(self.encrypted_group_info)) + self.encrypted_group_info
+		info = tls_varint(len(label)) + label + tls_varint(len(self.encrypted_group_info)) + self.encrypted_group_info
 
 		for egs in self.encrypted_group_secrets:
 			try:
@@ -440,7 +440,7 @@ def _make_kp_ref(kp: KeyPackage) -> bytes:
 		struct { opaque label<V>; opaque value<V>; } RefHashInput;
 	"""
 	kp_bytes = kp.to_bytes()
-	ref_input = varint_encode(len(_KP_REF_LABEL)) + _KP_REF_LABEL + varint_encode(len(kp_bytes)) + kp_bytes
+	ref_input = tls_varint(len(_KP_REF_LABEL)) + _KP_REF_LABEL + tls_varint(len(kp_bytes)) + kp_bytes
 	return hashlib.sha256(ref_input).digest()
 
 

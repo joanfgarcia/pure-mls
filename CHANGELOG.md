@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.5.1] - Unreleased
 ### Fixed (B760 Audit)
+- **[P1-NEW-1] Unified VarInt encoding implementation** (`group.py`):
+  Eliminated the `varint_encode` dependency from `hkdf.py` inside `group.py`, standardizing all opaque length prefixes on the canonical `tls_varint` implementation to prevent future divergences in `KeyPackageRef` generation.
 - **[P1-NEW-5] Dead `pass` debug branch removed from `GroupInfo.verify()`** (`group.py`):
   Enforced the "Sound of Silence" policy by eliminating a latent debug branch (`if hasattr(self, "_raw_data"):`) that was masking serialization diagnostics.
 - **[P1-NEW-8] LBBT `direct_path` node index inconsistency in `add_member`** (`group.py`):
