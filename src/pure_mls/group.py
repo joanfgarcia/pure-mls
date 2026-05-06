@@ -4,7 +4,7 @@ import os
 import struct
 import warnings as _warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import ClassVar
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -58,8 +58,8 @@ class GroupContext:
 
 	# Fixed for our single supported suite:
 	#   MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
-	_VERSION: int = 0x0001  # mls10
-	_CIPHER_SUITE: int = 0x0001
+	_VERSION: ClassVar[int] = 0x0001  # mls10
+	_CIPHER_SUITE: ClassVar[int] = 0x0001
 
 	def to_bytes(self) -> bytes:
 		"""RFC 9420 §8.1 TLS encoding of GroupContext.
@@ -301,7 +301,7 @@ class Welcome:
 		return None
 
 
-def WelcomeInfo(*args: Any, **kwargs: Any) -> "Welcome":
+def WelcomeInfo(*args: object, **kwargs: object) -> "Welcome":
 	"""Deprecated factory. Use Welcome directly."""
 	_warnings.warn("WelcomeInfo is deprecated; use Welcome directly.", DeprecationWarning, stacklevel=2)
 	return Welcome(*args, **kwargs)
@@ -519,7 +519,7 @@ def _compute_interim_transcript_hash(
 	return hashlib.sha256(confirmed_transcript_hash + confirmation_tag).digest()
 
 
-@dataclass
+@dataclass(slots=True)
 class GroupUpdate:
 	"""RFC 9420 §12.1.1: Commit message (simplified Commit + FramedContent).
 
@@ -786,7 +786,7 @@ class UpdatePath:
 # FramedContent + AuthData + PublicMessage (RFC 9420 §6)
 
 
-@dataclass
+@dataclass(slots=True)
 class FramedContent:
 	"""RFC 9420 §6.1: FramedContent wraps any MLS message with group/epoch context.
 
