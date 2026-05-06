@@ -5,9 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.5.1] - Unreleased
+### Fixed (B760 Audit)
+- **[P1-NEW-8] LBBT `direct_path` node index inconsistency in `add_member`** (`group.py`):
+  Corrected a critical bug where `add_member` was passing the leaf index instead of the node index (`2 * leaf_index`) to `RatchetTree.direct_path()`. This caused silent TreeKEM derivation failures when the committer's leaf index was > 0.
+
 ## [3.0.5.0] - 2026-04-29 (Dynamic Swarm and Protocol Stabilization)
-### Added
-- **pure-mls CLI**: Expanded command-line interface to support the full group lifecycle: `update-key`, `remove-member`, and `apply-commit`. The CLI can now be used as a standalone general-purpose tool to orchestrate secure MLS sessions.
 - **E2E Tooling**: Added extensive `verify_cli.sh` End-to-End bash scripts demonstrating and verifying the complete RFC 9420 lifecycle (create, add, update, remove) guaranteeing state convergence across peers.
 
 ### Fixed

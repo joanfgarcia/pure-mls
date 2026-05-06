@@ -1056,8 +1056,9 @@ class MLSGroup:
 		leaf_path_secret = os.urandom(32)
 
 		# Build direct_path and copath for the committer's leaf
-		direct = new_tree.direct_path(self.my_index)
-		cop = new_tree.copath(self.my_index)
+		my_node_idx = 2 * self.my_index
+		direct = new_tree.direct_path(my_node_idx)
+		cop = new_tree.copath(my_node_idx)
 
 		# Derive path secrets bottom-up (innermost → outermost/root)
 		_path_secrets: list[bytes] = []
