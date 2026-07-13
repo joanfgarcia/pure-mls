@@ -709,8 +709,10 @@ class RatchetTree:
 		w = len(self.nodes)
 
 		if index % 2 == 0:  # Leaf
-			# TreeHashInput (type=1) + optional<LeafNode>
-			res = b"\x01"
+			# RFC 9420 §7.8 LeafNodeHashInput: node_type(leaf) + uint32 leaf_index + optional<LeafNode>.
+			# audit tree_hash: the leaf_index was previously omitted, so tree_hash() never matched
+			# a conforming implementation (OpenMLS). leaf_index = node_index / 2.
+			res = b"\x01" + tls_u32(index // 2)
 			if node is None:
 				res += b"\x00"
 			else:

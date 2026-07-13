@@ -45,7 +45,7 @@ def test_subtree_hash_recursive_structure() -> None:
 	P1-2 audit fix: _subtree_hash now delegates to tree._node_hash() which
 	implements RFC §7.8 TreeHashInput (typed prefix + optional<Node> + VarInt child hashes).
 	"""
-	from pure_mls.tls import tls_opaque_varint
+	from pure_mls.tls import tls_opaque_varint, tls_u32
 
 	tree = RatchetTree(num_leaves=2)
 	_, kem_a, kp_a = _make_member()
@@ -59,9 +59,9 @@ def test_subtree_hash_recursive_structure() -> None:
 	tree.set_parent(1, parent_node)
 
 	# RFC §7.8 TreeHashInput format:
-	# Leaf: SHA-256(0x01 || 0x01 || leaf.to_bytes())
-	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
+	# Leaf: SHA-256(0x01 || uint32 leaf_index || 0x01 || leaf.to_bytes())
+	h_leaf0 = hashlib.sha256(b"\x01" + tls_u32(0) + b"\x01" + kp_a.leaf_node.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(b"\x01" + tls_u32(1) + b"\x01" + kp_b.leaf_node.to_bytes()).digest()
 	# Parent: SHA-256(0x02 || 0x01 || parent.to_bytes() || left<V> || right<V>)
 	expected = hashlib.sha256(b"\x02\x01" + parent_node.to_bytes() + tls_opaque_varint(h_leaf0) + tls_opaque_varint(h_leaf1)).digest()
 
@@ -70,7 +70,7 @@ def test_subtree_hash_recursive_structure() -> None:
 
 def test_subtree_hash_blank_parent_no_public_key() -> None:
 	"""A blank (None) parent node uses RFC §7.8 TreeHashInput with optional<Node>=0x00."""
-	from pure_mls.tls import tls_opaque_varint
+	from pure_mls.tls import tls_opaque_varint, tls_u32
 
 	tree = RatchetTree(num_leaves=2)
 	_, _, kp_a = _make_member()
@@ -80,9 +80,9 @@ def test_subtree_hash_blank_parent_no_public_key() -> None:
 	tree.set_leaf(2, kp_b.leaf_node)
 	# Parent at index 1 remains None (blank)
 
-	# RFC §7.8 TreeHashInput:
-	h_leaf0 = hashlib.sha256(b"\x01\x01" + kp_a.leaf_node.to_bytes()).digest()
-	h_leaf1 = hashlib.sha256(b"\x01\x01" + kp_b.leaf_node.to_bytes()).digest()
+	# RFC §7.8 TreeHashInput (leaf includes uint32 leaf_index):
+	h_leaf0 = hashlib.sha256(b"\x01" + tls_u32(0) + b"\x01" + kp_a.leaf_node.to_bytes()).digest()
+	h_leaf1 = hashlib.sha256(b"\x01" + tls_u32(1) + b"\x01" + kp_b.leaf_node.to_bytes()).digest()
 	# Blank parent: SHA-256(0x02 || 0x00 || left<V> || right<V>)
 	expected = hashlib.sha256(b"\x02\x00" + tls_opaque_varint(h_leaf0) + tls_opaque_varint(h_leaf1)).digest()
 
