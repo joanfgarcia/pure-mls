@@ -1044,9 +1044,9 @@ class MLSGroup:
 		new_tree.set_leaf(new_leaf_idx, key_package.leaf_node)
 
 		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
-		# Validate incoming KeyPackage signature if present
-		if key_package.leaf_node_signature:
-			key_package.verify_signature()  # raises InvalidSignature on tamper
+		# Authenticate the incoming KeyPackage unconditionally (identity + init_key).
+		# audit H1: conditional check let unsigned/tampered init_key packages through.
+		key_package.verify_signature()  # raises if signature missing or invalid
 
 		new_epoch_id = self.state.epoch_id + 1
 

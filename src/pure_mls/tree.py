@@ -268,7 +268,14 @@ class KeyPackage:
 		return self.leaf_node.signature_key
 
 	def verify_signature(self) -> None:
+		# 1. LeafNode signature (binds identity <-> encryption_key)
 		self.leaf_node.verify_signature()
+		# 2. KeyPackageTBS signature (RFC 9420 §10.1) — the only one covering init_key_pub.
+		# Without this, a MITM can swap init_key_pub and hijack the Welcome (audit H1).
+		if not self.leaf_node_signature:
+			raise ValueError("KeyPackage has no signature")
+		pub = ed25519.Ed25519PublicKey.from_public_bytes(self.leaf_node.signature_key)
+		pub.verify(self.leaf_node_signature, self._tbs_bytes())  # raises InvalidSignature on tamper
 
 	# ------------------------------------------------------------------
 	# TBS / signing
@@ -280,7 +287,7 @@ class KeyPackage:
 			+ tls_u16(self._CIPHER_SUITE)
 			+ tls_opaque(self.init_key_pub)
 			+ self.leaf_node.to_bytes()
-			+ tls_u32(0)  # extensions<V> empty
+			+ tls_varint(0)  # extensions<V> empty — must match to_bytes() wire encoding (audit L3)
 		)
 
 	# ------------------------------------------------------------------
