@@ -1,6 +1,6 @@
 [project]
 name = "pure-mls"
-version = "3.0.5.1"
+version = "4.0.0"
 description = "Pure Python MLS implementation with CLI. Still maturing the application messaging CLI commands."
 readme = "README.md"
 authors = [

@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-07-13 (Fable Audit Remediation)
+
+Security and RFC 9420 conformance overhaul from a full audit. **Breaking**: the wire
+format and key derivation changed, so this version is NOT interoperable with pre-4.0
+pure-mls peers or artifacts, and the `MLSGroup.remove_member` API changed.
+
+### Security
+- Authenticate the KeyPackage `init_key` (KeyPackageTBS signature); `add_member` now
+  verifies incoming KeyPackages unconditionally — closes a Welcome-hijack MITM.
+- `process_update` authenticates every LeafNode signature in the received tree.
+- `join` validates the ratchet tree against the signed `tree_hash` (RFC §12.4.3.1).
+- Dialect selection is no longer auto-detected from untrusted bytes.
+- CLI writes private keys / group state with 0600 permissions; secrets redacted from
+  `__repr__` of KeySchedule / SecretTree / EpochState.
+
+### Fixed (RFC 9420 conformance / OpenMLS interop)
+- Node keypairs derived via RFC 9180 `DeriveKeyPair` (was using the node secret raw).
+- `tree_hash` includes the leaf_index (§7.8) and uses power-of-two tree sizing; now
+  matches OpenMLS on the IETF tree-validation vectors (tree_hash + resolution 454/454).
+- `resolution()` maps unmerged leaves to node indices; SecretTree paths fixed for
+  non-power-of-two groups; TLS decoders bounds-check lengths; VarInt rejects the invalid
+  8-byte form (§2.1.2); plus several lower-severity fixes.
+
+### Changed (breaking)
+- `MLSGroup.remove_member(target_leaf_index)` now takes a true leaf index (0,1,2,…),
+  not a node index.
+- Ratchet trees are always power-of-two sized (extend by doubling, truncate to pow2).
+
+### Added
+- IETF known-answer tests: DeriveKeyPair (RFC 9180 §A.1), expand_with_label
+  (crypto-basics), tree-validation (tree_hash + resolution); negative-security coverage
+  (tampered init_key/commit, replay, wrong-recipient Welcome, removed-member).
+
+### Notes
+- Experimental; not audited for production. Live bidirectional OpenMLS interop is not
+  yet wired up (passive-client-welcome + primitives are verified offline against IETF
+  vectors).
+
 ## [3.0.5.1] - 2026-05-06 (Engineering Grade Certification)
 ### Fixed (B760 Audit)
 - **[P1-NEW-1] Unified VarInt encoding implementation** (`group.py`):
