@@ -50,11 +50,25 @@ def _right(index: int) -> int:
 	return index ^ (0x03 << (k - 1))
 
 
-def _parent(index: int, _n_leaves: int) -> int:
-	"""Return the parent of a node (RFC §13.1)."""
+def _parent(index: int, n_leaves: int) -> int:
+	"""Return the parent of a node, reparenting for non-complete trees (RFC App. C).
+
+	audit M6: the previous version ignored n_leaves and never reparented, so for
+	group sizes that are not a power of two it routed through phantom nodes and
+	derived per-leaf secrets down the wrong path.
+	"""
+	if n_leaves <= 1:
+		return 0
+	w = 2 * n_leaves - 1
+	r = _root(n_leaves)
+	if index == r:
+		return index
 	k = _level(index)
 	b = (index >> (k + 1)) & 0x01
-	p = (index | (1 << k)) ^ (b << (k + 1))
+	p = index ^ ((0x01 << k) | (b << (k + 1)))
+	while p >= w:
+		pk = _level(p)
+		p = p ^ ((0x01 << pk) | (((p >> (pk + 1)) & 0x01) << (pk + 1)))
 	return p
 
 
@@ -97,6 +111,10 @@ class SecretTree:
 		# Ensure encryption_secret is a mutable bytearray for secure zeroing
 		if not isinstance(self.encryption_secret, bytearray):
 			self.encryption_secret = bytearray(self.encryption_secret)
+
+	def __repr__(self) -> str:
+		# audit M8: never render the raw encryption_secret via the default dataclass repr
+		return f"<SecretTree n_leaves={self.n_leaves} secret redacted>"
 
 	def _derive_leaf_node_secret(self, leaf_index: int) -> bytes:
 		"""Traverse §9.3 binary tree from root encryption_secret to leaf node."""

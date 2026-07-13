@@ -1665,6 +1665,13 @@ class MLSGroup:
 		if tree is None:
 			raise ValueError("ratchet_tree extension absent from GroupInfo and no external tree provided")
 
+		# audit M1 (DEFERRED): RFC 9420 §12.4.3.1 requires validating that the received tree
+		# reproduces the signed gi_ctx.tree_hash. Implementing it revealed that pure-mls'
+		# tree.tree_hash() does NOT match OpenMLS on the IETF passive-welcome vectors
+		# (computed vs signed diverge). The key schedule masks this by using the signed
+		# tree_hash verbatim. A tree_hash() interop fix must land before this check can be
+		# enabled without false-rejecting valid trees. Tracked as a separate finding.
+
 		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
 		committer_node_idx = 2 * gi.signer
 		committer_node = tree.get_node(committer_node_idx)

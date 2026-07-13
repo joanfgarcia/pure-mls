@@ -102,6 +102,8 @@ def read_opaque16(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Decode opaque<V> with uint16 length prefix (non-standard / legacy)."""
 	(length,) = struct.unpack_from(">H", buf, offset)
 	offset += 2
+	if offset + length > len(buf):
+		raise ValueError(f"opaque16 length {length} exceeds buffer (offset {offset}, len {len(buf)})")
 	return buf[offset : offset + length], offset + length
 
 
@@ -109,6 +111,8 @@ def read_opaque32(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Decode opaque<V> with uint32 length prefix."""
 	(length,) = struct.unpack_from(">I", buf, offset)
 	offset += 4
+	if offset + length > len(buf):
+		raise ValueError(f"opaque32 length {length} exceeds buffer (offset {offset}, len {len(buf)})")
 	return buf[offset : offset + length], offset + length
 
 
@@ -172,6 +176,8 @@ def read_vector16(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Read a vector with a 2-byte length prefix (uint16)."""
 	(length,) = struct.unpack_from(">H", buf, offset)
 	offset += 2
+	if offset + length > len(buf):
+		raise ValueError(f"vector16 length {length} exceeds buffer (offset {offset}, len {len(buf)})")
 	return buf[offset : offset + length], offset + length
 
 
@@ -179,6 +185,8 @@ def read_vector32(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Read a vector with a 4-byte length prefix (uint32)."""
 	(length,) = struct.unpack_from(">I", buf, offset)
 	offset += 4
+	if offset + length > len(buf):
+		raise ValueError(f"vector32 length {length} exceeds buffer (offset {offset}, len {len(buf)})")
 	return buf[offset : offset + length], offset + length
 
 
@@ -199,8 +207,12 @@ def _parse_extensions_internal(data: bytes) -> List[tuple[int, bytes]]:
 	exts = []
 	i = 0
 	while i < len(data):
+		if i + 4 > len(data):
+			raise ValueError("extension header truncated")
 		etype = int.from_bytes(data[i : i + 2], "big")
 		elen = int.from_bytes(data[i + 2 : i + 4], "big")
+		if i + 4 + elen > len(data):
+			raise ValueError(f"extension length {elen} exceeds buffer (offset {i + 4}, len {len(data)})")
 		edata = data[i + 4 : i + 4 + elen]
 		exts.append((etype, edata))
 		i += 4 + elen
@@ -211,6 +223,8 @@ def read_vec8(buf: bytes, offset: int) -> tuple[bytes, int]:
 	"""Decode vec<T> with uint8 length prefix."""
 	length = buf[offset]
 	offset += 1
+	if offset + length > len(buf):
+		raise ValueError(f"vec8 length {length} exceeds buffer (offset {offset}, len {len(buf)})")
 	return buf[offset : offset + length], offset + length
 
 

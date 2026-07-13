@@ -689,7 +689,8 @@ class RatchetTree:
 		if self.nodes[index] is None:
 			return self.resolution(left, _depth + 1) + self.resolution(right, _depth + 1)
 		unmerged = node.unmerged_leaves if isinstance(node, ParentNode) else []
-		return [index] + list(unmerged)
+		# unmerged_leaves are leaf indices; a resolution is a list of node indices (audit M5)
+		return [index] + [2 * leaf for leaf in unmerged]
 
 	def tree_hash(self) -> bytes:
 		"""RFC 9420 §7.8: Recursive hash of the tree structure.

@@ -25,6 +25,10 @@ class EpochState:
 		cloned.freeze()  # STATE-03: enforce immutability after deepcopy
 		super().__setattr__("tree", cloned)
 
+	def __repr__(self) -> str:
+		# audit M8: KeySchedule secrets must not leak transitively via EpochState repr
+		return f"<EpochState group_id={self.group_id!r} epoch={self.epoch_id} secrets redacted>"
+
 	def advance_epoch(
 		self,
 		commit_secret: bytes,
