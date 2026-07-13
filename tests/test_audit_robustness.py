@@ -55,6 +55,22 @@ def test_read_vec8_rejects_truncated() -> None:
 		read_vec8(bytes([100]), 0)
 
 
+# L4 -------------------------------------------------------------------------
+def test_varint_rejects_8byte_form_and_oversize() -> None:
+	"""RFC 9420 §2.1.2: the 0b11 (8-byte) prefix is invalid; max length is 2^30 - 1."""
+	from pure_mls.tls import _varint_decode, tls_varint
+
+	with pytest.raises(ValueError):
+		_varint_decode(bytes([0xC0, 0, 0, 0, 0, 0, 0, 0]), 0)  # prefix 0b11
+	with pytest.raises(ValueError):
+		tls_varint(0x40000000)  # 2^30, one past the max
+	# canonical values round-trip at the boundaries
+	for v in (0x3F, 0x40, 0x3FFF, 0x4000, 0x3FFFFFFF):
+		enc = tls_varint(v)
+		got, off = _varint_decode(enc, 0)
+		assert got == v and off == len(enc)
+
+
 # M8 -------------------------------------------------------------------------
 def test_secret_tree_repr_redacts_secret() -> None:
 	st = SecretTree(encryption_secret=b"\x01" * 32, n_leaves=2)

@@ -141,22 +141,13 @@ def _varint_decode(buf: bytes, offset: int) -> tuple[int, int]:
 	elif prefix == 1:
 		return ((first & 0x3F) << 8) | buf[offset + 1], offset + 2
 	elif prefix == 2:
+		if offset + 4 > len(buf):
+			raise ValueError("MLS VarInt: truncated 4-byte length prefix")
 		v = ((first & 0x3F) << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3]
 		return v, offset + 4
-	elif prefix == 3:
-		# 8-byte varint (64-bit)
-		v = (
-			((first & 0x3F) << 56)
-			| (buf[offset + 1] << 48)
-			| (buf[offset + 2] << 40)
-			| (buf[offset + 3] << 32)
-			| (buf[offset + 4] << 24)
-			| (buf[offset + 5] << 16)
-			| (buf[offset + 6] << 8)
-			| buf[offset + 7]
-		)
-		return v, offset + 8
-	raise ValueError("Actually impossible due to & 0x3")
+	# RFC 9420 §2.1.2: vectors starting with prefix 0b11 (the 8-byte / 62-bit form) are
+	# invalid and MUST be rejected; the maximum encodable length is 2^30 - 1 (audit L4).
+	raise ValueError("MLS VarInt: prefix 0b11 (8-byte form) is invalid per RFC 9420 §2.1.2")
 
 
 def tls_varint(n: int) -> bytes:
@@ -167,9 +158,8 @@ def tls_varint(n: int) -> bytes:
 		return ((n | 0x4000) & 0xFFFF).to_bytes(2, "big")
 	elif n <= 0x3FFFFFFF:
 		return ((n | 0x80000000) & 0xFFFFFFFF).to_bytes(4, "big")
-	elif n <= 0x3FFFFFFFFFFFFFFF:
-		return ((n | 0xC000000000000000) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
-	raise ValueError(f"VarInt out of range (max 62 bits): {n}")
+	# RFC 9420 §2.1.2: the 8-byte form is invalid; maximum encodable length is 2^30 - 1 (audit L4).
+	raise ValueError(f"VarInt out of range (max 2^30-1 per RFC 9420 §2.1.2): {n}")
 
 
 def read_vector16(buf: bytes, offset: int) -> tuple[bytes, int]:
