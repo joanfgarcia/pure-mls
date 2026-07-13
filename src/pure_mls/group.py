@@ -4,12 +4,13 @@ import os
 import struct
 import warnings as _warnings
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from pure_mls.codecs import get_dialect
 from pure_mls.crypto import _compute_parent_hash, _egs_info, _subtree_hash, _up_info
 from pure_mls.epoch import EpochState
 from pure_mls.hkdf import expand_with_label, hkdf_extract
@@ -214,50 +215,61 @@ class Welcome:
 	cipher_suite: int  # 0x0001
 	encrypted_group_secrets: list[EncryptedGroupSecrets]  # one per joiner
 	encrypted_group_info: bytes  # HPKE ciphertext of GroupInfo
+	dialect: Optional[str] = None
 
 	_CIPHER_SUITE: int = 0x0001
 
 	def to_bytes(self) -> bytes:
-		"""Encode to MLS varint wire format (RFC 9420 §12.1.2)."""
+		"""Encode to MLS wire format using the dialect's strategy."""
+		strategy = get_dialect(self.dialect or "standard")
 
 		secrets_bytes = b"".join(e.to_bytes() for e in self.encrypted_group_secrets)
-		return (
-			tls_u16(self._CIPHER_SUITE)
-			+ tls_varint(len(secrets_bytes))
-			+ secrets_bytes  # EGS<V> varint-prefixed
-			+ tls_varint(len(self.encrypted_group_info))
-			+ self.encrypted_group_info  # EGI<V>
-		)
+		egs_bytes = strategy.encode_vector([secrets_bytes])
+		egi_bytes = strategy.encode_vector([self.encrypted_group_info])
+
+		prefix = strategy.header()
+
+		return prefix + tls_u16(self._CIPHER_SUITE) + egs_bytes + egi_bytes
 
 	@classmethod
-	def from_bytes(cls, data: bytes) -> "Welcome":
-		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper).
+	def from_bytes(cls, data: bytes, dialect: Optional[str] = None) -> "Welcome":
+		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper or dialect header)."""
 
-		Format per RFC 9420 §12.1.2:
-		uint16 cipher_suite
-		EncryptedGroupSecrets<V>  -- varint-prefixed vector of EGS records
-		opaque encrypted_group_info<V> -- varint-prefixed EGI
-		"""
-		# Auto-detect: if raw bytes start with MLSMessage header (00 01 00 03 for version 1, type Welcome)
-		if data.startswith(b"\x00\x01\x00\x03"):
-			offset = 4
+		if dialect is None:
+			# audit M9: never auto-detect the dialect from attacker-controlled leading bytes
+			# (detect_dialect silently falls back to standard and the choice is unauthenticated).
+			# Non-standard dialects must be selected explicitly by the caller.
+			strategy = get_dialect("standard")
+			dialect_name = "standard"
 		else:
-			offset = 0
+			strategy = get_dialect(dialect)
+			dialect_name = dialect
+
+		offset = 0
+		if strategy.header() and data.startswith(strategy.header()):
+			offset = len(strategy.header())
+		elif strategy.name == "standard" and data.startswith(b"\x00\x01\x00\x03"):
+			offset = 4
+
 		cipher_suite, offset = read_u16(data, offset)
-		# EGS vector: varint length prefix
-		egs_total_len, offset = _varint_decode(data, offset)
-		egs_end = offset + egs_total_len
+
+		egs_vec_list, offset = strategy.decode_vector(data, offset)
+		egs_bytes = egs_vec_list[0]
+
 		encrypted_group_secrets: list[EncryptedGroupSecrets] = []
-		while offset < egs_end:
-			egs, offset = EncryptedGroupSecrets.from_bytes(data, offset)
+		sub_offset = 0
+		while sub_offset < len(egs_bytes):
+			egs, sub_offset = EncryptedGroupSecrets.from_bytes(egs_bytes, sub_offset)
 			encrypted_group_secrets.append(egs)
-		# EGI: varint length prefix
-		egi_len, offset = _varint_decode(data, offset)
-		encrypted_group_info = data[offset : offset + egi_len]
+
+		egi_vec_list, offset = strategy.decode_vector(data, offset)
+		encrypted_group_info = egi_vec_list[0]
+
 		return cls(
 			cipher_suite=cipher_suite,
 			encrypted_group_secrets=encrypted_group_secrets,
 			encrypted_group_info=encrypted_group_info,
+			dialect=dialect_name,
 		)
 
 	@classmethod
@@ -279,17 +291,10 @@ class Welcome:
 		Searches encrypted_group_secrets for an entry whose kem_output can be
 		decapsulated with init_key, then decrypts via HPKE.open with the
 		RFC 9420 §12.4 EncryptWithLabel("Welcome", encrypted_group_info) context.
-
-		This method is RFC-compliant and compatible with OpenMLS IETF vectors.
-		The HPKE info string follows RFC 9420 §12.4: varint(label) + label + varint(egi) + egi.
-
-		Note: MLSGroup.join() uses b"MLS 1.0 EncryptedGroupSecrets" (pure-mls internal
-		convention, P0-B audit note). For OpenMLS interoperability, use this method
-		or Welcome.from_mlsmessage_bytes() + decrypt_group_secrets() directly.
-
-		Returns GroupSecrets on success, None if no matching entry found.
 		"""
-		label = b"MLS 1.0 Welcome"
+		strategy = get_dialect(self.dialect or "standard")
+
+		label = strategy.welcome_label()
 		info = tls_varint(len(label)) + label + tls_varint(len(self.encrypted_group_info)) + self.encrypted_group_info
 
 		for egs in self.encrypted_group_secrets:
@@ -408,8 +413,8 @@ class GroupInfo:
 		gi.signature = sig_key.sign(final_payload)
 		return gi
 
-	def verify(self, committer_sig_key_bytes: bytes) -> bool:
-		"""Verify the committer's Ed25519 signature (RFC 9420 §16.1)."""
+	def verify(self, committer_sig_key_bytes: bytes) -> None:
+		"""Verify the committer's Ed25519 signature (RFC 9420 §16.1); raises on failure (audit L6)."""
 		# RFC 9420 §16.1: TBS is wrapped in SignerContent
 		# struct {
 		#     opaque label<V> = "MLS 1.0 " + Label;
@@ -425,7 +430,6 @@ class GroupInfo:
 
 		if not SignatureKey.verify(committer_sig_key_bytes, self.signature, final_payload):
 			raise ValueError("Ed25519 signature verification failed for GroupInfo")
-		return True
 
 
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
@@ -1025,8 +1029,22 @@ class MLSGroup:
 			raise ValueError("KeyPackage Replay: This KeyPackage has already been used in this instance.")
 		self._consumed_key_packages.add(kp_ref)
 
-		# 1. Expand tree by 1 leaf
-		new_num_leaves = self.state.tree.num_leaves + 1
+		# 1. Place the new member. RFC §7.7: reuse the leftmost blank leaf if one exists,
+		# otherwise extend the tree by one leaf (audit M2: avoids unbounded growth across
+		# remove/add cycles).
+		blank_leaf = None
+		for _li in range(self.state.tree.num_leaves):
+			if self.state.tree.get_node(2 * _li) is None:
+				blank_leaf = _li
+				break
+		if blank_leaf is None:
+			# RFC §7.7: the tree is full — extend by doubling (keeps a power-of-two leaf count)
+			old_n = self.state.tree.num_leaves
+			new_num_leaves = old_n * 2
+			new_leaf_idx = 2 * old_n  # leftmost leaf of the new right half
+		else:
+			new_num_leaves = self.state.tree.num_leaves
+			new_leaf_idx = 2 * blank_leaf
 		new_tree = RatchetTree(num_leaves=new_num_leaves)
 
 		# Copy existing nodes (simplification)
@@ -1038,13 +1056,17 @@ class MLSGroup:
 					new_tree.set_parent(i, node)
 
 		# Insert the new leaf using the joiner's LeafNode directly
-		new_leaf_idx = (new_num_leaves - 1) * 2
 		new_tree.set_leaf(new_leaf_idx, key_package.leaf_node)
+		# RFC §7.7: blank the new leaf's direct path so stale ancestors (e.g. left over from a
+		# prior removal or another member's commit) are not reused; the committer's UpdatePath
+		# below repopulates the nodes it shares, and blanks resolve to the new member otherwise.
+		for _anc in new_tree.direct_path(new_leaf_idx):
+			new_tree.blank_node(_anc)
 
 		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
-		# Validate incoming KeyPackage signature if present
-		if key_package.leaf_node_signature:
-			key_package.verify_signature()  # raises InvalidSignature on tamper
+		# Authenticate the incoming KeyPackage unconditionally (identity + init_key).
+		# audit H1: conditional check let unsigned/tampered init_key packages through.
+		key_package.verify_signature()  # raises if signature missing or invalid
 
 		new_epoch_id = self.state.epoch_id + 1
 
@@ -1125,7 +1147,8 @@ class MLSGroup:
 		# so that process_update() fallback works for peers without UpdatePath support.
 		encrypted_secrets: dict[bytes, bytes] = {}
 		for i, node in enumerate(new_tree.nodes):
-			if isinstance(node, LeafNode) and i != self.my_index:
+			# i is a node index; self.my_index is a leaf index -> compare against 2*my_index (audit M3)
+			if isinstance(node, LeafNode) and i != 2 * self.my_index:
 				pk = node.public_key
 				enc, ct = HPKE.seal(pk, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
 				kp_ref = _make_kp_ref(node.key_package)
@@ -1277,13 +1300,16 @@ class MLSGroup:
 		This implementation provides Post-Compromise Security (P1-C) by
 		rotating the committer's leaf key and node keys along the direct path.
 		"""
+		# audit: target_leaf_index is a LEAF index (0,1,2,...), matching the parameter name and
+		# the CLI. It was previously used as a node index, which broke `pure-mls remove-member 1`
+		# and made the self-removal check compare a node index against a leaf index.
 		if target_leaf_index == self.my_index:
 			raise ValueError("Cannot remove yourself — use leave() or let another member remove you")
-		if target_leaf_index % 2 != 0:
-			raise ValueError("target_leaf_index must be even (leaf node)")
+		if not 0 <= target_leaf_index < self.state.tree.num_leaves:
+			raise ValueError(f"target_leaf_index {target_leaf_index} out of range (num_leaves={self.state.tree.num_leaves})")
 
-		# Step 1: Remove leaf from tree
-		new_tree = self.state.tree.remove_leaf(target_leaf_index)
+		# Step 1: Remove leaf from tree (convert leaf index -> node index)
+		new_tree = self.state.tree.remove_leaf(2 * target_leaf_index)
 		new_epoch_id = self.epoch_id + 1
 
 		# Step 2: TreeKEM UpdatePath (RFC 9420 §12.1.1)
@@ -1663,6 +1689,10 @@ class MLSGroup:
 		if tree is None:
 			raise ValueError("ratchet_tree extension absent from GroupInfo and no external tree provided")
 
+		# RFC 9420 §12.4.3.1: the received tree MUST reproduce the signed tree_hash (audit M1).
+		if not hmac.compare_digest(tree.tree_hash(), gi_ctx.tree_hash):
+			raise ValueError("ratchet_tree does not match the signed tree_hash in GroupInfo (substituted tree)")
+
 		# 4. Verify GroupInfo signature (RFC §12.1.2 — authenticate the committer)
 		committer_node_idx = 2 * gi.signer
 		committer_node = tree.get_node(committer_node_idx)
@@ -1734,6 +1764,14 @@ class MLSGroup:
 		committer_node = self.state.tree.get_node(committer_node_idx)
 		if not isinstance(committer_node, LeafNode):
 			raise ValueError("Invalid committer index")
+
+		# audit M4: authenticate every LeafNode in the received tree (RFC §12.4.2).
+		# group_id/leaf_index are only folded into the TBS for UPDATE/COMMIT source leaves;
+		# passing them unconditionally is safe (ignored for KEY_PACKAGE source).
+		for _li in range(update.tree.num_leaves):
+			_ln = update.tree.get_node(2 * _li)
+			if isinstance(_ln, LeafNode):
+				_ln.verify_signature(group_id=self.group_id, leaf_index=_li)
 
 		# 1. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
 		my_kp = self.state.tree.get_node(my_node_idx)
@@ -1892,7 +1930,12 @@ class MLSGroup:
 		except InvalidTag:
 			raise ValueError("SenderData authentication failed")
 
+		# audit L2: sender-data must be exactly a 4-byte leaf index; guard the decode + range
+		if len(sd_plaintext) != 4:
+			raise ValueError("SenderData: expected a 4-byte leaf index")
 		sender_leaf = struct.unpack(">I", sd_plaintext)[0]
+		if not 0 <= sender_leaf < self.state.tree.num_leaves:
+			raise ValueError(f"SenderData: sender_leaf {sender_leaf} out of range")
 
 		# 3. Derive content key/nonce for sender's leaf + generation
 		st = self._get_secret_tree()

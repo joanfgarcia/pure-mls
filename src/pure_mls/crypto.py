@@ -1,6 +1,6 @@
 import hashlib
 
-from pure_mls.tls import tls_opaque, tls_opaque_varint
+from pure_mls.tls import tls_opaque, tls_opaque_varint, tls_u32
 from pure_mls.tree import LeafNode, ParentNode, RatchetTree
 
 
@@ -26,10 +26,13 @@ def _subtree_hash(tree: "RatchetTree", index: int) -> bytes:
 		return hashlib.sha256(b"").digest()
 	node = tree.get_node(index)
 	if index % 2 == 0:  # leaf
+		# RFC 9420 §7.8 LeafNodeHashInput: node_type + uint32 leaf_index + optional<LeafNode>.
+		# Must match tree._node_hash (audit tree_hash): the leaf_index was previously omitted.
+		leaf_prefix = b"\x01" + tls_u32(index // 2)
 		if node is None:
-			return hashlib.sha256(b"\x01\x00").digest()
+			return hashlib.sha256(leaf_prefix + b"\x00").digest()
 		assert isinstance(node, LeafNode)
-		return hashlib.sha256(b"\x01\x01" + node.to_bytes()).digest()
+		return hashlib.sha256(leaf_prefix + b"\x01" + node.to_bytes()).digest()
 
 	lvl = tree.level(index)
 	child_dist = 1 << (lvl - 1)

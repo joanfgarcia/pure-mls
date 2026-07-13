@@ -47,23 +47,28 @@ def test_expand_with_label_domain_separation():
 	assert out_a != out_b, "Domain separation failure: different labels produced identical outputs"
 
 
-def test_pure_mls_expand_with_label_parity():
-	"""Validate pure-mls internal _expand_with_label matches the standalone reference implementation."""
-	from pure_mls.hkdf import hkdf_expand, hkdf_extract
+def test_expand_with_label_matches_ietf_crypto_basics():
+	"""audit H6: real known-answer test of expand_with_label against crypto-basics.json.
 
-	salt = bytes(32)
-	ikm = bytes(32)
-	prk = hkdf_extract(salt, ikm)
+	The previous test_pure_mls_expand_with_label_parity claimed to check parity with a
+	reference implementation but only asserted len()/isinstance() and never called
+	expand_with_label. This asserts the actual output against the IETF vector's `out`.
+	"""
+	import json
+	import pathlib
 
-	label = "key"
-	context = b""
-	length = 16
-
-	full_label = SUITE_ID + label.encode()
-	hkdf_label = length.to_bytes(2, "big") + len(full_label).to_bytes(1, "big") + full_label + len(context).to_bytes(4, "big") + context
-	expected = hkdf_expand(prk, hkdf_label, length)
-	assert len(expected) == length
-	assert isinstance(expected, bytes)
+	data = json.loads(pathlib.Path("tests/ietf_vectors/crypto-basics.json").read_text())
+	checked = 0
+	for e in data:
+		if e.get("cipher_suite") != 1:
+			continue
+		c = e.get("expand_with_label")
+		if not c:
+			continue
+		out = expand_with_label(bytes.fromhex(c["secret"]), c["label"], bytes.fromhex(c["context"]), c["length"])
+		assert out == bytes.fromhex(c["out"]), f"expand_with_label mismatch for label={c['label']!r}"
+		checked += 1
+	assert checked > 0, "no expand_with_label cases found for suite 1"
 
 
 def test_key_package_ref_length():

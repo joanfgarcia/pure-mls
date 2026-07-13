@@ -1,18 +1,22 @@
 # pure-mls
 
-`pure-mls` is a zero-dependency, pure Python implementation of the Messaging Layer Security (MLS) protocol ([RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)). This project provides a production-grade cryptographic state machine for secure group messaging.
+`pure-mls` is a pure-Python implementation of the Messaging Layer Security (MLS) protocol ([RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)) — the protocol logic (TreeKEM, key schedule, wire format) is written in Python, while cryptographic primitives are delegated to the [`cryptography`](https://pypi.org/project/cryptography/) library. It implements the cryptographic state machine for secure group messaging.
+
+> ⚠️ **Status: experimental, not audited for production.** It passes the offline IETF known-answer vectors below, but several protocol-level guarantees (e.g. `tree_hash` interop, full parent-hash validation) are still being hardened. Do not use it to protect real secrets yet.
 
 ## 🚀 Features & Interoperability
-`pure-mls` has achieved full cryptographic interoperability with the IETF standard, passing 100% of the **Passive Client Welcome** and **PSK Resolution** test vectors (OpenMLS benchmark):
-- **RFC 9420 Compliant**: Full implementation of the TreeKEM and Key Schedule lifecycle.
-- **IETF Vector Verification**: 100% pass rate on interoperability suites.
-- **Transports**: Verified E2E over WebSockets, MQTT (IoT), WebRTC (P2P), and gRPC.
+What is actually verified today (offline, in CI):
+- **RFC 9420 primitives**: HPKE / HKDF / key-schedule and `DeriveKeyPair` match the IETF `crypto-basics` and `key-schedule` known-answer vectors.
+- **Passive-client Welcome + PSK**: passes the IETF `passive-client-welcome` and `psk_secret` vectors (Welcome produced by a reference implementation, joined by `pure-mls`).
+- **Transports**: local end-to-end demos over WebSockets, MQTT, WebRTC and gRPC (network-marked, skipped by default).
+
+Not yet backed: live *bidirectional* OpenMLS interop (round-trips in both directions) is not wired up.
 
 ## 🧠 Philosophy: "Sound of Silence"
-The goal is **Absolute Purity**:
-- No compiled bindings (no Rust, C++ or FFI).
+The goal is **protocol purity**:
+- All MLS protocol logic (TreeKEM, key schedule, TLS wire format) is pure Python — no protocol logic hidden in native code.
+- The single dependency, `cryptography`, provides the vetted low-level primitives (Ed25519, X25519, AES-GCM, HKDF) rather than reimplementing them.
 - Operates natively in any Python 3.12+ environment.
-- Suitable for zero-friction edge computing and standard backend runtimes.
 - Built on principles of [Plausible Deniability and Zero-Knowledge](https://github.com/joanfgarcia/pure-mls/blob/main/docs/00_MANIFESTO.md).
 
 ### The Linter Protocol
@@ -31,20 +35,26 @@ pure-mls/
 │   └── pure_mls/
 │       ├── group.py        # [API] State Machine (MLSGroup)
 │       ├── tree.py         # Nodes and RatchetTree structure
+│       ├── crypto.py       # Parent/subtree hashes and HPKE info helpers
 │       ├── tls.py          # RFC 9420 / TLS 1.3 Wire Format Primitives
 │       ├── extensions.py   # MLS Extensions Framework
 │       ├── proposals.py    # Group Operations (Add, Update, Remove)
 │       ├── epoch.py        # Immutable states (Epochs)
-│       ├── keys.py         # Ed25519 Identities and X25519 KEMs
-│       ├── keyschedule.py  # Secret Derivation (Application_Key)
-│       └── hpke.py         # Hybrid Public Key Encryption Base Mode
+│       ├── keys.py         # Ed25519 Identities and X25519 KEMs (+ DeriveKeyPair)
+│       ├── hkdf.py         # HKDF / ExpandWithLabel primitives
+│       ├── keyschedule.py  # Secret Derivation (Key Schedule §8)
+│       ├── secret_tree.py  # Per-leaf per-generation SecretTree (§9)
+│       ├── hpke.py         # Hybrid Public Key Encryption Base Mode
+│       ├── codecs.py       # Dialect / codec plugin system (wire-format variants)
+│       ├── storage.py      # AES-256-GCM encrypted state persistence
+│       └── cli.py          # Command-line interface
 └── tests/
-    ├── test_ietf_vectors.py # 100% RFC 9420 Interop (IETF/OpenMLS)
+    ├── test_ietf_vectors.py # RFC 9420 IETF known-answer vectors (offline)
     ├── test_group.py       # State Machine unit tests
-    ├── test_e2e_websockets.py # E2E local Websockets
-    ├── test_e2e_mqtt.py    # E2E broker.hivemq.com (IoT)
-    ├── test_e2e_webrtc.py  # E2E Data Channels P2P (aiortc)
-    └── test_e2e_grpc.py    # E2E Backend Swarm (Proto Hub)
+    ├── test_e2e_websockets.py # E2E local Websockets (network-marked)
+    ├── test_e2e_mqtt.py    # E2E local broker (IoT, network-marked)
+    ├── test_e2e_webrtc.py  # E2E Data Channels P2P (aiortc, network-marked)
+    └── test_e2e_grpc.py    # E2E Backend Swarm (gRPC, network-marked)
 ```
 ## 📚 Documentation & Guides
 We believe in making cryptography accessible. For a fast, pragmatic, and irreverent introduction to MLS, check our Primate Survival Guide:

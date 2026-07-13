@@ -23,8 +23,11 @@ class AsyncEncryptedStore:
 		if len(vault_key) != 32:
 			raise ValueError("Vault key must be 32 bytes (AES-256)")
 
-		# Ensure storage directory exists
-		os.makedirs(storage_dir, exist_ok=True)
+		# Ensure storage directory exists with owner-only permissions (audit L7).
+		# NOTE: vault_key should be derived from a passphrase via a KDF (scrypt/PBKDF2)
+		# by the caller, not used as a raw low-entropy key.
+		os.makedirs(storage_dir, mode=0o700, exist_ok=True)
+		os.chmod(storage_dir, 0o700)
 
 	def _get_path(self, group_id: bytes) -> str:
 		# Use hex of group_id for filename

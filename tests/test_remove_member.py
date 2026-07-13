@@ -71,8 +71,8 @@ def test_remove_member_basic():
 	group_a2, welcome, _ = group_a.add_member(kp_b)
 	_group_b = MLSGroup.join(welcome, sig_b, kem_b)  # noqa: F841 — created for realistic scenario
 
-	# Alice removes Bob (leaf_index=2)
-	group_a3, remove_update = group_a2.remove_member(target_leaf_index=2)
+	# Alice removes Bob (leaf index 1 — the second member)
+	group_a3, remove_update = group_a2.remove_member(target_leaf_index=1)
 
 	assert group_a3.epoch_id == group_a2.epoch_id + 1, "Epoch must advance after removal"
 	# After removing the rightmost leaf, tree should truncate
@@ -100,8 +100,8 @@ def test_remove_member_self_raises():
 		group2.remove_member(target_leaf_index=group2.my_index)
 
 
-def test_remove_member_odd_index_raises():
-	"""Non-even leaf index must raise ValueError."""
+def test_remove_member_out_of_range_raises():
+	"""A leaf index outside the tree must raise ValueError."""
 	sig = SignatureKey()
 	kem = KemKey()
 	group = MLSGroup.create(b"g-odd", sig, kem)
@@ -117,8 +117,8 @@ def test_remove_member_odd_index_raises():
 	)
 	group2, _, _ = group.add_member(kp2)
 
-	with pytest.raises(ValueError, match="must be even"):
-		group2.remove_member(target_leaf_index=1)
+	with pytest.raises(ValueError, match="out of range"):
+		group2.remove_member(target_leaf_index=9)
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +154,8 @@ def test_three_party_remove():
 	"""In a 3-party group, removing the middle member preserves the other two."""
 	group_a, group_b, group_c, *keys = _create_three_party_group()
 
-	# Alice (leaf 0) removes Bob (leaf 2)
-	# Bob is at leaf_index=2 in a 3-leaf tree [A=0, parent=1, B=2, parent=3, C=4]
-	group_a_after, remove_update = group_a.remove_member(target_leaf_index=2)
+	# Alice (leaf 0) removes Bob (leaf index 1 — node 2 in the array [A=0, p=1, B=2, p=3, C=4])
+	group_a_after, remove_update = group_a.remove_member(target_leaf_index=1)
 
 	assert group_a_after.epoch_id == group_a.epoch_id + 1
 	# Bob's leaf should be blanked in the tree

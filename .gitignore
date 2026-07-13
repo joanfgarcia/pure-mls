@@ -9,6 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# Vendored reference implementations (fetched locally, not tracked) — audit HK2.
+# openmls is only used as an offline reference; tests use the committed IETF JSON
+# vectors under tests/ietf_vectors/. Clone manually if you want it:
+#   git clone https://github.com/openmls/openmls 3rdparty/openmls
+3rdparty/
+
 # Digests and Code Dumps
 *DIGEST*.txt
 scratch/

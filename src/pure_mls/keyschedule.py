@@ -119,6 +119,10 @@ class KeySchedule:
 
 	SIZE = 11 * 32  # 352 bytes (11 × 32)
 
+	def __repr__(self) -> str:
+		# audit M8: never render raw epoch secrets via the default dataclass repr
+		return "<KeySchedule secrets redacted>"
+
 	@classmethod
 	def _derive_epoch_secret(
 		cls,
