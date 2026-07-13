@@ -4,12 +4,13 @@ import os
 import struct
 import warnings as _warnings
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from pure_mls.codecs import detect_dialect, get_dialect
 from pure_mls.crypto import _compute_parent_hash, _egs_info, _subtree_hash, _up_info
 from pure_mls.epoch import EpochState
 from pure_mls.hkdf import expand_with_label, hkdf_extract
@@ -214,50 +215,58 @@ class Welcome:
 	cipher_suite: int  # 0x0001
 	encrypted_group_secrets: list[EncryptedGroupSecrets]  # one per joiner
 	encrypted_group_info: bytes  # HPKE ciphertext of GroupInfo
+	dialect: Optional[str] = None
 
 	_CIPHER_SUITE: int = 0x0001
 
 	def to_bytes(self) -> bytes:
-		"""Encode to MLS varint wire format (RFC 9420 §12.1.2)."""
+		"""Encode to MLS wire format using the dialect's strategy."""
+		strategy = get_dialect(self.dialect or "standard")
 
 		secrets_bytes = b"".join(e.to_bytes() for e in self.encrypted_group_secrets)
-		return (
-			tls_u16(self._CIPHER_SUITE)
-			+ tls_varint(len(secrets_bytes))
-			+ secrets_bytes  # EGS<V> varint-prefixed
-			+ tls_varint(len(self.encrypted_group_info))
-			+ self.encrypted_group_info  # EGI<V>
-		)
+		egs_bytes = strategy.encode_vector([secrets_bytes])
+		egi_bytes = strategy.encode_vector([self.encrypted_group_info])
+
+		prefix = strategy.header()
+
+		return prefix + tls_u16(self._CIPHER_SUITE) + egs_bytes + egi_bytes
 
 	@classmethod
-	def from_bytes(cls, data: bytes) -> "Welcome":
-		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper).
+	def from_bytes(cls, data: bytes, dialect: Optional[str] = None) -> "Welcome":
+		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper or dialect header)."""
 
-		Format per RFC 9420 §12.1.2:
-		uint16 cipher_suite
-		EncryptedGroupSecrets<V>  -- varint-prefixed vector of EGS records
-		opaque encrypted_group_info<V> -- varint-prefixed EGI
-		"""
-		# Auto-detect: if raw bytes start with MLSMessage header (00 01 00 03 for version 1, type Welcome)
-		if data.startswith(b"\x00\x01\x00\x03"):
-			offset = 4
+		if dialect is None:
+			strategy = detect_dialect(data)
+			dialect_name = strategy.name
 		else:
-			offset = 0
+			strategy = get_dialect(dialect)
+			dialect_name = dialect
+
+		offset = 0
+		if strategy.header() and data.startswith(strategy.header()):
+			offset = len(strategy.header())
+		elif strategy.name == "standard" and data.startswith(b"\x00\x01\x00\x03"):
+			offset = 4
+
 		cipher_suite, offset = read_u16(data, offset)
-		# EGS vector: varint length prefix
-		egs_total_len, offset = _varint_decode(data, offset)
-		egs_end = offset + egs_total_len
+
+		egs_vec_list, offset = strategy.decode_vector(data, offset)
+		egs_bytes = egs_vec_list[0]
+
 		encrypted_group_secrets: list[EncryptedGroupSecrets] = []
-		while offset < egs_end:
-			egs, offset = EncryptedGroupSecrets.from_bytes(data, offset)
+		sub_offset = 0
+		while sub_offset < len(egs_bytes):
+			egs, sub_offset = EncryptedGroupSecrets.from_bytes(egs_bytes, sub_offset)
 			encrypted_group_secrets.append(egs)
-		# EGI: varint length prefix
-		egi_len, offset = _varint_decode(data, offset)
-		encrypted_group_info = data[offset : offset + egi_len]
+
+		egi_vec_list, offset = strategy.decode_vector(data, offset)
+		encrypted_group_info = egi_vec_list[0]
+
 		return cls(
 			cipher_suite=cipher_suite,
 			encrypted_group_secrets=encrypted_group_secrets,
 			encrypted_group_info=encrypted_group_info,
+			dialect=dialect_name,
 		)
 
 	@classmethod
@@ -279,17 +288,10 @@ class Welcome:
 		Searches encrypted_group_secrets for an entry whose kem_output can be
 		decapsulated with init_key, then decrypts via HPKE.open with the
 		RFC 9420 §12.4 EncryptWithLabel("Welcome", encrypted_group_info) context.
-
-		This method is RFC-compliant and compatible with OpenMLS IETF vectors.
-		The HPKE info string follows RFC 9420 §12.4: varint(label) + label + varint(egi) + egi.
-
-		Note: MLSGroup.join() uses b"MLS 1.0 EncryptedGroupSecrets" (pure-mls internal
-		convention, P0-B audit note). For OpenMLS interoperability, use this method
-		or Welcome.from_mlsmessage_bytes() + decrypt_group_secrets() directly.
-
-		Returns GroupSecrets on success, None if no matching entry found.
 		"""
-		label = b"MLS 1.0 Welcome"
+		strategy = get_dialect(self.dialect or "standard")
+
+		label = strategy.welcome_label()
 		info = tls_varint(len(label)) + label + tls_varint(len(self.encrypted_group_info)) + self.encrypted_group_info
 
 		for egs in self.encrypted_group_secrets:
