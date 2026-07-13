@@ -181,11 +181,14 @@ def test_groupcontext_tls_roundtrip(idx: int, gc_bytes: bytes) -> None:
 	reason="openmls-cli not found — install with: cargo install openmls-cli",
 )
 def test_openmls_creates_pure_mls_joins() -> None:
-	"""Full round-trip: OpenMLS creates group → pure-mls joins and verifies epoch_authenticator.
+	"""Live round-trip: OpenMLS creates group -> pure-mls joins.
 
-	P8-3 RESOLVED: HPKE decrypt works (8/8 IETF vectors pass).
-	P8-4 & P8-5 RESOLVED: SecretTree and epoch_authenticator fully implemented.
+	audit H4: NOT implemented. This was previously an empty body that "passed"
+	without asserting anything, backing a false "100% interop" claim. Live
+	bidirectional interop needs openmls-cli wiring plus the deferred tree_hash()
+	interop fix. Skipped honestly until then.
 	"""
+	pytest.skip("live OpenMLS interop not implemented (needs openmls-cli + tree_hash() fix)")
 
 
 @pytest.mark.interop
@@ -194,7 +197,8 @@ def test_openmls_creates_pure_mls_joins() -> None:
 	reason="openmls-cli not found",
 )
 def test_pure_mls_creates_openmls_joins() -> None:
-	"""Full round-trip: pure-mls creates group → OpenMLS client joins.
+	"""Live round-trip: pure-mls creates group -> OpenMLS client joins.
 
-	P8-4 and P8-5 fully integrated.
+	audit H4: NOT implemented (see test_openmls_creates_pure_mls_joins).
 	"""
+	pytest.skip("live OpenMLS interop not implemented (needs openmls-cli + tree_hash() fix)")

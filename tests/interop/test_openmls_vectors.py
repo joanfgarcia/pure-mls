@@ -116,12 +116,12 @@ def test_hkdf_expand_rfc5869(tc: dict) -> None:
 # ---------------------------------------------------------------------------
 # RFC 9420 §8 KeySchedule — ExpandWithLabel determinism vectors
 # ---------------------------------------------------------------------------
-# These vectors were computed offline using the reference Python implementation
-# at https://github.com/mlswg/mls-implementations, commit d3f7a2b (2024-06-01)
-# using MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ciphersuite (SHA-256, L=32).
-#
-# They validate that our ExpandWithLabel produces identical bytes to the OpenMLS
-# reference for each labelled derivation step in §8.
+# audit H6: these are locally-chosen inputs, NOT external reference vectors. The
+# "expected" values are computed by calling expand_with_label itself (below), so this
+# only checks self-consistency / determinism — it cannot detect a wrong-but-deterministic
+# implementation. The real known-answer test against the IETF crypto-basics.json vectors
+# lives in tests/test_rfc9420_vectors.py::test_expand_with_label_matches_ietf_crypto_basics.
+# (The previous comment falsely claimed cross-validation against OpenMLS commit d3f7a2b.)
 _EXPAND_CASES = [
 	{
 		"secret": bytes.fromhex("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"),

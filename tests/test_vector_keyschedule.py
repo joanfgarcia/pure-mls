@@ -8,8 +8,9 @@ from pure_mls.keyschedule import PSK_TYPE_EXTERNAL, KeySchedule, PreSharedKeyID,
 @pytest.mark.xfail(
 	reason="IETF Epoch-0 vector provides a pre-computed psk_secret with no (psk_id, psk_value) decomposition; "
 	"the vector cannot be replayed via the _psk_secret(psk_list) API without the original PSK inputs. "
-	"See test_psk_injection_multi_key for functional PSK verification.",
-	strict=False,
+	"See test_psk_injection_multi_key for functional PSK verification. "
+	"strict=True (audit T7): if the derivation ever starts matching, this must fail loudly.",
+	strict=True,
 )
 def test_key_schedule_epoch_0_suite_1():
 	"""
