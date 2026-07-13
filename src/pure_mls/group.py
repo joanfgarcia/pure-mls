@@ -1745,6 +1745,14 @@ class MLSGroup:
 		if not isinstance(committer_node, LeafNode):
 			raise ValueError("Invalid committer index")
 
+		# audit M4: authenticate every LeafNode in the received tree (RFC §12.4.2).
+		# group_id/leaf_index are only folded into the TBS for UPDATE/COMMIT source leaves;
+		# passing them unconditionally is safe (ignored for KEY_PACKAGE source).
+		for _li in range(update.tree.num_leaves):
+			_ln = update.tree.get_node(2 * _li)
+			if isinstance(_ln, LeafNode):
+				_ln.verify_signature(group_id=self.group_id, leaf_index=_li)
+
 		# 1. Derive commit_secret — try UpdatePath (TreeKEM) first, then legacy fallback
 		my_kp = self.state.tree.get_node(my_node_idx)
 		if not isinstance(my_kp, LeafNode):
