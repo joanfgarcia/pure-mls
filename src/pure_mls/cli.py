@@ -1,10 +1,25 @@
 import argparse
+import os
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
 from pure_mls.group import MLSGroup, MLSMessage
 from pure_mls.keys import KemKey, SignatureKey
 from pure_mls.tree import KeyPackage
+
+
+def _write_secret(path: str, data: bytes) -> None:
+	"""Write secret material (private keys / group state) with 0600 permissions (audit H3).
+
+	Group state serialized via MLSGroup.to_bytes() contains private keys in the clear,
+	so it must not be world-readable. Use plain open() only for public artifacts.
+	"""
+	fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+	try:
+		os.write(fd, data)
+	finally:
+		os.close(fd)
+	os.chmod(path, 0o600)  # enforce perms even if the file pre-existed with a looser mode
 
 
 def main() -> None:
@@ -70,11 +85,10 @@ def main() -> None:
 
 		# Simplistic serialization: 32 bytes sig priv + 32 bytes kem priv + (pubkeys inside KeyPackage)
 		priv_data = sig_key.private_bytes() + kem_key.private_bytes()
-		with open(f"{args.alias}.priv", "wb") as f:
-			f.write(priv_data)
+		_write_secret(f"{args.alias}.priv", priv_data)
 		with open(f"{args.alias}.pub", "wb") as f:
 			f.write(kp.to_bytes())
-		print(f"Created {args.alias}.priv (KEEP SECRET!) and {args.alias}.pub (Distribute freely)")
+		print(f"Created {args.alias}.priv (KEEP SECRET! mode 0600) and {args.alias}.pub (Distribute freely)")
 
 	elif args.command == "create-group":
 		with open(args.founder_priv, "rb") as f:
@@ -83,8 +97,7 @@ def main() -> None:
 		kem_key = KemKey.from_private_bytes(pd[32:64])
 
 		group = MLSGroup.create(args.group_id.encode(), sig_key, kem_key)
-		with open(args.out, "wb") as f:
-			f.write(group.to_bytes())
+		_write_secret(args.out, group.to_bytes())
 		print(f"Created group '{args.group_id}' (state saved to {args.out})")
 
 	elif args.command == "add-member":
@@ -96,8 +109,7 @@ def main() -> None:
 		new_group, welcome, commit = group.add_member(kp)
 
 		out_state = args.out_state if args.out_state else args.group_state
-		with open(out_state, "wb") as f:
-			f.write(new_group.to_bytes())
+		_write_secret(out_state, new_group.to_bytes())
 		with open(args.out_welcome, "wb") as f:
 			f.write(welcome.to_bytes())
 		with open(args.out_commit, "wb") as f:
@@ -115,8 +127,7 @@ def main() -> None:
 			welcome_data = f.read()
 
 		group = MLSGroup.join(welcome_data, sig_key, kem_key)
-		with open(args.out_state, "wb") as f:
-			f.write(group.to_bytes())
+		_write_secret(args.out_state, group.to_bytes())
 		gid = group.state.group_id.decode(errors="replace")
 		print(f"Successfully joined group '{gid}'! State saved to {args.out_state}")
 
@@ -127,8 +138,7 @@ def main() -> None:
 		new_group, commit = group.remove_member(args.leaf_index)
 
 		out_state = args.out_state if args.out_state else args.group_state
-		with open(out_state, "wb") as f:
-			f.write(new_group.to_bytes())
+		_write_secret(out_state, new_group.to_bytes())
 		with open(args.out_commit, "wb") as f:
 			f.write(MLSMessage.wrap_commit(commit).to_bytes())
 		print(f"Removed member {args.leaf_index}! State updated at {out_state}.")
@@ -141,8 +151,7 @@ def main() -> None:
 		new_group, commit = group.update_key()
 
 		out_state = args.out_state if args.out_state else args.group_state
-		with open(out_state, "wb") as f:
-			f.write(new_group.to_bytes())
+		_write_secret(out_state, new_group.to_bytes())
 		with open(args.out_commit, "wb") as f:
 			f.write(MLSMessage.wrap_commit(commit).to_bytes())
 		print(f"Key rotated! State updated at {out_state}.")
@@ -158,8 +167,7 @@ def main() -> None:
 		new_group = group.apply_commit(commit)
 
 		out_state = args.out_state if args.out_state else args.group_state
-		with open(out_state, "wb") as f:
-			f.write(new_group.to_bytes())
+		_write_secret(out_state, new_group.to_bytes())
 		print(f"Commit applied! Epoch advanced to {new_group.epoch_id}. State updated at {out_state}.")
 
 
