@@ -121,8 +121,9 @@ class SecretTree:
 		path = _get_path(leaf_index, self.n_leaves)
 		secret = bytes(self.encryption_secret)
 		for direction in path:
-			# OpenMLS/IETF parity: label="tree", context=direction (b"left"/b"right")
-			# although RFC 9420 §9.3 says label=direction, context=b""
+			# RFC 9420 §9: derive the child secret with label="tree", context=direction
+			# (b"left"/b"right"). Matches OpenMLS/IETF vectors (audit L-Nota: prior comment
+			# wrongly claimed this deviated from the RFC).
 			secret = expand_with_label(secret, "tree", direction.encode(), _NH)
 		return secret
 

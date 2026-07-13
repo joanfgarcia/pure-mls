@@ -40,6 +40,8 @@ class SignatureKey:
 		# cryptography expects a 32-byte seed.
 		if len(data) == 64:
 			data = data[:32]
+		if len(data) != 32:
+			raise ValueError(f"Ed25519 private key must be 32 (or 64 expanded) bytes, got {len(data)}")  # audit L8
 		return cls(ed25519.Ed25519PrivateKey.from_private_bytes(data))
 
 	@classmethod
@@ -75,6 +77,8 @@ class KemKey:
 
 	@classmethod
 	def from_private_bytes(cls, data: bytes) -> "KemKey":
+		if len(data) != 32:
+			raise ValueError(f"X25519 private key must be 32 bytes, got {len(data)}")  # audit L8
 		return cls(x25519.X25519PrivateKey.from_private_bytes(data))
 
 	@classmethod
@@ -101,4 +105,5 @@ class KemKey:
 			peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_public_bytes)
 			return self._private_key.exchange(peer_pub)
 		except ValueError as e:
-			raise InvalidSignature("Malformed KemKey bytes") from e
+			# audit L1: a KEM public-key error is not a signature failure
+			raise ValueError("Malformed KemKey public bytes") from e

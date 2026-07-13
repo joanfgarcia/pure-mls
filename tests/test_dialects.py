@@ -2,7 +2,7 @@
 
 from typing import List, Tuple
 
-from pure_mls.codecs import get_dialect, register_dialect
+from pure_mls.codecs import _REGISTRY, get_dialect, register_dialect
 from pure_mls.group import EncryptedGroupSecrets, Welcome
 
 
@@ -124,30 +124,33 @@ def test_custom_dialect_plugin() -> None:
 
 	custom_strat = CustomStrategy()
 	register_dialect(custom_strat)
+	try:
+		assert get_dialect("custom_test") is custom_strat
 
-	assert get_dialect("custom_test") is custom_strat
+		egs = EncryptedGroupSecrets(
+			new_member=b"custom_ref",
+			kem_output=b"custom_kem",
+			ciphertext=b"custom_cipher",
+		)
 
-	egs = EncryptedGroupSecrets(
-		new_member=b"custom_ref",
-		kem_output=b"custom_kem",
-		ciphertext=b"custom_cipher",
-	)
+		welcome = Welcome(
+			cipher_suite=0x0001,
+			encrypted_group_secrets=[egs],
+			encrypted_group_info=b"custom_info",
+			dialect="custom_test",
+		)
 
-	welcome = Welcome(
-		cipher_suite=0x0001,
-		encrypted_group_secrets=[egs],
-		encrypted_group_info=b"custom_info",
-		dialect="custom_test",
-	)
+		w_bytes = welcome.to_bytes()
+		assert w_bytes.startswith(b"\xff\xff")
 
-	w_bytes = welcome.to_bytes()
-	assert w_bytes.startswith(b"\xff\xff")
+		parsed = Welcome.from_bytes(w_bytes, dialect="custom_test")
+		assert parsed.dialect == "custom_test"
+		assert parsed.encrypted_group_info == b"custom_info"
+		assert len(parsed.encrypted_group_secrets) == 1
+		assert parsed.encrypted_group_secrets[0].new_member == b"custom_ref"
 
-	parsed = Welcome.from_bytes(w_bytes, dialect="custom_test")
-	assert parsed.dialect == "custom_test"
-	assert parsed.encrypted_group_info == b"custom_info"
-	assert len(parsed.encrypted_group_secrets) == 1
-	assert parsed.encrypted_group_secrets[0].new_member == b"custom_ref"
-
-	# audit M9: the untrusted 0xffff header must not auto-select the custom codec.
-	_not_auto_selected(w_bytes, "custom_test")
+		# audit M9: the untrusted 0xffff header must not auto-select the custom codec.
+		_not_auto_selected(w_bytes, "custom_test")
+	finally:
+		# audit L10: don't leak the test dialect into the process-global registry
+		_REGISTRY.pop("custom_test", None)

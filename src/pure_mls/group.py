@@ -413,8 +413,8 @@ class GroupInfo:
 		gi.signature = sig_key.sign(final_payload)
 		return gi
 
-	def verify(self, committer_sig_key_bytes: bytes) -> bool:
-		"""Verify the committer's Ed25519 signature (RFC 9420 §16.1)."""
+	def verify(self, committer_sig_key_bytes: bytes) -> None:
+		"""Verify the committer's Ed25519 signature (RFC 9420 §16.1); raises on failure (audit L6)."""
 		# RFC 9420 §16.1: TBS is wrapped in SignerContent
 		# struct {
 		#     opaque label<V> = "MLS 1.0 " + Label;
@@ -430,7 +430,6 @@ class GroupInfo:
 
 		if not SignatureKey.verify(committer_sig_key_bytes, self.signature, final_payload):
 			raise ValueError("Ed25519 signature verification failed for GroupInfo")
-		return True
 
 
 # KeyPackageRef + transcript hash (RFC 9420 §10.2, §8.2)
@@ -1913,7 +1912,12 @@ class MLSGroup:
 		except InvalidTag:
 			raise ValueError("SenderData authentication failed")
 
+		# audit L2: sender-data must be exactly a 4-byte leaf index; guard the decode + range
+		if len(sd_plaintext) != 4:
+			raise ValueError("SenderData: expected a 4-byte leaf index")
 		sender_leaf = struct.unpack(">I", sd_plaintext)[0]
+		if not 0 <= sender_leaf < self.state.tree.num_leaves:
+			raise ValueError(f"SenderData: sender_leaf {sender_leaf} out of range")
 
 		# 3. Derive content key/nonce for sender's leaf + generation
 		st = self._get_secret_tree()
