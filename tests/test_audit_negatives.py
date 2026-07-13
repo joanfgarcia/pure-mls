@@ -59,9 +59,8 @@ def test_welcome_rejected_for_wrong_recipient() -> None:
 def test_removed_member_cannot_decrypt_new_messages() -> None:
 	"""After a member is removed, its stale state must not decrypt the new epoch."""
 	creator, joiner, _ = _two_member()
-	# creator removes the joiner. remove_member expects the NODE index of the leaf,
-	# i.e. 2*leaf_index, so leaf 1 -> node 2.
-	creator_after, _commit = creator.remove_member(2)
+	# creator removes the joiner (leaf index 1)
+	creator_after, _commit = creator.remove_member(1)
 
 	ct = creator_after.encrypt_application_message(b"post-removal message")
 	with pytest.raises((ValueError, InvalidTag)):

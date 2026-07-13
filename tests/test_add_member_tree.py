@@ -53,8 +53,8 @@ def test_far_leaf_committer_all_decrypt() -> None:
 def test_add_reuses_blank_leaf_after_removal() -> None:
 	members = _build(4)  # leaves 0..3
 	creator = members[0]
-	# remove leaf 2 (node index 4); remaining members process it
-	creator, remove_commit = creator.remove_member(4)
+	# remove the third member (leaf index 2); remaining members process it
+	creator, remove_commit = creator.remove_member(2)
 	members[1] = members[1].process_update(remove_commit)
 	members[3] = members[3].process_update(remove_commit)
 

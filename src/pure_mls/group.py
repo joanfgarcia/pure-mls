@@ -1298,13 +1298,16 @@ class MLSGroup:
 		This implementation provides Post-Compromise Security (P1-C) by
 		rotating the committer's leaf key and node keys along the direct path.
 		"""
+		# audit: target_leaf_index is a LEAF index (0,1,2,...), matching the parameter name and
+		# the CLI. It was previously used as a node index, which broke `pure-mls remove-member 1`
+		# and made the self-removal check compare a node index against a leaf index.
 		if target_leaf_index == self.my_index:
 			raise ValueError("Cannot remove yourself — use leave() or let another member remove you")
-		if target_leaf_index % 2 != 0:
-			raise ValueError("target_leaf_index must be even (leaf node)")
+		if not 0 <= target_leaf_index < self.state.tree.num_leaves:
+			raise ValueError(f"target_leaf_index {target_leaf_index} out of range (num_leaves={self.state.tree.num_leaves})")
 
-		# Step 1: Remove leaf from tree
-		new_tree = self.state.tree.remove_leaf(target_leaf_index)
+		# Step 1: Remove leaf from tree (convert leaf index -> node index)
+		new_tree = self.state.tree.remove_leaf(2 * target_leaf_index)
 		new_epoch_id = self.epoch_id + 1
 
 		# Step 2: TreeKEM UpdatePath (RFC 9420 §12.1.1)
