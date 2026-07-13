@@ -1029,8 +1029,20 @@ class MLSGroup:
 			raise ValueError("KeyPackage Replay: This KeyPackage has already been used in this instance.")
 		self._consumed_key_packages.add(kp_ref)
 
-		# 1. Expand tree by 1 leaf
-		new_num_leaves = self.state.tree.num_leaves + 1
+		# 1. Place the new member. RFC §7.7: reuse the leftmost blank leaf if one exists,
+		# otherwise extend the tree by one leaf (audit M2: avoids unbounded growth across
+		# remove/add cycles).
+		blank_leaf = None
+		for _li in range(self.state.tree.num_leaves):
+			if self.state.tree.get_node(2 * _li) is None:
+				blank_leaf = _li
+				break
+		if blank_leaf is None:
+			new_num_leaves = self.state.tree.num_leaves + 1
+			new_leaf_idx = (new_num_leaves - 1) * 2
+		else:
+			new_num_leaves = self.state.tree.num_leaves
+			new_leaf_idx = 2 * blank_leaf
 		new_tree = RatchetTree(num_leaves=new_num_leaves)
 
 		# Copy existing nodes (simplification)
@@ -1042,8 +1054,12 @@ class MLSGroup:
 					new_tree.set_parent(i, node)
 
 		# Insert the new leaf using the joiner's LeafNode directly
-		new_leaf_idx = (new_num_leaves - 1) * 2
 		new_tree.set_leaf(new_leaf_idx, key_package.leaf_node)
+		# RFC §7.7: blank the new leaf's direct path so stale ancestors (e.g. left over from a
+		# prior removal or another member's commit) are not reused; the committer's UpdatePath
+		# below repopulates the nodes it shares, and blanks resolve to the new member otherwise.
+		for _anc in new_tree.direct_path(new_leaf_idx):
+			new_tree.blank_node(_anc)
 
 		# 2. TreeKEM Commit (RFC 9420 §12.1.1)
 		# Authenticate the incoming KeyPackage unconditionally (identity + init_key).

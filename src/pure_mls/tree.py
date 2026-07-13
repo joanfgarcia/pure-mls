@@ -451,6 +451,13 @@ class RatchetTree:
 			raise TypeError("RatchetTree is frozen")
 		self.nodes[index] = parent_node
 
+	def blank_node(self, index: int) -> None:
+		"""Blank (remove) the node at index, e.g. an ancestor on an added leaf's path."""
+		if isinstance(self.nodes, tuple):
+			raise TypeError("RatchetTree is frozen")
+		if 0 <= index < len(self.nodes):
+			self.nodes[index] = None
+
 	def get_node(self, index: int) -> Optional[LeafNode | ParentNode]:
 		if index < 0 or index >= len(self.nodes):
 			return None
