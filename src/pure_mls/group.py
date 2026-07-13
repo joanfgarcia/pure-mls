@@ -1038,8 +1038,10 @@ class MLSGroup:
 				blank_leaf = _li
 				break
 		if blank_leaf is None:
-			new_num_leaves = self.state.tree.num_leaves + 1
-			new_leaf_idx = (new_num_leaves - 1) * 2
+			# RFC §7.7: the tree is full — extend by doubling (keeps a power-of-two leaf count)
+			old_n = self.state.tree.num_leaves
+			new_num_leaves = old_n * 2
+			new_leaf_idx = 2 * old_n  # leftmost leaf of the new right half
 		else:
 			new_num_leaves = self.state.tree.num_leaves
 			new_leaf_idx = 2 * blank_leaf

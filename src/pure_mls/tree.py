@@ -31,6 +31,15 @@ from pure_mls.tls import (
 	tls_varint,
 )
 
+
+def _next_pow2(n: int) -> int:
+	"""Smallest power of two >= n (minimum 1). RFC 9420 §7.7 trees are power-of-two."""
+	p = 1
+	while p < n:
+		p <<= 1
+	return p
+
+
 # §7.2 Credential
 
 CREDENTIAL_TYPE_BASIC = 0x0001
@@ -516,8 +525,8 @@ class RatchetTree:
 			tree.num_leaves = 0
 			tree.nodes = []
 		else:
-			# Tree size = 2 * num_leaves - 1
-			new_num_leaves = (rightmost // 2) + 1
+			# RFC §7.7: truncate trailing blanks but keep a power-of-two leaf count
+			new_num_leaves = _next_pow2((rightmost // 2) + 1)
 			new_size = 2 * new_num_leaves - 1
 			tree.nodes = tree.nodes[:new_size]
 			tree.num_leaves = new_num_leaves
@@ -572,9 +581,14 @@ class RatchetTree:
 			else:
 				raise ValueError(f"Invalid presence byte in RatchetTree: {present:#04x}")
 			node_idx += 1
-		num_leaves = (len(nodes) + 1) // 2
+		# RFC 9420 §7.7 / §12.4.3.3: MLS trees always have a power-of-two leaf count; the
+		# wire form MAY omit trailing blank nodes, so round the parsed size up to the
+		# canonical power-of-two and pad with blanks (verified vs the IETF tree-validation
+		# vector). Counting (len+1)//2 alone under-sizes truncated trees and breaks tree_hash.
+		implied_leaves = (len(nodes) + 1) // 2
+		num_leaves = _next_pow2(implied_leaves) if implied_leaves > 0 else 0
 		tree = cls(num_leaves)
-		tree.nodes = nodes
+		tree.nodes = list(nodes) + [None] * ((2 * num_leaves - 1) - len(nodes))
 		return tree
 
 	@classmethod
@@ -727,18 +741,13 @@ class RatchetTree:
 			return hashlib.sha256(res).digest()
 		else:  # Parent
 			# TreeHashInput (type=2) + optional<ParentNode> + left_hash<V> + right_hash<V>
-			lvl = self.level(index)
-			left_idx = index - (1 << (lvl - 1))
-			right_idx = index + (1 << (lvl - 1))
-
-			# LBBT: If right child is out of bounds, ratchet down the left path
-			# of the right subtree until we hit a node that exists.
-			while right_idx >= w and lvl > 0:
-				lvl_r = self.level(right_idx)
-				if lvl_r == 0:
-					right_idx -= 1
-					break
-				right_idx = right_idx - (1 << (lvl_r - 1))
+			# RFC 9420 App. C child navigation. The previous LBBT ratchet produced wrong
+			# right children for non-power-of-two trees (verified against tree-validation.json).
+			k = self.level(index)
+			left_idx = index ^ (1 << (k - 1))  # left child = index - 2^(k-1)
+			right_idx = index ^ (0x03 << (k - 1))  # right child = index + 2^(k-1)
+			while right_idx >= w:  # reparent the right child down-left until it is in range
+				right_idx = right_idx ^ (1 << (self.level(right_idx) - 1))
 
 			left_h = self._node_hash(left_idx)
 			right_h = self._node_hash(right_idx)

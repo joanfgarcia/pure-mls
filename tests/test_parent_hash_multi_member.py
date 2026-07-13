@@ -131,7 +131,8 @@ def test_parent_hash_3_member_round_trip() -> None:
 	group_a3, _, _ = group_a2.add_member(kp_c)
 
 	tree_e2 = group_a3.state.tree
-	assert tree_e2.num_leaves == 3
+	# RFC §7.7: 3 members live in a power-of-two tree of 4 leaves (leaf 3 blank)
+	assert tree_e2.num_leaves == 4
 
 	parent_nodes_e2 = [(idx, node) for idx, node in enumerate(tree_e2.nodes) if isinstance(node, ParentNode)]
 	assert len(parent_nodes_e2) > 0, "3-member tree must have at least one ParentNode"
