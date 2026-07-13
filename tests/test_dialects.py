@@ -6,8 +6,18 @@ from pure_mls.codecs import get_dialect, register_dialect
 from pure_mls.group import EncryptedGroupSecrets, Welcome
 
 
+def _not_auto_selected(data: bytes, forbidden: str) -> None:
+	"""audit M9: parsing untrusted bytes without an explicit dialect must never
+	auto-select a non-standard codec. Falling back to standard OR rejecting the
+	mis-framed input are both acceptable; silently switching dialect is not."""
+	try:
+		assert Welcome.from_bytes(data).dialect != forbidden
+	except ValueError:
+		pass  # rejecting mis-framed input outright is fine
+
+
 def test_dialect_selection_and_encoding() -> None:
-	"""Verify Welcome message serialization and auto-detection across dialects."""
+	"""Verify Welcome serialization per dialect and explicit-only dialect selection."""
 	# Create a mock EncryptedGroupSecrets
 	egs = EncryptedGroupSecrets(
 		new_member=b"member_ref_123",
@@ -55,7 +65,8 @@ def test_dialect_selection_and_encoding() -> None:
 	# standard does not use dialect prefix, starts with cipher_suite b"\x00\x01"
 	assert std_bytes.startswith(b"\x00\x01")
 
-	# Parse back & Auto-detect
+	# Parse back. audit M9: non-standard dialects require an explicit dialect= arg;
+	# from_bytes must not auto-detect a dialect from untrusted leading bytes.
 	parsed_std = Welcome.from_bytes(std_bytes)
 	assert parsed_std.dialect == "standard"
 	assert parsed_std.cipher_suite == 0x0001
@@ -63,15 +74,19 @@ def test_dialect_selection_and_encoding() -> None:
 	assert len(parsed_std.encrypted_group_secrets) == 1
 	assert parsed_std.encrypted_group_secrets[0].new_member == b"member_ref_123"
 
-	parsed_cisco = Welcome.from_bytes(cisco_bytes)
+	parsed_cisco = Welcome.from_bytes(cisco_bytes, dialect="cisco")
 	assert parsed_cisco.dialect == "cisco"
 	assert parsed_cisco.cipher_suite == 0x0001
 	assert parsed_cisco.encrypted_group_info == b"group_info_mock"
 
-	parsed_mlspp = Welcome.from_bytes(mlspp_bytes)
+	parsed_mlspp = Welcome.from_bytes(mlspp_bytes, dialect="mlspp")
 	assert parsed_mlspp.dialect == "mlspp"
 	assert parsed_mlspp.cipher_suite == 0x0001
 	assert parsed_mlspp.encrypted_group_info == b"group_info_mock"
+
+	# The untrusted cisco/mlspp headers must NOT trigger auto-selection of those codecs.
+	_not_auto_selected(cisco_bytes, "cisco")
+	_not_auto_selected(mlspp_bytes, "mlspp")
 
 
 def test_custom_dialect_plugin() -> None:
@@ -128,8 +143,11 @@ def test_custom_dialect_plugin() -> None:
 	w_bytes = welcome.to_bytes()
 	assert w_bytes.startswith(b"\xff\xff")
 
-	parsed = Welcome.from_bytes(w_bytes)
+	parsed = Welcome.from_bytes(w_bytes, dialect="custom_test")
 	assert parsed.dialect == "custom_test"
 	assert parsed.encrypted_group_info == b"custom_info"
 	assert len(parsed.encrypted_group_secrets) == 1
 	assert parsed.encrypted_group_secrets[0].new_member == b"custom_ref"
+
+	# audit M9: the untrusted 0xffff header must not auto-select the custom codec.
+	_not_auto_selected(w_bytes, "custom_test")

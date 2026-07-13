@@ -10,7 +10,7 @@ from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from pure_mls.codecs import detect_dialect, get_dialect
+from pure_mls.codecs import get_dialect
 from pure_mls.crypto import _compute_parent_hash, _egs_info, _subtree_hash, _up_info
 from pure_mls.epoch import EpochState
 from pure_mls.hkdf import expand_with_label, hkdf_extract
@@ -236,8 +236,11 @@ class Welcome:
 		"""Parse inner Welcome TLS wire format (after stripping MLSMessage wrapper or dialect header)."""
 
 		if dialect is None:
-			strategy = detect_dialect(data)
-			dialect_name = strategy.name
+			# audit M9: never auto-detect the dialect from attacker-controlled leading bytes
+			# (detect_dialect silently falls back to standard and the choice is unauthenticated).
+			# Non-standard dialects must be selected explicitly by the caller.
+			strategy = get_dialect("standard")
+			dialect_name = "standard"
 		else:
 			strategy = get_dialect(dialect)
 			dialect_name = dialect

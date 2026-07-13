@@ -142,6 +142,8 @@ class CiscoStrategy:
 	def decode_vector(self, buf: bytes, offset: int) -> Tuple[List[bytes], int]:
 		(length,) = struct.unpack_from(">H", buf, offset)
 		offset += 2
+		if offset + length > len(buf):
+			raise ValueError("Vector length exceeds buffer size")  # audit L9
 		end = offset + length
 		return [buf[offset:end]], end
 
@@ -185,6 +187,8 @@ class MlsppStrategy:
 	def decode_vector(self, buf: bytes, offset: int) -> Tuple[List[bytes], int]:
 		(length,) = struct.unpack_from(">I", buf, offset)
 		offset += 4
+		if offset + length > len(buf):
+			raise ValueError("Vector length exceeds buffer size")  # audit L9
 		end = offset + length
 		return [buf[offset:end]], end
 
