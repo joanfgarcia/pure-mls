@@ -1127,7 +1127,8 @@ class MLSGroup:
 		# so that process_update() fallback works for peers without UpdatePath support.
 		encrypted_secrets: dict[bytes, bytes] = {}
 		for i, node in enumerate(new_tree.nodes):
-			if isinstance(node, LeafNode) and i != self.my_index:
+			# i is a node index; self.my_index is a leaf index -> compare against 2*my_index (audit M3)
+			if isinstance(node, LeafNode) and i != 2 * self.my_index:
 				pk = node.public_key
 				enc, ct = HPKE.seal(pk, commit_secret, info=_up_info(group_ctx_pre.to_bytes()))
 				kp_ref = _make_kp_ref(node.key_package)
